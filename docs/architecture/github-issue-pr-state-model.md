@@ -28,6 +28,7 @@
 - `state`
 - `creator`
 - `created_at`
+- `labels`
 
 ### 2. Sleep Coding Task
 
@@ -57,6 +58,7 @@
 - `state`
 - `mergeable_state`
 - `review_decision`
+- `labels`
 
 ## 内部任务状态建议
 
@@ -121,6 +123,11 @@ created
 1. 计划生成完成时写回 Issue
 2. PR 创建时写回 Issue 和 PR
 3. 最终完成时写回 Issue、PR 和 `docs/status/current-status.md`
+
+标签与通知补充：
+
+- Issue 与 PR 默认带 `agent:ralph`、`workflow:sleep-coding`
+- Channel 负责出站通知，不替代内部真实状态表
 
 ## 最小表结构建议
 

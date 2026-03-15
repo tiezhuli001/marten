@@ -1,3 +1,4 @@
+import re
 from uuid import uuid4
 
 from langgraph.graph import END, START, StateGraph
@@ -6,8 +7,14 @@ from app.core.config import get_settings
 from app.graph.router import classify_intent
 from app.graph.state import WorkflowState
 from app.ledger.service import TokenLedgerService
-from app.models.schemas import GatewayMessageRequest, GatewayMessageResponse, TokenUsage
+from app.models.schemas import (
+    GatewayMessageRequest,
+    GatewayMessageResponse,
+    SleepCodingTaskRequest,
+    TokenUsage,
+)
 from app.services.observability import LangSmithService
+from app.services.sleep_coding import SleepCodingService
 
 
 class WorkflowRunner:
@@ -15,6 +22,7 @@ class WorkflowRunner:
         settings = get_settings()
         self.langsmith = LangSmithService(settings)
         self.ledger = TokenLedgerService(settings)
+        self.sleep_coding = SleepCodingService(settings=settings, ledger=self.ledger)
         self.graph = self._build_graph().compile()
 
     def _build_graph(self) -> StateGraph:
@@ -55,6 +63,7 @@ class WorkflowRunner:
             "intent": "general",
             "message": "",
             "token_usage": TokenUsage(),
+            "task_id": None,
         }
         with self.langsmith.request_trace(
             request_id=request_id,
@@ -91,7 +100,24 @@ class WorkflowRunner:
         return state
 
     def _sleep_coding_handler(self, state: WorkflowState) -> WorkflowState:
-        state["message"] = "sleep_coding intent recognized, but the workflow is not implemented yet."
+        match = re.search(r"\b(\d+)\b", state["content"])
+        if match is None:
+            state["message"] = (
+                "Sleep coding intent recognized. Provide an issue number or call POST /tasks/sleep-coding directly."
+            )
+            return state
+
+        task = self.sleep_coding.start_task(
+            SleepCodingTaskRequest(
+                issue_number=int(match.group(1)),
+                request_id=state["request_id"],
+            )
+        )
+        state["task_id"] = task.task_id
+        state["message"] = (
+            f"Sleep coding task {task.task_id} is ready for review. "
+            f"Status={task.status}, branch={task.head_branch}."
+        )
         return state
 
     def _token_ledger(self, state: WorkflowState) -> WorkflowState:

@@ -35,6 +35,8 @@
 - 从 GitHub Issue 启动任务
 - 生成任务计划
 - 在工作分支内修改代码
+- 向 Channel 发送出站进度通知
+- 给 Issue / PR 打上 Ralph 专属标签
 - 本地执行最小验证
 - 创建 PR
 - 输出 review 摘要
@@ -46,6 +48,11 @@
 - 多 agent 并行协作
 - 长链路自我修复
 - 飞书内直接完成所有审批动作
+
+说明：
+
+- Phase 2 允许“向飞书等 Channel 发通知”
+- 但不要求“在飞书内完成 approve / reject”等交互式审批
 
 ## 推荐工作流
 
@@ -85,6 +92,7 @@
 
 - 评论回写到 Issue
 - 同步写入 `docs/status/current-status.md`
+- 向 Channel 发一条“任务已进入待确认”的消息
 
 ### Step 4. 编码执行
 
@@ -92,6 +100,7 @@
 
 - 由 worker 在独立工作目录进行
 - 分支命名规则固定，例如 `codex/issue-123-sleep-coding`
+- worktree、commit、push 默认允许 dry-run，接通凭据后切 real-run
 
 输入：
 
@@ -104,6 +113,8 @@
 - 代码修改
 - 本地测试结果
 - 变更摘要
+- worktree / commit / push 执行结果
+- `.sleep_coding/issue-<number>.md` 这类最小任务产物
 
 ### Step 5. PR 创建
 
@@ -113,6 +124,8 @@
 - PR 描述
 - 关联 Issue
 - 本地验证结果
+- PR 与 Issue 的 Ralph 标签
+- 一条 Channel “PR ready” 通知
 
 ### Step 6. Review 阶段
 

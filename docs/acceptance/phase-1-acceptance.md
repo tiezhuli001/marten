@@ -26,8 +26,13 @@ Phase 1 完成后，系统应达到：
 3. 请求会进入 LangGraph 主图
 4. 系统可以返回 `general / stats_query / sleep_coding` 三类最小结果
 5. 响应中固定包含 `token_usage`
-6. token 账本会把最小请求数据写入 SQLite
+6. token 账本会把最小请求数据写入阶段性数据层
 7. 状态文档能反映当前阶段、下一步和阻塞项
+
+说明：
+
+- 当前阶段性数据层实现允许先使用 SQLite
+- 不把 PostgreSQL 作为 `Phase 1` 通过前提
 
 ## 自动化测试点
 
@@ -90,6 +95,7 @@ Phase 1 完成后，系统应达到：
 预期效果：
 
 - 后续日报和近 7/30 天查询已经有底层数据模型可依赖
+- 当前允许先使用 SQLite 跑通最小链路
 
 对应测试：
 
@@ -169,6 +175,15 @@ curl http://127.0.0.1:8000/status/current
 - SQLite Token Ledger 最小持久化
 - LangSmith 占位接入
 - 配置模板与运行说明
+
+## 验收时需要明确不作为阻塞项的内容
+
+以下内容即使尚未完成，也不应阻塞 `Phase 1` 通过：
+
+- PostgreSQL 迁移
+- 日报任务
+- 7/30 天真实时间窗口 SQL
+- GitHub 自动化闭环
 
 ## 尚未纳入 Phase 1 验收范围
 

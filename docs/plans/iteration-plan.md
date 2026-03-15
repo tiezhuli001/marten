@@ -76,12 +76,18 @@ OpenClaw 的进度来源按优先级排序：
 | 观测 | LangSmith |
 | RAG 组件 | LangChain |
 | Gateway | FastAPI |
-| 数据库 | PostgreSQL |
+| 数据库 | 目标 PostgreSQL，Phase 1/2 先用 SQLite |
 | 向量库 | 先固定一个，优先 Qdrant |
 | 调度 | APScheduler（MVP） |
 | 代码托管集成 | GitHub API + git + GitHub MCP |
 | 交互式编码 | OpenCode |
 | Channel / Session | OpenClaw + 飞书 |
+
+数据库策略说明：
+
+- 长期正式目标是 PostgreSQL
+- 但为了降低前两阶段的实现和部署复杂度，`Phase 1 / Phase 2` 先以 SQLite 跑通单机闭环
+- 到 `Phase 3 / Phase 4` 再评估迁移到 PostgreSQL，并补 Alembic 或等价迁移机制
 
 ## 正式迭代阶段
 
@@ -112,6 +118,12 @@ OpenClaw 的进度来源按优先级排序：
 4. Token Ledger 基础表
 5. LangSmith Tracing
 6. 状态写回机制
+
+说明：
+
+- `Phase 1` 只要求最小可运行和最小持久化
+- 不要求日报、周报、月报
+- 不要求 PostgreSQL 正式落地，SQLite 可作为阶段性实现
 
 ### Phase 2：睡后编程 MVP
 

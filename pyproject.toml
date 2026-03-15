@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "youmeng-gateway"
+version = "0.1.0"
+description = "Minimal gateway skeleton for a personal multi-agent platform."
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+  "fastapi>=0.116,<1.0",
+  "langgraph>=0.6,<1.0",
+  "langsmith>=0.4,<1.0",
+  "pydantic-settings>=2.10,<3.0",
+  "uvicorn[standard]>=0.35,<1.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["app*"]

@@ -19,7 +19,8 @@ Feishu
    -> Stats Query
 -> Token Ledger
 -> LangSmith
--> PostgreSQL
+-> SQLite (Phase 1)
+-> PostgreSQL (later)
 ```
 
 ## 第一阶段只支持的意图
@@ -71,14 +72,15 @@ Feishu
 - cost
 - created_at
 
-### daily_token_stats
+## 不属于 Phase 1 的内容
 
-- date
-- total_prompt_tokens
-- total_completion_tokens
-- total_tokens
-- total_cost
-- generated_at
+以下内容虽然是长期需要的，但不属于 Phase 1：
+
+- `daily_token_stats` / `daily_token_summaries`
+- PostgreSQL 正式迁移
+- 定时任务与日报系统
+- GitHub Issue / PR 自动化
+- Code Review 工作流
 
 ## 关键原则
 
@@ -87,3 +89,4 @@ Feishu
 3. 所有模型调用必须可记录 token
 4. 所有状态必须可写回文档或数据库
 5. 先做稳定骨架，再做复杂自动编码
+6. 先用 SQLite 跑通骨架，再迁移 PostgreSQL

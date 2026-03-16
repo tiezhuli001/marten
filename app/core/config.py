@@ -24,6 +24,11 @@ class Settings(BaseSettings):
     sleep_coding_enable_git_commit: bool = False
     sleep_coding_enable_git_push: bool = False
     git_remote_name: str = "origin"
+    review_runs_dir: str = "docs/review-runs"
+    review_skill_name: str = "code-review"
+    review_skill_command: str | None = None
+    gitlab_api_base: str = "https://gitlab.com/api/v4"
+    gitlab_token: str | None = None
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -64,6 +69,11 @@ class Settings(BaseSettings):
     def resolved_sleep_coding_worktree_root(self) -> Path:
         root = Path(self.sleep_coding_worktree_root).expanduser()
         return root if root.is_absolute() else self.project_root / root
+
+    @property
+    def resolved_review_runs_dir(self) -> Path:
+        review_dir = Path(self.review_runs_dir).expanduser()
+        return review_dir if review_dir.is_absolute() else self.project_root / review_dir
 
 
 @lru_cache(maxsize=1)

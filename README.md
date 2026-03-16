@@ -51,6 +51,11 @@ uvicorn app.main:app --reload
 - `SLEEP_CODING_ENABLE_GIT_COMMIT`: 是否真实执行 `git worktree` / `git commit`
 - `SLEEP_CODING_ENABLE_GIT_PUSH`: 是否真实执行 `git push`
 - `GIT_REMOTE_NAME`: 推送远端名，默认 `origin`
+- `REVIEW_RUNS_DIR`: code review agent 运行产物目录，默认 `docs/review-runs/`
+- `REVIEW_SKILL_NAME`: 默认 `code-review`
+- `REVIEW_SKILL_COMMAND`: 可选，自定义 review skill 执行命令
+- `GITLAB_API_BASE`: GitLab API 地址，默认 `https://gitlab.com/api/v4`
+- `GITLAB_TOKEN`: GitLab 评论回写使用
 
 默认情况下，运行时文件会写入项目内的 `data/`。如果当前环境对项目目录没有写权限，代码会临时回退到系统临时目录，避免服务直接启动失败。
 

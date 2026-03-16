@@ -1,8 +1,8 @@
 # Current Status
 
 > 更新时间：2026-03-16
-> 当前阶段：Phase 4 Token Ledger / Daily Reporting 已完成
-> 当前目标：执行 Phase 0-4 整体 MVP 验证，并在真实环境补齐 dry-run 联调项
+> 当前阶段：Phase 4 已完成，进入 MVP 差距收口规划
+> 当前目标：以 MVP 差距清单为基线，逐步补齐真实入口、真实模型执行与自动 agent loop
 
 ## 当前结论
 
@@ -37,6 +37,8 @@
 - [x] Phase 4 daily token summaries 聚合表落地
 - [x] Phase 4 昨日日报生成入口落地
 - [x] Phase 0-4 MVP 验证清单归档
+- [x] MVP 差距清单归档
+- [x] MVP 执行计划归档
 
 ## 正在进行
 
@@ -50,16 +52,17 @@
 - [x] Phase 3 GitLab 评论回写接口已接入
 - [x] Phase 4 token ledger 查询 / 报表 API 已完成
 - [x] Phase 4 规则化 token 摘要已完成
+- [x] 当前实现与目标 MVP 的能力差距已完成梳理
 - [ ] GitLab 评论回写真实联调
 - [ ] review skill 真实环境联调
-- [ ] Phase 0-4 整体 MVP 联调
+- [ ] MVP-A 真实模型与 Feishu 入口实现
 
 ## 下一步
 
-1. 执行 Phase 0-4 MVP checklist 联调
-2. 在真实环境联调 GitHub / GitLab / local code 三类 review 输入
-3. 在真实环境验证 daily token summary 调度触发
-4. MVP 验证通过后再进入 Phase 5
+1. 实现统一模型执行层与真实 token/cost 记账
+2. 实现 Feishu 真实对话入口
+3. 实现 GitHub issue 创建链路
+4. 再进入 Sleep Coding 自动 worker 与 auto review loop
 
 ## 当前阻塞
 
@@ -69,6 +72,9 @@
 - Phase 3 已完成独立 review service 第一版，但真实 review skill 和 GitLab 回写仍未联通
 - 未配置 provider / token / webhook 的环境下，GitHub、GitLab、review skill 仍会局部退回 dry-run
 - daily token summary 已具备生成入口，但“每日 10 点”真实调度仍待联调环境验证
+- 当前仍没有 OpenAI / Minimax 统一模型执行层，因此 token/cost 统计尚不具备真实精度
+- 当前仍没有 Feishu 对话入口，因此用户还不能通过机器人直接驱动主 Agent
+- 当前仍没有 GitHub issue 创建链路，因此“需求 -> issue -> coding”主路径还未打通
 
 ## 当前技术决定
 
@@ -88,6 +94,8 @@
 - 后续编码以 Phase 文档为唯一阶段基线，先补文档再补实现
 - 数据层策略为：`Phase 1 / Phase 2` 先 SQLite，后续再迁移 PostgreSQL
 - Phase 4 的 token ledger 采用确定性工程实现，规则摘要不依赖 skill 或 LLM
+- 进入 MVP 收口阶段后，issue 理解、计划、编码、review、repair 等认知工作优先交给 LLM + skill + MCP
+- Feishu 鉴权、token 账本、调度、幂等、状态机等基础设施继续保持工程化实现
 
 ## 当前事实来源
 

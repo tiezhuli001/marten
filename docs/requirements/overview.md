@@ -22,6 +22,17 @@
 3. Code Review
 4. Token 账本与日报
 
+第一阶段的验收方式不是逐 Phase 各自结束就算完成，而是：
+
+> 在 `Phase 4` 结束后，对 `Phase 0 - Phase 4` 做一次整体最小闭环验证。
+
+这个最小闭环包括：
+
+1. Gateway 可接收请求
+2. Sleep Coding 可从 Issue 走到 PR
+3. Code Review 可生成结果、归档并回写
+4. Token Ledger / 日报可查询和汇总
+
 ## 暂缓项
 
 - 小说 Agent

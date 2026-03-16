@@ -146,9 +146,19 @@ OpenClaw 的进度来源按优先级排序：
 
 目标：扩展睡后编程闭环，形成更完整的软件工程回路。
 
+说明：
+
+- review 内容优先复用现有 `code-review skill`
+- 平台负责回写、归档和流转，不自研复杂 review 引擎
+
 ### Phase 4：Token 账本与日报系统
 
 目标：把平台运营能力做起来。
+
+说明：
+
+- `Phase 4` 完成后，先做 `Phase 0 - Phase 4` 的整体 MVP 验证
+- 验证通过后，再继续 Phase 5 及之后的 Agent 扩展
 
 ### Phase 5：小说提取 Agent
 

@@ -3,6 +3,16 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 IntentType = Literal["general", "stats_query", "sleep_coding"]
+ReviewStatus = Literal[
+    "pending",
+    "running",
+    "completed",
+    "approved",
+    "changes_requested",
+    "cancelled",
+    "failed",
+]
+ReviewDecision = Literal["approve_review", "request_changes", "cancel_review"]
 TaskStatus = Literal[
     "created",
     "planning",
@@ -26,6 +36,7 @@ TaskAction = Literal[
 ]
 ValidationStatus = Literal["pending", "passed", "failed", "skipped"]
 ExecutionStatus = Literal["pending", "prepared", "skipped", "completed", "failed"]
+ReviewSourceType = Literal["github_pr", "gitlab_mr", "local_code", "sleep_coding_task"]
 
 
 class TokenUsage(BaseModel):
@@ -132,3 +143,39 @@ class SleepCodingTask(BaseModel):
     kickoff_request_id: str | None = None
     created_at: str
     updated_at: str
+
+
+class ReviewSource(BaseModel):
+    source_type: ReviewSourceType
+    repo: str | None = None
+    pr_number: int | None = None
+    mr_number: int | None = None
+    project_path: str | None = None
+    url: str | None = None
+    local_path: str | None = None
+    base_branch: str | None = None
+    head_branch: str | None = None
+    task_id: str | None = None
+
+
+class ReviewRunRequest(BaseModel):
+    source: ReviewSource
+
+
+class ReviewActionRequest(BaseModel):
+    action: ReviewDecision
+
+
+class ReviewRun(BaseModel):
+    review_id: str
+    source: ReviewSource
+    status: ReviewStatus
+    artifact_path: str | None = None
+    comment_url: str | None = None
+    summary: str = ""
+    content: str = ""
+    run_mode: Literal["dry_run", "real_run"] = "dry_run"
+    task_id: str | None = None
+    created_at: str
+    updated_at: str
+    reviewed_at: str | None = None

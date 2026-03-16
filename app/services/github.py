@@ -81,6 +81,14 @@ class GitHubService:
             is_dry_run=False,
         )
 
+    def create_pull_request_comment(
+        self,
+        repo: str,
+        pr_number: int,
+        body: str,
+    ) -> GitHubCommentResult:
+        return self.create_issue_comment(repo=repo, issue_number=pr_number, body=body)
+
     def create_pull_request(
         self,
         repo: str,

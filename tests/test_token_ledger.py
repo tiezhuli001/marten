@@ -196,6 +196,23 @@ class TokenLedgerTests(unittest.TestCase):
             self.assertIn("Token report for 30d", summary)
             self.assertIn("total_tokens=20", summary)
 
+    def test_schema_migration_rejects_unsupported_identifiers(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database_path = Path(temp_dir) / "ledger.db"
+            service = TokenLedgerService(build_settings(database_path))
+
+            with self.assertRaisesRegex(ValueError, "Unsupported schema migration table"):
+                with service._connect() as connection:
+                    service._ensure_columns(connection, "bad_table", {"model_name": "TEXT"})
+
+            with self.assertRaisesRegex(ValueError, "Unsupported schema migration columns"):
+                with service._connect() as connection:
+                    service._ensure_columns(
+                        connection,
+                        "token_usage_records",
+                        {"bad_column": "TEXT"},
+                    )
+
 
 if __name__ == "__main__":
     unittest.main()

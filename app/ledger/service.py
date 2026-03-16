@@ -18,6 +18,10 @@ from app.models.schemas import (
 
 
 class TokenLedgerService:
+    _MIGRATION_COLUMNS: dict[str, set[str]] = {
+        "token_usage_records": {"model_name", "provider", "cost_usd", "step_name"},
+    }
+
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.database_path = settings.resolved_database_path
@@ -106,6 +110,7 @@ class TokenLedgerService:
         table_name: str,
         columns: dict[str, str],
     ) -> None:
+        self._validate_schema_targets(table_name, columns)
         existing_columns = {
             row["name"]
             for row in connection.execute(f"PRAGMA table_info({table_name})").fetchall()
@@ -115,6 +120,21 @@ class TokenLedgerService:
                 continue
             connection.execute(
                 f"ALTER TABLE {table_name} ADD COLUMN {column_name} {definition}"
+            )
+
+    def _validate_schema_targets(
+        self,
+        table_name: str,
+        columns: dict[str, str],
+    ) -> None:
+        allowed_columns = self._MIGRATION_COLUMNS.get(table_name)
+        if allowed_columns is None:
+            raise ValueError(f"Unsupported schema migration table: {table_name}")
+        invalid_columns = sorted(set(columns) - allowed_columns)
+        if invalid_columns:
+            raise ValueError(
+                "Unsupported schema migration columns for "
+                f"{table_name}: {', '.join(invalid_columns)}"
             )
 
     def record_request(

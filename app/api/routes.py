@@ -2,8 +2,11 @@ from functools import lru_cache
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from app.core.config import get_settings
 from app.graph.workflow import WorkflowRunner
+from app.ledger.service import TokenLedgerService
 from app.models.schemas import (
+    DailyTokenSummary,
     GatewayMessageRequest,
     GatewayMessageResponse,
     ReviewActionRequest,
@@ -12,6 +15,7 @@ from app.models.schemas import (
     SleepCodingTask,
     SleepCodingTaskActionRequest,
     SleepCodingTaskRequest,
+    TokenReportResponse,
 )
 from app.services.review import ReviewService
 from app.services.status import StatusService
@@ -38,6 +42,11 @@ def get_sleep_coding_service() -> SleepCodingService:
 @lru_cache(maxsize=1)
 def get_review_service() -> ReviewService:
     return ReviewService()
+
+
+@lru_cache(maxsize=1)
+def get_token_ledger_service() -> TokenLedgerService:
+    return TokenLedgerService(get_settings())
 
 
 @router.get("/health")
@@ -145,5 +154,42 @@ def trigger_sleep_coding_review(
         return service.trigger_for_task(task_id)
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/reports/tokens", response_model=TokenReportResponse)
+def get_token_report(
+    window: str,
+    service: TokenLedgerService = Depends(get_token_ledger_service),
+) -> TokenReportResponse:
+    try:
+        return service.get_window_report(window)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/reports/tokens/daily/{summary_date}", response_model=DailyTokenSummary)
+def get_daily_token_summary(
+    summary_date: str,
+    service: TokenLedgerService = Depends(get_token_ledger_service),
+) -> DailyTokenSummary:
+    try:
+        return service.get_daily_summary(summary_date)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/reports/tokens/daily/generate", response_model=DailyTokenSummary)
+def generate_daily_token_summary(
+    date: str | None = None,
+    service: TokenLedgerService = Depends(get_token_ledger_service),
+) -> DailyTokenSummary:
+    try:
+        return (
+            service.generate_daily_summary(date)
+            if date
+            else service.generate_yesterday_summary()
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

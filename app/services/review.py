@@ -59,7 +59,7 @@ class ReviewSkillService:
             raise RuntimeError(
                 f"Review skill command failed with exit_code={completed.returncode}: {output}"
             )
-        summary = output.splitlines()[0] if output else f"Review completed via {self.skill_name}."
+        summary = self._extract_summary(output)
         return summary, output
 
     def _resolve_command(self, source: ReviewSource, context: str) -> list[str] | None:
@@ -100,6 +100,37 @@ class ReviewSkillService:
             "### Context\n"
             f"{context}\n"
         )
+
+    def _extract_summary(self, output: str) -> str:
+        if not output:
+            return f"Review completed via {self.skill_name}."
+        summary_match = re.search(
+            r"^### Summary\s*\n(?P<summary>(?:- .*\n?|.*\n?)+?)(?:\n### |\Z)",
+            output,
+            flags=re.MULTILINE,
+        )
+        if summary_match:
+            summary = " ".join(
+                line.strip().lstrip("-").strip()
+                for line in summary_match.group("summary").splitlines()
+                if line.strip()
+            )
+            if summary:
+                return summary
+        change_summary_match = re.search(
+            r"^### 变更摘要\s*\n(?P<summary>.+?)(?:\n---|\n### |\Z)",
+            output,
+            flags=re.MULTILINE | re.DOTALL,
+        )
+        if change_summary_match:
+            summary = " ".join(
+                line.strip()
+                for line in change_summary_match.group("summary").splitlines()
+                if line.strip()
+            )
+            if summary:
+                return summary
+        return output.splitlines()[0]
 
 
 class ReviewService:
@@ -323,6 +354,7 @@ class ReviewService:
             )
 
         diff_args = ["git", "diff", "--stat"]
+        diff_target = "working-tree"
         if head_branch:
             merge_base = subprocess.run(
                 ["git", "merge-base", base_branch, head_branch],
@@ -333,6 +365,14 @@ class ReviewService:
             )
             base_ref = merge_base.stdout.strip() if merge_base.returncode == 0 else base_branch
             diff_args = ["git", "diff", "--stat", f"{base_ref}..{head_branch}"]
+            diff_target = f"{base_ref}..{head_branch}"
+            merge_base_note = (
+                ""
+                if merge_base.returncode == 0
+                else f"Merge-base resolution failed; fallback to `{base_branch}`.\n"
+            )
+        else:
+            merge_base_note = ""
 
         diff = subprocess.run(
             diff_args,
@@ -341,21 +381,56 @@ class ReviewService:
             text=True,
             check=False,
         )
+        diff_body = self._format_git_output(
+            completed=diff,
+            success_label="Diff stat collected successfully.",
+            failure_label=(
+                "Diff stat unavailable. Review should fall back to the working tree "
+                "and repository files."
+            ),
+        )
         detailed_diff = subprocess.run(
-            ["git", "diff", "--unified=1"] if not head_branch else ["git", "diff", "--unified=1", f"{base_ref}..{head_branch}"],
+            ["git", "diff", "--unified=1"]
+            if not head_branch
+            else ["git", "diff", "--unified=1", f"{base_ref}..{head_branch}"],
             cwd=local_path,
             capture_output=True,
             text=True,
             check=False,
         )
+        detailed_diff_body = self._format_git_output(
+            completed=detailed_diff,
+            success_label="Detailed diff collected successfully.",
+            failure_label=(
+                "Detailed diff unavailable. Review should rely on repository files "
+                "and changed file summaries."
+            ),
+        )
         return (
             f"Local Path: {local_path}\n"
             f"Base Branch: {base_branch}\n"
-            f"Head Branch: {head_branch or 'working-tree'}\n\n"
+            f"Head Branch: {head_branch or 'working-tree'}\n"
+            f"Diff Target: {diff_target}\n"
+            f"{merge_base_note}\n"
             "## Diff Stat\n"
-            f"{diff.stdout.strip() or diff.stderr.strip() or 'n/a'}\n\n"
+            f"{diff_body}\n\n"
             "## Diff\n"
-            f"{detailed_diff.stdout.strip() or detailed_diff.stderr.strip() or 'n/a'}\n"
+            f"{detailed_diff_body}\n"
+        )
+
+    def _format_git_output(
+        self,
+        completed: subprocess.CompletedProcess[str],
+        success_label: str,
+        failure_label: str,
+    ) -> str:
+        output = completed.stdout.strip() or completed.stderr.strip()
+        if completed.returncode == 0:
+            return output or success_label
+        return (
+            f"{failure_label}\n"
+            f"Exit code: {completed.returncode}\n"
+            f"Git output: {output or 'n/a'}"
         )
 
     def _write_artifact(self, review_id: str, source: ReviewSource, content: str) -> Path:

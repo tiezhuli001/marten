@@ -17,7 +17,7 @@ from app.models.schemas import (
 from app.services.channel import ChannelNotificationResult
 from app.services.github import GitHubCommentResult
 from app.services.gitlab import GitLabService
-from app.services.review import ReviewService
+from app.services.review import ReviewService, ReviewSkillService
 from app.services.sleep_coding import SleepCodingService
 
 
@@ -260,3 +260,47 @@ class ReviewServiceTests(unittest.TestCase):
             self.assertEqual(review.source.source_type, "gitlab_mr")
             self.assertEqual(review.source.project_path, "group/project")
             self.assertEqual(len(gitlab.comments), 1)
+
+    def test_summary_prefers_structured_summary_section(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = build_settings(root / "review.db", root / "review-runs")
+            skill = ReviewSkillService(settings)
+
+            summary = skill._extract_summary(
+                "## AI Code Review\n\n### Summary\n- first summary line\n- second summary line\n"
+            )
+
+            self.assertEqual(summary, "first summary line second summary line")
+
+    def test_local_code_context_reports_friendly_git_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / ".git").mkdir()
+            settings = build_settings(root / "review.db", root / "review-runs")
+            review_service = ReviewService(
+                settings=settings,
+                github=FakeGitHubService(),
+                gitlab=FakeGitLabService(),
+                sleep_coding=SleepCodingService(
+                    settings=settings,
+                    github=FakeGitHubService(),
+                    channel=FakeChannelService(),
+                    git_workspace=FakeGitWorkspaceService(),
+                    validator=FakeValidationRunner(),
+                    ledger=TokenLedgerService(settings),
+                ),
+                skill=FakeReviewSkillService(),
+            )
+
+            context = review_service._build_local_code_context(
+                ReviewSource(
+                    source_type="local_code",
+                    local_path=str(root),
+                    base_branch="main",
+                    head_branch="feature/missing",
+                )
+            )
+
+            self.assertIn("Diff stat unavailable", context)
+            self.assertIn("Detailed diff unavailable", context)

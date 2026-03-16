@@ -30,8 +30,14 @@ class GitLabService:
             f"/projects/{project_id}/merge_requests/{mr_number}/notes",
             {"body": body},
         )
+        note_id = payload.get("id")
+        note_url = (
+            f"https://gitlab.com/{project_path}/-/merge_requests/{mr_number}#note_{note_id}"
+            if note_id
+            else None
+        )
         return GitHubCommentResult(
-            html_url=payload.get("resolvable_discussion", {}).get("noteable_iid")
+            html_url=note_url
             or payload.get("noteable_url")
             or f"https://gitlab.com/{project_path}/-/merge_requests/{mr_number}",
             is_dry_run=False,

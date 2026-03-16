@@ -62,6 +62,21 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(payload["intent"], "sleep_coding")
         self.assertIn("Status=awaiting_confirmation", payload["message"])
 
+    def test_gateway_message_requires_issue_context_for_numeric_tokens(self) -> None:
+        response = self.client.post(
+            "/gateway/message",
+            json={
+                "user_id": "user-1",
+                "content": "请帮我 review 42 这个需求",
+                "source": "manual",
+            },
+        )
+
+        payload = response.json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["intent"], "sleep_coding")
+        self.assertIn("Provide an issue number", payload["message"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -100,8 +100,8 @@ class WorkflowRunner:
         return state
 
     def _sleep_coding_handler(self, state: WorkflowState) -> WorkflowState:
-        match = re.search(r"\b(\d+)\b", state["content"])
-        if match is None:
+        issue_number = self._extract_issue_number(state["content"])
+        if issue_number is None:
             state["message"] = (
                 "Sleep coding intent recognized. Provide an issue number or call POST /tasks/sleep-coding directly."
             )
@@ -109,7 +109,7 @@ class WorkflowRunner:
 
         task = self.sleep_coding.start_task(
             SleepCodingTaskRequest(
-                issue_number=int(match.group(1)),
+                issue_number=issue_number,
                 request_id=state["request_id"],
             )
         )
@@ -133,3 +133,14 @@ class WorkflowRunner:
 
     def _response_formatter(self, state: WorkflowState) -> WorkflowState:
         return state
+
+    def _extract_issue_number(self, content: str) -> int | None:
+        patterns = (
+            r"(?:issue|Issue)\s*#?(\d+)",
+            r"#(\d+)",
+        )
+        for pattern in patterns:
+            match = re.search(pattern, content)
+            if match is not None:
+                return int(match.group(1))
+        return None

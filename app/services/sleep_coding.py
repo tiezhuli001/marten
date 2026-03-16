@@ -340,6 +340,7 @@ class SleepCodingService:
                     "stage": "validation_failed",
                 },
             )
+            self._cleanup_worktree(connection, task["task_id"], task["head_branch"])
             self._sync_task_tokens(connection, task)
             return
 
@@ -481,6 +482,8 @@ class SleepCodingService:
         self._ensure_status(task["status"], allowed_statuses[action])
         self._update_status(connection, task["task_id"], target_status)
         self._append_event(connection, task["task_id"], action, {"status": target_status})
+        if action in {"reject_plan", "cancel_task"}:
+            self._cleanup_worktree(connection, task["task_id"], task["head_branch"])
         self._sync_task_tokens(connection, task)
 
     def _sync_task_tokens(self, connection: sqlite3.Connection, task: sqlite3.Row) -> None:
@@ -501,6 +504,29 @@ class SleepCodingService:
                 usage.total_tokens,
                 task["task_id"],
             ),
+        )
+
+    def _cleanup_worktree(
+        self,
+        connection: sqlite3.Connection,
+        task_id: str,
+        head_branch: str,
+    ) -> None:
+        try:
+            self.git_workspace.cleanup_worktree(head_branch)
+        except RuntimeError as exc:
+            self._append_event(
+                connection,
+                task_id,
+                "worktree_cleanup_failed",
+                {"error": str(exc)},
+            )
+            return
+        self._append_event(
+            connection,
+            task_id,
+            "worktree_cleaned",
+            {"branch": head_branch},
         )
 
     def _build_plan(self, issue: SleepCodingIssue) -> SleepCodingPlan:

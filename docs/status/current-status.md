@@ -26,6 +26,7 @@
 - [x] Phase 2 Channel 出站通知骨架落地
 - [x] Phase 2 git worktree / commit / push dry-run 骨架落地
 - [x] Phase 2 worktree 任务产物生成骨架落地
+- [x] Phase 2 PR #3 code review 归档并回写处置结果
 
 ## 正在进行
 

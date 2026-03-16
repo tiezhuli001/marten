@@ -87,6 +87,7 @@ class FakeGitWorkspaceService:
         self.prepared_branches: list[str] = []
         self.committed_branches: list[str] = []
         self.pushed_branches: list[str] = []
+        self.cleaned_branches: list[str] = []
 
     def prepare_worktree(self, branch: str) -> GitExecutionResult:
         self.prepared_branches.append(branch)
@@ -130,6 +131,9 @@ class FakeGitWorkspaceService:
             output="push skipped",
             is_dry_run=True,
         )
+
+    def cleanup_worktree(self, branch: str) -> None:
+        self.cleaned_branches.append(branch)
 
 
 class FakeValidationRunner:
@@ -238,6 +242,7 @@ class SleepCodingServiceTests(unittest.TestCase):
             self.assertEqual(updated.validation.status, "failed")
             self.assertIsNone(updated.pull_request)
             self.assertEqual(updated.git_execution.status, "prepared")
+            self.assertIn("codex/issue-25-sleep-coding", git_workspace.cleaned_branches)
             self.assertEqual(len(channel.messages), 2)
 
 

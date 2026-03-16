@@ -15,6 +15,15 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
     database_url: str = "sqlite:///data/youmeng_gateway.db"
     github_token: str | None = None
+    github_api_base: str = "https://api.github.com"
+    github_repository: str = "tiezhuli001/youmeng-gateway"
+    channel_provider: str = "feishu"
+    channel_webhook_url: str | None = None
+    sleep_coding_labels: str = "agent:ralph,workflow:sleep-coding"
+    sleep_coding_worktree_root: str = ".worktrees"
+    sleep_coding_enable_git_commit: bool = False
+    sleep_coding_enable_git_push: bool = False
+    git_remote_name: str = "origin"
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -42,6 +51,19 @@ class Settings(BaseSettings):
                 else self.project_root / database_path
             )
         return self.resolved_data_dir / "youmeng_gateway.db"
+
+    @property
+    def resolved_sleep_coding_labels(self) -> list[str]:
+        return [
+            item.strip()
+            for item in self.sleep_coding_labels.split(",")
+            if item.strip()
+        ]
+
+    @property
+    def resolved_sleep_coding_worktree_root(self) -> Path:
+        root = Path(self.sleep_coding_worktree_root).expanduser()
+        return root if root.is_absolute() else self.project_root / root
 
 
 @lru_cache(maxsize=1)

@@ -30,6 +30,53 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(payload["intent"], "stats_query")
         self.assertIn("token_usage", payload)
 
+    def test_sleep_coding_task_endpoint(self) -> None:
+        response = self.client.post(
+            "/tasks/sleep-coding",
+            json={
+                "issue_number": 42,
+                "repo": "tiezhuli001/youmeng-gateway",
+                "issue_title": "Implement sleep coding API",
+                "issue_body": "Need the task creation and review endpoints.",
+            },
+        )
+
+        payload = response.json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["status"], "awaiting_confirmation")
+        self.assertEqual(payload["issue_number"], 42)
+        self.assertIn("agent:ralph", payload["issue"]["labels"])
+
+    def test_gateway_message_creates_sleep_coding_task_when_issue_number_is_present(self) -> None:
+        response = self.client.post(
+            "/gateway/message",
+            json={
+                "user_id": "user-1",
+                "content": "请处理 issue 42 并准备 pr",
+                "source": "manual",
+            },
+        )
+
+        payload = response.json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["intent"], "sleep_coding")
+        self.assertIn("Status=awaiting_confirmation", payload["message"])
+
+    def test_gateway_message_requires_issue_context_for_numeric_tokens(self) -> None:
+        response = self.client.post(
+            "/gateway/message",
+            json={
+                "user_id": "user-1",
+                "content": "请帮我 review 42 这个需求",
+                "source": "manual",
+            },
+        )
+
+        payload = response.json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["intent"], "sleep_coding")
+        self.assertIn("Provide an issue number", payload["message"])
+
 
 if __name__ == "__main__":
     unittest.main()

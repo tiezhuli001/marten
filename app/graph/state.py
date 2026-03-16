@@ -12,3 +12,4 @@ class WorkflowState(TypedDict):
     intent: IntentType
     message: str
     token_usage: TokenUsage
+    task_id: str | None

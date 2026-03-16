@@ -8,6 +8,7 @@
 - `acceptance/`: 阶段验收标准与测试点
 - `status/`: 当前进度、backlog、阶段状态
 - `architecture/`: 系统架构、数据模型、工作流设计
+- `code-review/`: PR / 分支级代码评审结论与处置记录
 - `runbooks/`: 服务器部署、环境配置、运维说明
 - `requirements/`: 需求和范围定义
 - `agents/`: 各个 Agent 的职责和边界

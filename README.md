@@ -4,13 +4,18 @@
 
 ## Current Scope
 
-当前仓库先实现 `Phase 1` 平台骨架：
+当前仓库已经进入 `Phase 2` 睡后编程 MVP：
 
 - FastAPI Gateway 最小入口
 - LangGraph 主图骨架
-- 最小规则意图路由
-- token ledger 占位
-- 状态文档读取入口
+- Sleep Coding 任务状态与事件落库
+- GitHub Issue / PR dry-run 或真实回写
+- Ralph 专属标签自动打到 Issue / PR
+- 可选的 Channel 出站通知，默认兼容飞书 webhook
+- Git worktree / commit / push 的 dry-run -> real-run 骨架
+- worktree 内会生成 `.sleep_coding/issue-<number>.md` 作为最小可提交产物
+- 计划生成、人工确认、本地验证、PR 打开流程
+- token ledger 占位与任务级聚合
 
 ## Quick Start
 
@@ -39,6 +44,13 @@ uvicorn app.main:app --reload
 - `LANGSMITH_PROJECT`: LangSmith 项目名
 - `LANGSMITH_API_KEY`: LangSmith API Key
 - `GITHUB_TOKEN`: 后续 GitHub 自动化使用
+- `CHANNEL_WEBHOOK_URL`: 可选的 Channel webhook，配置后会发送 sleep coding 状态通知
+- `CHANNEL_PROVIDER`: Channel 提供方，默认 `feishu`
+- `SLEEP_CODING_LABELS`: 逗号分隔的 GitHub 标签，默认 `agent:ralph,workflow:sleep-coding`
+- `SLEEP_CODING_WORKTREE_ROOT`: sleep coding worktree 根目录，默认 `.worktrees/`
+- `SLEEP_CODING_ENABLE_GIT_COMMIT`: 是否真实执行 `git worktree` / `git commit`
+- `SLEEP_CODING_ENABLE_GIT_PUSH`: 是否真实执行 `git push`
+- `GIT_REMOTE_NAME`: 推送远端名，默认 `origin`
 
 默认情况下，运行时文件会写入项目内的 `data/`。如果当前环境对项目目录没有写权限，代码会临时回退到系统临时目录，避免服务直接启动失败。
 
@@ -47,3 +59,6 @@ uvicorn app.main:app --reload
 - `GET /health`
 - `POST /gateway/message`
 - `GET /status/current`
+- `POST /tasks/sleep-coding`
+- `GET /tasks/sleep-coding/{task_id}`
+- `POST /tasks/sleep-coding/{task_id}/actions`

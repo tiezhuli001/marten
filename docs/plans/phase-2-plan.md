@@ -25,6 +25,8 @@
 - Sleep Coding task 状态表
 - 计划生成与回写
 - 独立工作分支策略
+- Channel 出站通知
+- Ralph 专属标签策略
 - 本地验证执行
 - PR 创建
 - 人工确认节点
@@ -92,6 +94,23 @@
 
 - [ ] 任务在独立分支运行
 - [ ] 不污染 `main`
+- [ ] GitHub Issue / PR 带有 Ralph 专属标签，便于区分自动化任务
+- [ ] worktree / commit / push 支持 dry-run 与 real-run 双模式
+- [ ] worktree 内有最小可审阅产物，避免 commit 长期停留在 skipped
+
+### Task 2.4A Channel 通知与标签策略
+
+目标：
+
+- 在任务进入可人工确认阶段、验证失败、PR 就绪时向 Channel 发送出站消息
+- 统一给 Issue / PR 打上 Ralph 专属标签
+
+验收：
+
+- [ ] 计划生成完成后可发送一条 Channel 状态通知
+- [ ] PR 创建完成后可发送一条 Channel 状态通知
+- [ ] 验证失败时可发送失败通知
+- [ ] 默认标签包含 `agent:ralph` 与 `workflow:sleep-coding`
 
 ### Task 2.5 本地验证与 PR 创建
 
@@ -102,6 +121,8 @@
 验收：
 
 - [ ] 能记录本地测试结果
+- [ ] 能记录 worktree / commit / push 执行状态
+- [ ] 能在 worktree 内生成最小任务产物文件
 - [ ] 能创建真实 PR
 - [ ] PR 描述包含计划摘要、验证结果和关联 Issue
 
@@ -122,8 +143,9 @@
 2. GitHub Issue 集成
 3. 计划生成与回写
 4. 工作目录与分支策略
-5. 本地验证与 PR 创建
-6. 人工确认与记账
+5. Channel 通知与标签策略
+6. 本地验证与 PR 创建
+7. 人工确认与记账
 
 ## 五、阶段产出
 

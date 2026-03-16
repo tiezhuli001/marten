@@ -134,3 +134,23 @@ class TokenLedgerService:
             f"Token ledger is initialized. Period={period}, "
             f"requests={row['request_count']}, total_tokens={row['total_tokens']}."
         )
+
+    def get_request_usage(self, request_id: str) -> TokenUsage:
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                """
+                SELECT
+                    COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+                    COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+                    COALESCE(SUM(total_tokens), 0) AS total_tokens
+                FROM token_usage_records
+                WHERE request_id = ?
+                """,
+                (request_id,),
+            ).fetchone()
+
+        return TokenUsage(
+            prompt_tokens=row["prompt_tokens"],
+            completion_tokens=row["completion_tokens"],
+            total_tokens=row["total_tokens"],
+        )

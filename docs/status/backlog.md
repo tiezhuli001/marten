@@ -19,6 +19,9 @@
 ## P1
 
 - [ ] 睡后编程 MVP：GitHub Issue -> PR 闭环
+- [ ] 睡后编程真实飞书 webhook 联调
+- [ ] 睡后编程真实 git worktree / push / PR 联调
+- [ ] 睡后编程真实代码修改器接入 worktree
 - [ ] Code Review Agent
 - [ ] Token 日报任务
 - [ ] 7 天 / 30 天 token 查询

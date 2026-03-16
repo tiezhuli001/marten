@@ -28,6 +28,8 @@
 2. `architecture/phase-2-sleep-coding-mvp.md`
 3. `architecture/github-issue-pr-state-model.md`
 4. `architecture/token-ledger-reporting.md`
+5. `plans/phase-4-implementation-plan.md`
+6. `acceptance/phase-0-4-mvp-checklist.md`
 
 阶段计划总览：
 

@@ -1,8 +1,8 @@
 # Current Status
 
 > 更新时间：2026-03-16
-> 当前阶段：Phase 3 Code Review Agent 已完成
-> 当前目标：准备进入 Phase 4，并在 Phase 4 结束后执行 Phase 0-4 整体 MVP 验证
+> 当前阶段：Phase 4 Token Ledger / Daily Reporting 已完成
+> 当前目标：执行 Phase 0-4 整体 MVP 验证，并在真实环境补齐 dry-run 联调项
 
 ## 当前结论
 
@@ -31,6 +31,12 @@
 - [x] Phase 4 文档补充整体 MVP 验证目标
 - [x] Phase 3 独立 review 入口与运行产物目录设计落地
 - [x] Phase 3 独立 code review agent 最小能力完成
+- [x] Phase 4 implementation plan 归档
+- [x] Phase 4 token ledger 扩展字段落地
+- [x] Phase 4 7d / 30d token 查询接口落地
+- [x] Phase 4 daily token summaries 聚合表落地
+- [x] Phase 4 昨日日报生成入口落地
+- [x] Phase 0-4 MVP 验证清单归档
 
 ## 正在进行
 
@@ -42,16 +48,18 @@
 - [x] Phase 3 review-runs 运行产物目录落地
 - [x] Phase 3 review skill 真正执行链路已接入
 - [x] Phase 3 GitLab 评论回写接口已接入
+- [x] Phase 4 token ledger 查询 / 报表 API 已完成
+- [x] Phase 4 规则化 token 摘要已完成
 - [ ] GitLab 评论回写真实联调
 - [ ] review skill 真实环境联调
-- [ ] Phase 4 Token Ledger / 日报实现
+- [ ] Phase 0-4 整体 MVP 联调
 
 ## 下一步
 
-1. 进入 Phase 4 Token Ledger / 日报实现
+1. 执行 Phase 0-4 MVP checklist 联调
 2. 在真实环境联调 GitHub / GitLab / local code 三类 review 输入
-3. 在 Phase 4 后执行 Phase 0-4 整体 MVP 验证
-4. 验证通过后再进入 Phase 5
+3. 在真实环境验证 daily token summary 调度触发
+4. MVP 验证通过后再进入 Phase 5
 
 ## 当前阻塞
 
@@ -60,6 +68,7 @@
 - 当前任务流还没有真实代码生成器，因此 commit 多数会以 skipped 结束
 - Phase 3 已完成独立 review service 第一版，但真实 review skill 和 GitLab 回写仍未联通
 - 未配置 provider / token / webhook 的环境下，GitHub、GitLab、review skill 仍会局部退回 dry-run
+- daily token summary 已具备生成入口，但“每日 10 点”真实调度仍待联调环境验证
 
 ## 当前技术决定
 
@@ -78,6 +87,7 @@
 - 第一阶段真正的需求验证节点放在 Phase 4 结束后统一执行
 - 后续编码以 Phase 文档为唯一阶段基线，先补文档再补实现
 - 数据层策略为：`Phase 1 / Phase 2` 先 SQLite，后续再迁移 PostgreSQL
+- Phase 4 的 token ledger 采用确定性工程实现，规则摘要不依赖 skill 或 LLM
 
 ## 当前事实来源
 

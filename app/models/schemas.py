@@ -43,6 +43,52 @@ class TokenUsage(BaseModel):
     prompt_tokens: int = Field(default=0, ge=0)
     completion_tokens: int = Field(default=0, ge=0)
     total_tokens: int = Field(default=0, ge=0)
+    model_name: str | None = None
+    provider: str | None = None
+    cost_usd: float = Field(default=0.0, ge=0.0)
+    step_name: str | None = None
+
+
+class TokenUsageBreakdown(BaseModel):
+    label: str
+    request_count: int = Field(default=0, ge=0)
+    workflow_run_count: int = Field(default=0, ge=0)
+    total_tokens: int = Field(default=0, ge=0)
+    estimated_cost_usd: float = Field(default=0.0, ge=0.0)
+
+
+class TokenWindowSummary(BaseModel):
+    window: Literal["7d", "30d"]
+    start_date: str
+    end_date: str
+    request_count: int = Field(default=0, ge=0)
+    workflow_run_count: int = Field(default=0, ge=0)
+    prompt_tokens: int = Field(default=0, ge=0)
+    completion_tokens: int = Field(default=0, ge=0)
+    total_tokens: int = Field(default=0, ge=0)
+    estimated_cost_usd: float = Field(default=0.0, ge=0.0)
+    by_intent: list[TokenUsageBreakdown] = Field(default_factory=list)
+    by_step_name: list[TokenUsageBreakdown] = Field(default_factory=list)
+    top_requests: list[TokenUsageBreakdown] = Field(default_factory=list)
+
+
+class DailyTokenSummary(BaseModel):
+    summary_date: str
+    request_count: int = Field(default=0, ge=0)
+    workflow_run_count: int = Field(default=0, ge=0)
+    prompt_tokens: int = Field(default=0, ge=0)
+    completion_tokens: int = Field(default=0, ge=0)
+    total_tokens: int = Field(default=0, ge=0)
+    estimated_cost_usd: float = Field(default=0.0, ge=0.0)
+    top_intent: str | None = None
+    top_step_name: str | None = None
+    summary_text: str = ""
+
+
+class TokenReportResponse(BaseModel):
+    summary_text: str = ""
+    window_summary: TokenWindowSummary | None = None
+    daily_summary: DailyTokenSummary | None = None
 
 
 class GatewayMessageRequest(BaseModel):

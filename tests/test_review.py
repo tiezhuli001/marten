@@ -1,23 +1,28 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from app.core.config import Settings
 from app.ledger.service import TokenLedgerService
 from app.models.schemas import (
     ReviewActionRequest,
+    ReviewFinding,
     ReviewRunRequest,
+    ReviewSkillOutput,
     ReviewSource,
     SleepCodingIssue,
     SleepCodingPullRequest,
     SleepCodingTaskActionRequest,
     SleepCodingTaskRequest,
+    TokenUsage,
     ValidationResult,
 )
+from app.runtime.mcp import InMemoryMCPServer, MCPClient
 from app.services.channel import ChannelNotificationResult
 from app.services.github import GitHubCommentResult
 from app.services.gitlab import GitLabService
-from app.services.review import ReviewService, ReviewSkillService
+from app.services.review import ReviewService, ReviewSkillRunResult, ReviewSkillService
 from app.services.sleep_coding import SleepCodingService
 
 
@@ -45,7 +50,7 @@ class FakeGitHubService:
 
     def create_pull_request(self, repo, issue, plan, validation, head_branch, base_branch):
         return SleepCodingPullRequest(
-            title=f"[Sleep Coding] #{issue.issue_number} {issue.title}",
+            title=f"[Ralph] #{issue.issue_number} {issue.title}",
             body="dry run pr",
             html_url=f"https://github.com/{repo}/pull/88",
             pr_number=88,
@@ -63,6 +68,65 @@ class FakeGitHubService:
     def apply_labels(self, repo, issue_number, labels):
         self.labels_applied.append((issue_number, labels))
         return type("GitHubLabelResultStub", (), {"labels": labels, "is_dry_run": True})()
+
+
+def build_github_mcp(github: FakeGitHubService) -> MCPClient:
+    client = MCPClient()
+    server = InMemoryMCPServer()
+    server.register_tool(
+        "get_issue",
+        lambda arguments: github.get_issue(
+            arguments["repo"],
+            arguments["issue_number"],
+        ).model_dump(mode="json"),
+        server="github",
+    )
+    server.register_tool(
+        "create_issue_comment",
+        lambda arguments: {
+            "html_url": github.create_issue_comment(
+                arguments["repo"],
+                arguments["issue_number"],
+                arguments["body"],
+            ).html_url,
+        },
+        server="github",
+    )
+    server.register_tool(
+        "apply_labels",
+        lambda arguments: {
+            "labels": github.apply_labels(
+                arguments["repo"],
+                arguments["issue_number"],
+                arguments["labels"],
+            ).labels,
+        },
+        server="github",
+    )
+    server.register_tool(
+        "create_pull_request",
+        lambda arguments: {
+            "title": arguments["title"],
+            "body": arguments["body"],
+            "html_url": f"https://github.com/{arguments['repo']}/pull/88",
+            "number": 88,
+            "state": "open",
+        },
+        server="github",
+    )
+    server.register_tool(
+        "pull_request_review_write",
+        lambda arguments: {
+            "html_url": github.create_pull_request_comment(
+                arguments["repo"],
+                arguments["pr_number"],
+                arguments["body"],
+            ).html_url,
+        },
+        server="github",
+    )
+    client.register_adapter("github", server)
+    return client
 
 
 class FakeChannelService:
@@ -93,14 +157,14 @@ class FakeGitWorkspaceService:
             is_dry_run=True,
         )
 
-    def write_task_artifact(self, branch, task_id, issue_number, plan_summary):
+    def write_task_artifact(self, branch, task_id, issue_number, artifact_markdown, file_changes=None):
         from app.models.schemas import GitExecutionResult
 
         return GitExecutionResult(
             status="prepared",
             worktree_path=f"/tmp/{branch.replace('/', '__')}",
             artifact_path=f"/tmp/{branch.replace('/', '__')}/.sleep_coding/issue-{issue_number}.md",
-            output=plan_summary,
+            output=artifact_markdown,
             is_dry_run=True,
         )
 
@@ -140,40 +204,142 @@ class FakeValidationRunner:
 
 
 class FakeReviewSkillService:
-    def run(self, source: ReviewSource, context: str) -> tuple[str, str]:
-        return (
-            f"Review for {source.source_type}",
-            f"## Code Review Agent\n\nSource: {source.source_type}\n\nContext:\n{context}",
+    def run(self, source: ReviewSource, context: str) -> ReviewSkillRunResult:
+        return ReviewSkillRunResult(
+            output=ReviewSkillOutput(
+                summary=f"Review for {source.source_type}",
+                findings=[
+                    ReviewFinding(
+                        severity="P2",
+                        title="Missing regression coverage",
+                        detail=f"Context reviewed for {source.source_type}",
+                        file_path="tests/example_test.py",
+                        line=12,
+                    )
+                ],
+                repair_strategy=["Add targeted regression coverage."],
+                blocking=False,
+                run_mode="dry_run",
+                review_markdown=f"## Code Review Agent\n\nSource: {source.source_type}\n\nContext:\n{context}",
+            ),
+            token_usage=TokenUsage(
+                prompt_tokens=21,
+                completion_tokens=9,
+                total_tokens=30,
+                cost_usd=0.001,
+                step_name="code_review",
+            ),
         )
+
+
+class FailingAgentRuntime:
+    def __init__(self) -> None:
+        from app.runtime.mcp import MCPClient
+
+        self.mcp = MCPClient()
+
+    def generate_structured_output(self, agent, **kwargs):
+        raise RuntimeError("LLM provider is unreachable")
 
 
 def build_settings(database_path: Path, review_runs_dir: Path) -> Settings:
     return Settings(
+        app_env="test",
         database_url=f"sqlite:///{database_path}",
         review_runs_dir=str(review_runs_dir),
         github_repository="tiezhuli001/youmeng-gateway",
         langsmith_tracing=False,
+        openai_api_key=None,
+        minimax_api_key=None,
     )
 
 
 class ReviewServiceTests(unittest.TestCase):
+    def test_review_skill_raises_when_llm_call_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = Settings(
+                app_env="development",
+                database_url=f"sqlite:///{root / 'review.db'}",
+                review_runs_dir=str(root / "review-runs"),
+                github_repository="tiezhuli001/youmeng-gateway",
+                minimax_api_key="test-key",
+                openai_api_key=None,
+                langsmith_tracing=False,
+            )
+            skill = ReviewSkillService(
+                settings=settings,
+                agent_runtime=FailingAgentRuntime(),
+                mcp_client=MCPClient(),
+            )
+
+            with patch("app.services.review.which", return_value=None):
+                with self.assertRaisesRegex(RuntimeError, "LLM provider is unreachable"):
+                    skill.run(
+                        ReviewSource(source_type="local_code", local_path=str(root)),
+                        "dummy context",
+                    )
+
+    def test_review_skill_command_takes_precedence_over_llm_credentials(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = Settings(
+                app_env="test",
+                database_url=f"sqlite:///{root / 'review.db'}",
+                review_runs_dir=str(root / "review-runs"),
+                github_repository="tiezhuli001/youmeng-gateway",
+                minimax_api_key="test-key",
+                openai_api_key=None,
+                review_skill_command="echo",
+                langsmith_tracing=False,
+            )
+            skill = ReviewSkillService(
+                settings=settings,
+                agent_runtime=FailingAgentRuntime(),
+                mcp_client=MCPClient(),
+            )
+
+            expected = ReviewSkillRunResult(
+                output=ReviewSkillOutput(
+                    summary="command review",
+                    findings=[],
+                    repair_strategy=[],
+                    blocking=False,
+                    run_mode="real_run",
+                    review_markdown="ok",
+                ),
+                token_usage=TokenUsage(total_tokens=10),
+            )
+            with patch.object(skill, "_run_with_command", return_value=expected) as run_with_command:
+                result = skill.run(
+                    ReviewSource(source_type="local_code", local_path=str(root)),
+                    "dummy context",
+                )
+
+            self.assertEqual(result.output.summary, "command review")
+            run_with_command.assert_called_once()
+
     def test_start_review_archives_local_code_run(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             settings = build_settings(root / "review.db", root / "review-runs")
+            github = FakeGitHubService()
+            mcp_client = build_github_mcp(github)
             review_service = ReviewService(
                 settings=settings,
-                github=FakeGitHubService(),
+                github=github,
                 gitlab=FakeGitLabService(),
                 sleep_coding=SleepCodingService(
                     settings=settings,
-                    github=FakeGitHubService(),
+                    github=github,
                     channel=FakeChannelService(),
                     git_workspace=FakeGitWorkspaceService(),
                     validator=FakeValidationRunner(),
                     ledger=TokenLedgerService(settings),
+                    mcp_client=mcp_client,
                 ),
                 skill=FakeReviewSkillService(),
+                mcp_client=mcp_client,
             )
 
             review = review_service.start_review(
@@ -191,21 +357,44 @@ class ReviewServiceTests(unittest.TestCase):
             self.assertTrue(review.artifact_path.endswith(".md"))
             self.assertIn("Source: local_code", review.content)
             self.assertTrue(Path(review.artifact_path).exists())
+            self.assertEqual(review.findings[0].severity, "P2")
+            self.assertFalse(review.is_blocking)
+            self.assertEqual(review.token_usage.total_tokens, 30)
 
     def test_trigger_for_sleep_coding_task_and_request_changes(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             settings = build_settings(root / "review.db", root / "review-runs")
             github = FakeGitHubService()
+            mcp_client = build_github_mcp(github)
+            ledger = TokenLedgerService(settings)
+            ledger.record_request(
+                request_id="req-review-1",
+                run_id="run-review-1",
+                user_id="user-1",
+                source="manual",
+                intent="sleep_coding",
+                content="Review task token aggregation",
+                usage=TokenUsage(
+                    prompt_tokens=4,
+                    completion_tokens=2,
+                    total_tokens=6,
+                    cost_usd=0.001,
+                    step_name="sleep_coding_plan",
+                ),
+            )
             sleep_coding = SleepCodingService(
                 settings=settings,
                 github=github,
                 channel=FakeChannelService(),
                 git_workspace=FakeGitWorkspaceService(),
                 validator=FakeValidationRunner(),
-                ledger=TokenLedgerService(settings),
+                ledger=ledger,
+                mcp_client=mcp_client,
             )
-            task = sleep_coding.start_task(SleepCodingTaskRequest(issue_number=33))
+            task = sleep_coding.start_task(
+                SleepCodingTaskRequest(issue_number=33, request_id="req-review-1")
+            )
             task = sleep_coding.apply_action(
                 task.task_id,
                 SleepCodingTaskActionRequest(action="approve_plan"),
@@ -216,6 +405,7 @@ class ReviewServiceTests(unittest.TestCase):
                 gitlab=FakeGitLabService(),
                 sleep_coding=sleep_coding,
                 skill=FakeReviewSkillService(),
+                mcp_client=mcp_client,
             )
 
             review = review_service.trigger_for_task(task.task_id)
@@ -226,26 +416,38 @@ class ReviewServiceTests(unittest.TestCase):
 
             self.assertEqual(updated_review.status, "changes_requested")
             self.assertEqual(sleep_coding.get_task(task.task_id).status, "changes_requested")
-            self.assertEqual(len(github.pr_comments), 1)
+            self.assertGreaterEqual(len(github.pr_comments), 1)
+            self.assertIn("Issue Title: Review integration", review.content)
+            self.assertIn("File Changes:", review.content)
+            self.assertIn("## Ralph Review Decision", github.pr_comments[-1])
+            self.assertIn("- Decision: Changes Requested", github.pr_comments[-1])
+            self.assertIn("### Token Usage", github.pr_comments[-1])
+            self.assertEqual(review.findings[0].title, "Missing regression coverage")
+            self.assertEqual(review.token_usage.total_tokens, 30)
+            self.assertGreater(sleep_coding.get_task(task.task_id).token_usage.total_tokens, 30)
 
     def test_gitlab_url_writes_comment(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             settings = build_settings(root / "review.db", root / "review-runs")
             gitlab = FakeGitLabService()
+            github = FakeGitHubService()
+            mcp_client = build_github_mcp(github)
             review_service = ReviewService(
                 settings=settings,
-                github=FakeGitHubService(),
+                github=github,
                 gitlab=gitlab,
                 sleep_coding=SleepCodingService(
                     settings=settings,
-                    github=FakeGitHubService(),
+                    github=github,
                     channel=FakeChannelService(),
                     git_workspace=FakeGitWorkspaceService(),
                     validator=FakeValidationRunner(),
                     ledger=TokenLedgerService(settings),
+                    mcp_client=mcp_client,
                 ),
                 skill=FakeReviewSkillService(),
+                mcp_client=mcp_client,
             )
 
             review = review_service.start_review(
@@ -261,6 +463,53 @@ class ReviewServiceTests(unittest.TestCase):
             self.assertEqual(review.source.project_path, "group/project")
             self.assertEqual(len(gitlab.comments), 1)
 
+    def test_sleep_coding_review_prefers_mcp_pull_request_review_write(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = build_settings(root / "review.db", root / "review-runs")
+            github = FakeGitHubService()
+            github_mcp = build_github_mcp(github)
+            sleep_coding = SleepCodingService(
+                settings=settings,
+                github=github,
+                channel=FakeChannelService(),
+                git_workspace=FakeGitWorkspaceService(),
+                validator=FakeValidationRunner(),
+                ledger=TokenLedgerService(settings),
+                mcp_client=github_mcp,
+            )
+            task = sleep_coding.start_task(SleepCodingTaskRequest(issue_number=77))
+            task = sleep_coding.apply_action(
+                task.task_id,
+                SleepCodingTaskActionRequest(action="approve_plan"),
+            )
+            review_service = ReviewService(
+                settings=settings,
+                github=github,
+                gitlab=FakeGitLabService(),
+                sleep_coding=sleep_coding,
+                skill=FakeReviewSkillService(),
+                mcp_client=github_mcp,
+            )
+            mcp_client = MCPClient()
+            server = InMemoryMCPServer()
+            captured: list[dict[str, object]] = []
+            server.register_tool(
+                "pull_request_review_write",
+                lambda arguments: captured.append(arguments) or {"url": "https://example.com/review/1"},
+                server="github",
+            )
+            mcp_client.register_adapter("github", server)
+            review_service.mcp_client = mcp_client
+            review_service.github_server = "github"
+
+            review = review_service.trigger_for_task(task.task_id)
+
+            self.assertEqual(review.comment_url, "https://example.com/review/1")
+            self.assertEqual(len(captured), 1)
+            self.assertEqual(captured[0]["event"], "COMMENT")
+            self.assertEqual(len(github.pr_comments), 0)
+
     def test_summary_prefers_structured_summary_section(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -273,24 +522,42 @@ class ReviewServiceTests(unittest.TestCase):
 
             self.assertEqual(summary, "first summary line second summary line")
 
+    def test_command_output_json_is_parsed_into_structured_findings(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = build_settings(root / "review.db", root / "review-runs")
+            skill = ReviewSkillService(settings)
+
+            structured = skill._parse_command_output(
+                '{"summary":"Blocking review","findings":[{"severity":"P1","title":"Bug","detail":"Important bug","file_path":"app/main.py","line":9}],"repair_strategy":["Fix the bug"],"blocking":true,"review_markdown":"## Review"}'
+            )
+
+            self.assertEqual(structured.summary, "Blocking review")
+            self.assertEqual(structured.findings[0].severity, "P1")
+            self.assertTrue(structured.blocking)
+
     def test_local_code_context_reports_friendly_git_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             (root / ".git").mkdir()
             settings = build_settings(root / "review.db", root / "review-runs")
+            github = FakeGitHubService()
+            mcp_client = build_github_mcp(github)
             review_service = ReviewService(
                 settings=settings,
-                github=FakeGitHubService(),
+                github=github,
                 gitlab=FakeGitLabService(),
                 sleep_coding=SleepCodingService(
                     settings=settings,
-                    github=FakeGitHubService(),
+                    github=github,
                     channel=FakeChannelService(),
                     git_workspace=FakeGitWorkspaceService(),
                     validator=FakeValidationRunner(),
                     ledger=TokenLedgerService(settings),
+                    mcp_client=mcp_client,
                 ),
                 skill=FakeReviewSkillService(),
+                mcp_client=mcp_client,
             )
 
             context = review_service._build_local_code_context(

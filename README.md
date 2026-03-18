@@ -1,69 +1,139 @@
 # youmeng-gateway
 
-个人多 Agent 平台的网关与骨架仓库。
+个人多 Agent 应用的 Gateway / Control Plane 仓库。
 
-## Current Scope
+当前目标不是再造一个后端服务集合，而是收敛成一个：
 
-当前仓库已经进入 `Phase 2` 睡后编程 MVP：
+- `Gateway + Control Plane`
+- `Main Agent / Ralph / Code Review Agent`
+- `Shared Runtime (LLM / Skill / MCP)`
+- `JSON-first, defaults-first`
 
-- FastAPI Gateway 最小入口
-- LangGraph 主图骨架
-- Sleep Coding 任务状态与事件落库
-- GitHub Issue / PR dry-run 或真实回写
-- Ralph 专属标签自动打到 Issue / PR
-- 可选的 Channel 出站通知，默认兼容飞书 webhook
-- Git worktree / commit / push 的 dry-run -> real-run 骨架
-- worktree 内会生成 `.sleep_coding/issue-<number>.md` 作为最小可提交产物
-- 计划生成、人工确认、本地验证、PR 打开流程
-- token ledger 占位与任务级聚合
+的多 Agent 应用。
+
+## 当前能力
+
+当前仓库已经具备以下 MVP 主链路：
+
+1. Feishu 入站 webhook 接收用户消息
+2. Main Agent 把请求转成 GitHub issue
+3. Ralph Worker 发现 issue 并接管
+4. Ralph 生成 plan / coding draft / PR
+5. Code Review Agent 生成 structured findings，并进入 repair loop
+6. 最终通过 Feishu channel webhook 发出阶段通知和完成通知
+7. 统一记录 task / event / session / token usage
 
 ## Quick Start
 
 ```bash
-conda create -n youmeng-gateway python=3.12
-conda activate youmeng-gateway
-python -m venv .venv
+python3.11 -m venv .venv
 source .venv/bin/activate
+python -m pip install --upgrade pip
 pip install -e .
-uvicorn app.main:app --reload
+
+cp .env.example .env
+cp agents.json.example agents.json
+cp models.json.example models.json
+cp platform.json.example platform.json
+cp mcp.json.example mcp.json
+
+uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-推荐使用 `Python 3.11` 或 `3.12`。当前 LangGraph / LangChain 相关依赖在 `Python 3.14` 上仍有兼容性警告，不建议作为正式开发环境。
+推荐使用 `Python 3.11` 或 `3.12`。
 
-## Configuration
+## 配置方式
 
-项目通过 `.env` 加载配置，模板见 `.env.example`。
+当前推荐配置边界如下：
 
-关键配置项：
+### `.env`
 
-- `APP_ENV`: 运行环境标识
-- `APP_PORT`: FastAPI 服务端口
-- `APP_DATA_DIR`: 项目运行时数据目录，默认是项目根目录下的 `data/`
-- `DATABASE_URL`: 当前默认使用 SQLite，例如 `sqlite:///data/youmeng_gateway.db`
-- `LANGSMITH_TRACING`: 是否开启 LangSmith tracing
-- `LANGSMITH_PROJECT`: LangSmith 项目名
-- `LANGSMITH_API_KEY`: LangSmith API Key
-- `GITHUB_TOKEN`: 后续 GitHub 自动化使用
-- `CHANNEL_WEBHOOK_URL`: 可选的 Channel webhook，配置后会发送 sleep coding 状态通知
-- `CHANNEL_PROVIDER`: Channel 提供方，默认 `feishu`
-- `SLEEP_CODING_LABELS`: 逗号分隔的 GitHub 标签，默认 `agent:ralph,workflow:sleep-coding`
-- `SLEEP_CODING_WORKTREE_ROOT`: sleep coding worktree 根目录，默认 `.worktrees/`
-- `SLEEP_CODING_ENABLE_GIT_COMMIT`: 是否真实执行 `git worktree` / `git commit`
-- `SLEEP_CODING_ENABLE_GIT_PUSH`: 是否真实执行 `git push`
-- `GIT_REMOTE_NAME`: 推送远端名，默认 `origin`
-- `REVIEW_RUNS_DIR`: code review agent 运行产物目录，默认 `docs/review-runs/`
-- `REVIEW_SKILL_NAME`: 默认 `code-review`
-- `REVIEW_SKILL_COMMAND`: 可选，自定义 review skill 执行命令
-- `GITLAB_API_BASE`: GitLab API 地址，默认 `https://gitlab.com/api/v4`
-- `GITLAB_TOKEN`: GitLab 评论回写使用
+只放：
 
-默认情况下，运行时文件会写入项目内的 `data/`。如果当前环境对项目目录没有写权限，代码会临时回退到系统临时目录，避免服务直接启动失败。
+- secrets
+- 基础运行参数
+- JSON 配置入口
 
-启动后可用接口：
+### `agents.json`
+
+定义：
+
+- agent workspace
+- skills
+- mcp servers
+- model profile
+
+### `models.json`
+
+定义：
+
+- provider profile
+- model profile
+- 不同 agent 默认用什么模型
+
+### `platform.json`
+
+定义：
+
+- sleep-coding worker 默认值
+- git/worktree 默认行为
+- review loop 默认值
+- 平台级 repo / channel 默认值
+
+### `mcp.json`
+
+定义：
+
+- MCP server 连接方式
+- command / args / env / cwd / adapter
+
+`mcp.json` 是可插拔的：
+
+- 不配置也不影响系统启动
+- 配置了就启用 MCP
+
+## 最小启动路径
+
+1. 在 `.env` 填：
+   - `OPENAI_API_KEY` 或 `MINIMAX_API_KEY`
+   - `GITHUB_TOKEN`
+   - `CHANNEL_WEBHOOK_URL`
+   - `FEISHU_VERIFICATION_TOKEN`
+2. 在 `mcp.json` 配 GitHub MCP
+3. 在 `agents.json / models.json / platform.json` 保留默认或按需调整
+4. 启动服务
+5. 调用：
+   - `GET /health`
+   - `GET /diagnostics/integrations`
+   - `POST /main-agent/intake`
+
+## 关键接口
 
 - `GET /health`
-- `POST /gateway/message`
 - `GET /status/current`
+- `GET /diagnostics/integrations`
+- `POST /gateway/message`
+- `POST /webhooks/feishu/events`
+- `POST /main-agent/intake`
+- `POST /workers/sleep-coding/poll`
+- `GET /workers/sleep-coding/claims`
 - `POST /tasks/sleep-coding`
-- `GET /tasks/sleep-coding/{task_id}`
 - `POST /tasks/sleep-coding/{task_id}/actions`
+- `POST /tasks/sleep-coding/{task_id}/review`
+- `GET /control/tasks/{task_id}`
+- `GET /control/tasks/{task_id}/events`
+
+## 文档入口
+
+优先阅读：
+
+1. [docs/status/current-status.md](/Users/litiezhu/workspace/github/youmeng-gateway/docs/status/current-status.md)
+2. [docs/requirements/mvp-gap-analysis.md](/Users/litiezhu/workspace/github/youmeng-gateway/docs/requirements/mvp-gap-analysis.md)
+3. [docs/plans/mvp-execution-plan.md](/Users/litiezhu/workspace/github/youmeng-gateway/docs/plans/mvp-execution-plan.md)
+4. [docs/status/session-handoff.md](/Users/litiezhu/workspace/github/youmeng-gateway/docs/status/session-handoff.md)
+5. [docs/architecture/mvp-agent-first-architecture.md](/Users/litiezhu/workspace/github/youmeng-gateway/docs/architecture/mvp-agent-first-architecture.md)
+6. [docs/architecture/github-issue-pr-state-model.md](/Users/litiezhu/workspace/github/youmeng-gateway/docs/architecture/github-issue-pr-state-model.md)
+
+用户配置与联调手册见：
+
+- [youmeng-gateway-mvp-配置与联调操作手册.md](/Users/litiezhu/docs/ytsd/工作学习/AI学习/个人需求/youmeng-gateway-mvp-配置与联调操作手册.md)

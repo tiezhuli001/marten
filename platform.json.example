@@ -1,0 +1,40 @@
+{
+  "github": {
+    "repository": "tiezhuli001/youmeng-gateway"
+  },
+  "channel": {
+    "provider": "feishu"
+  },
+  "llm": {
+    "request_timeout_seconds": 30,
+    "request_max_attempts": 3,
+    "request_retry_base_delay_seconds": 1
+  },
+  "sleep_coding": {
+    "labels": ["agent:ralph", "workflow:sleep-coding"],
+    "git": {
+      "worktree_root": ".worktrees",
+      "enable_commit": false,
+      "enable_push": false,
+      "remote_name": "origin"
+    },
+    "validation": {
+      "command": "python scripts/run_sleep_coding_validation.py"
+    },
+    "worker": {
+      "poll_labels": ["agent:ralph", "workflow:sleep-coding"],
+      "auto_approve_plan": true,
+      "poll_interval_seconds": 300,
+      "lease_seconds": 600,
+      "heartbeat_timeout_seconds": 900,
+      "max_retries": 3,
+      "retry_backoff_seconds": 60,
+      "scheduler_enabled": false
+    }
+  },
+  "review": {
+    "max_repair_rounds": 3,
+    "skill_name": "code-review",
+    "skill_command": null
+  }
+}

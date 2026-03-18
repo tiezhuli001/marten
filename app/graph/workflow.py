@@ -10,9 +10,12 @@ from app.ledger.service import TokenLedgerService
 from app.models.schemas import (
     GatewayMessageRequest,
     GatewayMessageResponse,
+    MainAgentIntakeRequest,
     SleepCodingTaskRequest,
     TokenUsage,
 )
+from app.runtime.llm import SharedLLMRuntime
+from app.services.main_agent import MainAgentService
 from app.services.observability import LangSmithService
 from app.services.sleep_coding import SleepCodingService
 
@@ -20,8 +23,11 @@ from app.services.sleep_coding import SleepCodingService
 class WorkflowRunner:
     def __init__(self) -> None:
         settings = get_settings()
+        self.settings = settings
         self.langsmith = LangSmithService(settings)
         self.ledger = TokenLedgerService(settings)
+        self.llm_runtime = SharedLLMRuntime(settings)
+        self.main_agent = MainAgentService(settings, llm_runtime=self.llm_runtime)
         self.sleep_coding = SleepCodingService(settings=settings, ledger=self.ledger)
         self.graph = self._build_graph().compile()
 
@@ -76,6 +82,7 @@ class WorkflowRunner:
             intent=result["intent"],
             message=result["message"],
             token_usage=result["token_usage"],
+            task_id=result["task_id"],
         )
 
     def _intent_classifier(self, state: WorkflowState) -> WorkflowState:
@@ -91,12 +98,27 @@ class WorkflowRunner:
         return mapping[state["intent"]]
 
     def _general_handler(self, state: WorkflowState) -> WorkflowState:
-        state["message"] = "General intent received. Workflow skeleton is ready."
+        intake = self.main_agent.intake(
+            MainAgentIntakeRequest(
+                user_id=state["user_id"],
+                content=state["content"],
+                source=state["source"],
+                request_id=state["request_id"],
+                run_id=state["run_id"],
+                persist_usage=False,
+            )
+        )
+        state["message"] = (
+            f"{intake.message}. "
+            f"Issue URL: {intake.issue.html_url or 'n/a'}."
+        )
+        state["token_usage"] = intake.token_usage
         return state
 
     def _stats_query_handler(self, state: WorkflowState) -> WorkflowState:
         summary = self.ledger.get_usage_summary(query=state["content"])
         state["message"] = summary
+        state["token_usage"] = TokenUsage(step_name="stats_query_handler")
         return state
 
     def _sleep_coding_handler(self, state: WorkflowState) -> WorkflowState:
@@ -105,12 +127,14 @@ class WorkflowRunner:
             state["message"] = (
                 "Sleep coding intent recognized. Provide an issue number or call POST /tasks/sleep-coding directly."
             )
+            state["token_usage"] = TokenUsage(step_name="sleep_coding_handler")
             return state
 
         task = self.sleep_coding.start_task(
             SleepCodingTaskRequest(
                 issue_number=issue_number,
                 request_id=state["request_id"],
+                notify_plan_ready=True,
             )
         )
         state["task_id"] = task.task_id
@@ -118,6 +142,7 @@ class WorkflowRunner:
             f"Sleep coding task {task.task_id} is ready for review. "
             f"Status={task.status}, branch={task.head_branch}."
         )
+        state["token_usage"] = TokenUsage(step_name="sleep_coding_handler")
         return state
 
     def _token_ledger(self, state: WorkflowState) -> WorkflowState:
@@ -128,6 +153,7 @@ class WorkflowRunner:
             source=state["source"],
             intent=state["intent"],
             content=state["content"],
+            usage=state["token_usage"],
         )
         return state
 

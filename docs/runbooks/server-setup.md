@@ -1,100 +1,106 @@
 # Server Setup
 
-> 范围：Phase 0 前置环境
+> 范围：MVP 运行环境准备
 
 ## 目标
 
-把 Linux 服务器准备成项目主开发和运行环境。
+把 Linux 服务器准备成 `youmeng-gateway` 的主开发和运行环境，并采用 JSON-first 的配置方式。
 
 ## 必备项
 
-1. conda
-2. Python 3.11
-3. Git
-4. OpenCode
-5. OpenClaw
-6. GitHub MCP
-7. 项目仓库访问能力
+1. Python 3.11 / 3.12
+2. Git
+3. Node.js + `npx`
+4. 项目仓库访问能力
+5. GitHub token
+6. Feishu webhook / event subscription 配置能力
 
-## 建议环境
-
-### conda 环境
-
-建议环境名：
-
-```bash
-conda create -n youmeng-gateway python=3.11 -y
-conda activate youmeng-gateway
-```
-
-## GitHub 访问
-
-需要两类能力：
-
-1. `git clone / pull / push`
-2. GitHub MCP API 访问
-
-### 建议
-
-- 使用 SSH key 处理 git 仓库读写
-- 使用 GitHub Token / OAuth 处理 GitHub MCP
-
-## 项目目录
-
-建议服务器主目录下使用：
+## 推荐目录
 
 ```text
 ~/workspace/youmeng-gateway
 ```
 
-## 环境变量加载
-
-项目默认从仓库根目录的 `.env` 读取配置，建议从 `.env.example` 复制一份：
+## 初始化步骤
 
 ```bash
-cp .env.example .env
-```
+cd ~/workspace
+git clone <repo-url> youmeng-gateway
+cd youmeng-gateway
 
-当前第一阶段会用到的配置项：
-
-```dotenv
-APP_ENV=development
-APP_PORT=8000
-APP_DATA_DIR=data
-DATABASE_URL=sqlite:///data/youmeng_gateway.db
-LANGSMITH_TRACING=false
-LANGSMITH_PROJECT=youmeng-gateway
-LANGSMITH_API_KEY=
-GITHUB_TOKEN=
-```
-
-说明：
-
-- `APP_DATA_DIR=data` 表示运行时数据默认写入项目根目录下的 `data/`
-- `DATABASE_URL=sqlite:///data/youmeng_gateway.db` 表示 SQLite 文件也放在项目内
-- 如果后续切 PostgreSQL，再替换 `DATABASE_URL` 即可
-
-## Phase 1 最小启动
-
-```bash
-conda activate youmeng-gateway
-python -m venv .venv
+python3.11 -m venv .venv
 source .venv/bin/activate
+python -m pip install --upgrade pip
 pip install -e .
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+cp .env.example .env
+cp agents.json.example agents.json
+cp models.json.example models.json
+cp platform.json.example platform.json
+cp mcp.json.example mcp.json
 ```
 
-验证接口：
+## 配置原则
+
+### `.env`
+
+只放：
+
+- secrets
+- 端口
+- 数据目录
+- JSON 配置入口
+
+### `agents.json`
+
+放：
+
+- agent workspace
+- skills
+- MCP servers
+- model profile
+
+### `models.json`
+
+放：
+
+- provider profile
+- model profile
+
+### `platform.json`
+
+放：
+
+- LLM 超时与重试默认值
+- worker 默认值
+- git/worktree 默认行为
+- review loop 默认值
+- 平台级 repo / channel 默认值
+
+### `mcp.json`
+
+放：
+
+- MCP server 定义
+- GitHub token
+- command / args / env / adapter
+
+## 最小启动
+
+```bash
+source .venv/bin/activate
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+## 最小检查
 
 ```bash
 curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8000/diagnostics/integrations
 ```
 
-## 后续还要补的内容
+## 说明
 
-- OpenCode 安装步骤
-- OpenClaw 安装步骤
-- GitHub MCP 配置步骤
-- 飞书 Channel 配置步骤
-- FastAPI 服务启动方式
-- systemd / supervisor 守护方式
+- 不配置 `mcp.json` 不影响服务启动，只是 MCP 不可用
+- `mcp.json` 推荐由用户直接维护 token
+- `.env` 不再承担大部分 agent/platform 高级参数

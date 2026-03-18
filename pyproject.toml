@@ -12,6 +12,7 @@ dependencies = [
   "fastapi>=0.116,<1.0",
   "langgraph>=0.6,<1.0",
   "langsmith>=0.4,<1.0",
+  "mcp>=1.26,<2.0",
   "pydantic-settings>=2.10,<3.0",
   "uvicorn[standard]>=0.35,<1.0",
 ]

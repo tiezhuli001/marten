@@ -5,3 +5,8 @@ __pycache__/
 .DS_Store
 data/
 *.egg-info/
+*.json
+*.env
+.venv312
+.worktrees
+docs/review-runs/

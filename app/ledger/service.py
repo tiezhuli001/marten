@@ -19,7 +19,17 @@ from app.models.schemas import (
 
 class TokenLedgerService:
     _MIGRATION_COLUMNS: dict[str, set[str]] = {
-        "token_usage_records": {"model_name", "provider", "cost_usd", "step_name"},
+        "token_usage_records": {
+            "model_name",
+            "provider",
+            "cost_usd",
+            "step_name",
+            "cache_read_tokens",
+            "cache_write_tokens",
+            "reasoning_tokens",
+            "message_count",
+            "duration_seconds",
+        },
     }
 
     def __init__(self, settings: Settings) -> None:
@@ -39,8 +49,10 @@ class TokenLedgerService:
             self.database_path = fallback_dir / self.database_path.name
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.database_path)
+        connection = sqlite3.connect(self.database_path, timeout=30.0)
         connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("PRAGMA busy_timeout = 30000")
         return connection
 
     def _initialize_schema(self) -> None:
@@ -71,6 +83,11 @@ class TokenLedgerService:
                     prompt_tokens INTEGER NOT NULL,
                     completion_tokens INTEGER NOT NULL,
                     total_tokens INTEGER NOT NULL,
+                    cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+                    cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+                    reasoning_tokens INTEGER NOT NULL DEFAULT 0,
+                    message_count INTEGER NOT NULL DEFAULT 0,
+                    duration_seconds REAL NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (request_id) REFERENCES requests(request_id),
                     FOREIGN KEY (run_id) REFERENCES workflow_runs(run_id)
@@ -100,6 +117,11 @@ class TokenLedgerService:
                     "provider": "TEXT",
                     "cost_usd": "REAL NOT NULL DEFAULT 0",
                     "step_name": "TEXT",
+                    "cache_read_tokens": "INTEGER NOT NULL DEFAULT 0",
+                    "cache_write_tokens": "INTEGER NOT NULL DEFAULT 0",
+                    "reasoning_tokens": "INTEGER NOT NULL DEFAULT 0",
+                    "message_count": "INTEGER NOT NULL DEFAULT 0",
+                    "duration_seconds": "REAL NOT NULL DEFAULT 0",
                 },
             )
             connection.commit()
@@ -181,13 +203,18 @@ class TokenLedgerService:
                 prompt_tokens,
                 completion_tokens,
                 total_tokens,
+                cache_read_tokens,
+                cache_write_tokens,
+                reasoning_tokens,
+                message_count,
+                duration_seconds,
                 model_name,
                 provider,
                 cost_usd,
                 step_name,
                 created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """
             if created_at
             else """
@@ -197,12 +224,17 @@ class TokenLedgerService:
                 prompt_tokens,
                 completion_tokens,
                 total_tokens,
+                cache_read_tokens,
+                cache_write_tokens,
+                reasoning_tokens,
+                message_count,
+                duration_seconds,
                 model_name,
                 provider,
                 cost_usd,
                 step_name
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """
         )
 
@@ -237,6 +269,11 @@ class TokenLedgerService:
                 usage.prompt_tokens,
                 usage.completion_tokens,
                 usage.total_tokens,
+                usage.cache_read_tokens,
+                usage.cache_write_tokens,
+                usage.reasoning_tokens,
+                usage.message_count,
+                usage.duration_seconds,
                 usage.model_name,
                 usage.provider,
                 usage.cost_usd,
@@ -248,12 +285,134 @@ class TokenLedgerService:
                 usage.prompt_tokens,
                 usage.completion_tokens,
                 usage.total_tokens,
+                usage.cache_read_tokens,
+                usage.cache_write_tokens,
+                usage.reasoning_tokens,
+                usage.message_count,
+                usage.duration_seconds,
                 usage.model_name,
                 usage.provider,
                 usage.cost_usd,
                 usage.step_name or step_name,
             )
             connection.execute(request_query, request_params)
+            connection.execute(workflow_query, workflow_params)
+            connection.execute(token_query, token_params)
+            connection.commit()
+        return usage
+
+    def append_usage(
+        self,
+        *,
+        request_id: str,
+        run_id: str,
+        usage: TokenUsage,
+        step_name: str | None = None,
+        created_at: str | None = None,
+    ) -> TokenUsage:
+        created_value = created_at or "CURRENT_TIMESTAMP"
+        workflow_query = (
+            """
+            INSERT OR IGNORE INTO workflow_runs (run_id, request_id, status, created_at)
+            VALUES (?, ?, ?, ?)
+            """
+            if created_at
+            else """
+            INSERT OR IGNORE INTO workflow_runs (run_id, request_id, status)
+            VALUES (?, ?, ?)
+            """
+        )
+        token_query = (
+            """
+            INSERT INTO token_usage_records (
+                request_id,
+                run_id,
+                prompt_tokens,
+                completion_tokens,
+                total_tokens,
+                cache_read_tokens,
+                cache_write_tokens,
+                reasoning_tokens,
+                message_count,
+                duration_seconds,
+                model_name,
+                provider,
+                cost_usd,
+                step_name,
+                created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """
+            if created_at
+            else """
+            INSERT INTO token_usage_records (
+                request_id,
+                run_id,
+                prompt_tokens,
+                completion_tokens,
+                total_tokens,
+                cache_read_tokens,
+                cache_write_tokens,
+                reasoning_tokens,
+                message_count,
+                duration_seconds,
+                model_name,
+                provider,
+                cost_usd,
+                step_name
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """
+        )
+        with closing(self._connect()) as connection:
+            request_row = connection.execute(
+                "SELECT 1 FROM requests WHERE request_id = ?",
+                (request_id,),
+            ).fetchone()
+            if request_row is None:
+                raise ValueError(f"Request not found: {request_id}")
+            workflow_params: tuple[object, ...] = (
+                run_id,
+                request_id,
+                "completed",
+                created_value,
+            ) if created_at else (
+                run_id,
+                request_id,
+                "completed",
+            )
+            token_params: tuple[object, ...] = (
+                request_id,
+                run_id,
+                usage.prompt_tokens,
+                usage.completion_tokens,
+                usage.total_tokens,
+                usage.cache_read_tokens,
+                usage.cache_write_tokens,
+                usage.reasoning_tokens,
+                usage.message_count,
+                usage.duration_seconds,
+                usage.model_name,
+                usage.provider,
+                usage.cost_usd,
+                usage.step_name or step_name,
+                created_value,
+            ) if created_at else (
+                request_id,
+                run_id,
+                usage.prompt_tokens,
+                usage.completion_tokens,
+                usage.total_tokens,
+                usage.cache_read_tokens,
+                usage.cache_write_tokens,
+                usage.reasoning_tokens,
+                usage.message_count,
+                usage.duration_seconds,
+                usage.model_name,
+                usage.provider,
+                usage.cost_usd,
+                usage.step_name or step_name,
+            )
             connection.execute(workflow_query, workflow_params)
             connection.execute(token_query, token_params)
             connection.commit()
@@ -269,28 +428,48 @@ class TokenLedgerService:
             return self.get_window_report("7d").summary_text
         return self.get_window_report("7d").summary_text
 
-    def get_request_usage(self, request_id: str) -> TokenUsage:
+    def get_request_usage(
+        self,
+        request_id: str,
+        step_names: list[str] | None = None,
+    ) -> TokenUsage:
+        filters = ["request_id = ?"]
+        params: list[object] = [request_id]
+        if step_names:
+            placeholders = ", ".join("?" for _ in step_names)
+            filters.append(f"step_name IN ({placeholders})")
+            params.extend(step_names)
         with closing(self._connect()) as connection:
             row = connection.execute(
-                """
+                f"""
                 SELECT
                     COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
                     COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
                     COALESCE(SUM(total_tokens), 0) AS total_tokens,
-                    MAX(model_name) AS model_name,
-                    MAX(provider) AS provider,
+                    COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
+                    COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens,
+                    COALESCE(SUM(reasoning_tokens), 0) AS reasoning_tokens,
+                    COALESCE(SUM(message_count), 0) AS message_count,
+                    COALESCE(SUM(duration_seconds), 0) AS duration_seconds,
+                    CASE WHEN COUNT(DISTINCT model_name) = 1 THEN MAX(model_name) END AS model_name,
+                    CASE WHEN COUNT(DISTINCT provider) = 1 THEN MAX(provider) END AS provider,
                     COALESCE(SUM(cost_usd), 0) AS cost_usd,
-                    MAX(step_name) AS step_name
+                    CASE WHEN COUNT(DISTINCT step_name) = 1 THEN MAX(step_name) END AS step_name
                 FROM token_usage_records
-                WHERE request_id = ?
+                WHERE {" AND ".join(filters)}
                 """,
-                (request_id,),
+                tuple(params),
             ).fetchone()
 
         return TokenUsage(
             prompt_tokens=row["prompt_tokens"],
             completion_tokens=row["completion_tokens"],
             total_tokens=row["total_tokens"],
+            cache_read_tokens=row["cache_read_tokens"],
+            cache_write_tokens=row["cache_write_tokens"],
+            reasoning_tokens=row["reasoning_tokens"],
+            message_count=row["message_count"],
+            duration_seconds=float(row["duration_seconds"] or 0.0),
             model_name=row["model_name"],
             provider=row["provider"],
             cost_usd=self._normalize_cost(row["cost_usd"]),

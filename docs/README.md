@@ -1,43 +1,35 @@
 # Docs
 
-本目录保存 `youmeng-gateway` 项目的需求、计划、状态、架构和运行文档。
+本目录只保留当前 MVP 收口所需的高信号文档。历史 phase 文档和中间迁移方案已经从当前分支移除，避免继续放大主 PR。
 
-目录约定：
+## 当前入口
 
-- `plans/`: 迭代计划和执行计划
-- `acceptance/`: 阶段验收标准与测试点
-- `status/`: 当前进度、backlog、阶段状态
-- `architecture/`: 系统架构、数据模型、工作流设计
-- `code-review/`: 外部模型 / 人工 review 归档与处置记录
-- `review-runs/`: 平台内 code review agent 的运行产物归档
-- `runbooks/`: 服务器部署、环境配置、运维说明
-- `requirements/`: 需求和范围定义
-- `agents/`: 各个 Agent 的职责和边界
+优先阅读顺序：
 
-当前优先阅读顺序：
+1. `status/current-status.md`
+2. `status/session-handoff.md`
+3. `plans/mvp-execution-plan.md`
+4. `requirements/mvp-gap-analysis.md`
+5. `architecture/mvp-agent-first-architecture.md`
+6. `architecture/github-issue-pr-state-model.md`
+7. `runbooks/server-setup.md`
 
-1. `plans/iteration-plan.md`
-2. `status/current-status.md`
-3. `status/backlog.md`
-4. `architecture/phase-1-architecture.md`
-5. `runbooks/server-setup.md`
+## 目录说明
 
-当前新增重点文档：
+- `status/`: 当前阶段事实来源与会话交接
+- `plans/`: 当前仍有效的执行计划
+- `requirements/`: 当前 MVP 需求边界与差距分析
+- `architecture/`: 当前仍生效的架构与状态模型
+- `runbooks/`: 部署与环境说明
+- `agents/`: Agent 职责边界与工作区说明
+- `acceptance/`: 当前保留的验收清单
+- `code-review/`: 历史外部 review 归档
 
-1. `acceptance/phase-1-acceptance.md`
-2. `architecture/phase-2-sleep-coding-mvp.md`
-3. `architecture/github-issue-pr-state-model.md`
-4. `architecture/token-ledger-reporting.md`
-5. `plans/phase-4-implementation-plan.md`
-6. `acceptance/phase-0-4-mvp-checklist.md`
+## 关于 Review 产物
 
-阶段计划总览：
+`docs/review-runs/` 仍然是 code review agent 的默认运行产物目录，但它属于运行时文件，不再纳入版本控制。
 
-1. `plans/phase-0-plan.md`
-2. `plans/phase-1-plan.md`
-3. `plans/phase-2-plan.md`
-4. `plans/phase-3-plan.md`
-5. `plans/phase-4-plan.md`
-6. `plans/phase-5-plan.md`
-7. `plans/phase-6-plan.md`
-8. `plans/phase-7-plan.md`
+如果需要检查本机运行产物：
+
+1. 直接查看本地 `docs/review-runs/`
+2. 以代码、测试结果和 `status/current-status.md` 为最终事实来源

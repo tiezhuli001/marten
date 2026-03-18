@@ -6,10 +6,13 @@ from urllib import error, request
 
 from app.core.config import Settings
 from app.models.schemas import (
+    GitHubIssueDraft,
+    GitHubIssueResult,
     SleepCodingIssue,
     SleepCodingPlan,
     SleepCodingPullRequest,
     ValidationResult,
+    WorkerDiscoveredIssue,
 )
 
 
@@ -45,10 +48,12 @@ class GitHubService:
                 or "GitHub dry-run mode. Configure GITHUB_TOKEN to read the real issue body.",
                 html_url=f"https://github.com/{repo}/issues/{issue_number}",
                 labels=[],
+                creator_login="dry-run",
                 is_dry_run=True,
             )
 
         payload = self._request_json("GET", f"/repos/{repo}/issues/{issue_number}")
+        user = payload.get("user") or {}
         return SleepCodingIssue(
             issue_number=payload["number"],
             title=payload["title"],
@@ -56,8 +61,39 @@ class GitHubService:
             state=payload["state"],
             html_url=payload.get("html_url"),
             labels=[label["name"] for label in payload.get("labels", [])],
+            creator_name=user.get("name"),
+            creator_login=user.get("login"),
             is_dry_run=False,
         )
+
+    def list_open_issues(
+        self,
+        repo: str,
+        labels: list[str] | None = None,
+        limit: int = 20,
+    ) -> list[WorkerDiscoveredIssue]:
+        if not self.token:
+            return []
+        query = f"/repos/{repo}/issues?state=open&per_page={limit}"
+        if labels:
+            query += f"&labels={','.join(labels)}"
+        payload = self._request_json_list("GET", query)
+        issues: list[WorkerDiscoveredIssue] = []
+        for item in payload:
+            if "pull_request" in item:
+                continue
+            issues.append(
+                WorkerDiscoveredIssue(
+                    issue_number=item["number"],
+                    title=item["title"],
+                    body=item.get("body") or "",
+                    state=item.get("state", "open"),
+                    html_url=item.get("html_url"),
+                    labels=[label["name"] for label in item.get("labels", [])],
+                    is_dry_run=False,
+                )
+            )
+        return issues
 
     def create_issue_comment(
         self,
@@ -81,6 +117,39 @@ class GitHubService:
             is_dry_run=False,
         )
 
+    def create_issue(
+        self,
+        repo: str,
+        draft: GitHubIssueDraft,
+    ) -> GitHubIssueResult:
+        if not self.token:
+            return GitHubIssueResult(
+                issue_number=None,
+                title=draft.title,
+                body=draft.body,
+                html_url=f"https://github.com/{repo}/issues",
+                labels=draft.labels,
+                is_dry_run=True,
+            )
+
+        payload = self._request_json(
+            "POST",
+            f"/repos/{repo}/issues",
+            {
+                "title": draft.title,
+                "body": draft.body,
+                "labels": draft.labels,
+            },
+        )
+        return GitHubIssueResult(
+            issue_number=payload.get("number"),
+            title=payload["title"],
+            body=payload.get("body") or "",
+            html_url=payload.get("html_url"),
+            labels=[label["name"] for label in payload.get("labels", [])],
+            is_dry_run=False,
+        )
+
     def create_pull_request_comment(
         self,
         repo: str,
@@ -98,7 +167,7 @@ class GitHubService:
         head_branch: str,
         base_branch: str,
     ) -> SleepCodingPullRequest:
-        title = f"[Sleep Coding] #{issue.issue_number} {issue.title}"
+        title = f"[Ralph] #{issue.issue_number} {issue.title}"
         body = self._build_pr_body(issue, plan, validation)
         if not self.token:
             return SleepCodingPullRequest(
@@ -156,6 +225,28 @@ class GitHubService:
         path: str,
         payload: dict[str, object] | None = None,
     ) -> dict[str, object]:
+        response = self._request(method, path, payload)
+        if not isinstance(response, dict):
+            raise RuntimeError("GitHub API response was not an object")
+        return response
+
+    def _request_json_list(
+        self,
+        method: str,
+        path: str,
+        payload: dict[str, object] | None = None,
+    ) -> list[dict[str, object]]:
+        response = self._request(method, path, payload)
+        if not isinstance(response, list):
+            raise RuntimeError("GitHub API response was not a list")
+        return response
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        payload: dict[str, object] | None = None,
+    ) -> object:
         data = None
         headers = {
             "Accept": "application/vnd.github+json",

@@ -29,7 +29,7 @@
 ## 四、Code Review 验证
 
 - [ ] 可独立发起 review
-- [ ] review 结果可写入 `docs/review-runs/`
+- [ ] review 结果可写入本地 `docs/review-runs/` 运行目录
 - [ ] GitHub / GitLab / local code 至少一类输入验证通过
 - [ ] `request_changes` 可回流至 sleep coding
 

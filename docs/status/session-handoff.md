@@ -59,6 +59,11 @@
   - 默认行为是总共 3 次尝试，按指数退避等待后重试
   - 这样 OpenAI / MiniMax 两条 provider 链路不需要在各 service 里重复写 retry 逻辑
   - 若达到最大尝试次数仍失败，仍会按当前“正式环境显式失败”的语义向上抛错，不再静默回退
+- 文档入口已开始收口：
+  - `docs/README.md` 现在只保留当前 MVP 主入口
+  - `docs/status/backlog.md` 已迁入 `docs/archive/status/`
+  - phase 计划 / 设计稿中不再作为主事实来源的部分，已迁入 `docs/archive/`
+  - `docs/review-runs/` 仍是默认 review artifact 目录，但已从版本控制移出，避免运行产物继续膨胀 PR
 
 - 将 GitHub 外部操作继续收口到 MCP-only：
   - `MainAgentService` 创建 issue 不再走 REST fallback

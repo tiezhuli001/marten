@@ -9,3 +9,4 @@ data/
 *.env
 .venv312
 .worktrees
+docs/review-runs/

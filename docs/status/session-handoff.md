@@ -61,8 +61,8 @@
   - 若达到最大尝试次数仍失败，仍会按当前“正式环境显式失败”的语义向上抛错，不再静默回退
 - 文档入口已开始收口：
   - `docs/README.md` 现在只保留当前 MVP 主入口
-  - `docs/status/backlog.md` 已迁入 `docs/archive/status/`
-  - phase 计划 / 设计稿中不再作为主事实来源的部分，已迁入 `docs/archive/`
+  - `docs/status/backlog.md` 已从当前分支移除
+  - phase 计划 / 设计稿中不再作为主事实来源的部分，已直接从当前分支剥离
   - `docs/review-runs/` 仍是默认 review artifact 目录，但已从版本控制移出，避免运行产物继续膨胀 PR
 
 - 将 GitHub 外部操作继续收口到 MCP-only：

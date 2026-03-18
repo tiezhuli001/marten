@@ -130,9 +130,9 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 1. [docs/status/current-status.md](/Users/litiezhu/workspace/github/youmeng-gateway/docs/status/current-status.md)
 2. [docs/requirements/mvp-gap-analysis.md](/Users/litiezhu/workspace/github/youmeng-gateway/docs/requirements/mvp-gap-analysis.md)
 3. [docs/plans/mvp-execution-plan.md](/Users/litiezhu/workspace/github/youmeng-gateway/docs/plans/mvp-execution-plan.md)
-4. [docs/architecture/multi-agent-refactor-plan.md](/Users/litiezhu/workspace/github/youmeng-gateway/docs/architecture/multi-agent-refactor-plan.md)
-5. [docs/architecture/multi-agent-platform-roadmap.md](/Users/litiezhu/workspace/github/youmeng-gateway/docs/architecture/multi-agent-platform-roadmap.md)
-6. [docs/architecture/config-layer-refactor-and-migration.md](/Users/litiezhu/workspace/github/youmeng-gateway/docs/architecture/config-layer-refactor-and-migration.md)
+4. [docs/status/session-handoff.md](/Users/litiezhu/workspace/github/youmeng-gateway/docs/status/session-handoff.md)
+5. [docs/architecture/mvp-agent-first-architecture.md](/Users/litiezhu/workspace/github/youmeng-gateway/docs/architecture/mvp-agent-first-architecture.md)
+6. [docs/architecture/github-issue-pr-state-model.md](/Users/litiezhu/workspace/github/youmeng-gateway/docs/architecture/github-issue-pr-state-model.md)
 
 用户配置与联调手册见：
 

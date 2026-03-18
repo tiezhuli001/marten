@@ -1,6 +1,6 @@
 # Docs
 
-本目录只保留当前 MVP 收口所需的高信号文档。历史 phase 文档和未来方向预研文档已迁到 `docs/archive/`，避免继续放大主 PR。
+本目录只保留当前 MVP 收口所需的高信号文档。历史 phase 文档和中间迁移方案已经从当前分支移除，避免继续放大主 PR。
 
 ## 当前入口
 
@@ -24,7 +24,6 @@
 - `agents/`: Agent 职责边界与工作区说明
 - `acceptance/`: 当前保留的验收清单
 - `code-review/`: 历史外部 review 归档
-- `archive/`: 已归档的 phase 文档和不再作为主入口的历史资料
 
 ## 关于 Review 产物
 

@@ -62,8 +62,6 @@
 - [x] control-plane 查询接口已落地：`/control/tasks/{task_id}` 和 `/control/tasks/{task_id}/events`
 - [x] integration diagnostics 第一版落地：`/diagnostics/integrations`
 - [x] worker lease / heartbeat / timeout / retry 第一版落地
-- [x] `docs/plans/mcp-config-and-workspace-hardening-plan.md` 已归档
-- [x] `docs/architecture/config-layer-refactor-and-migration.md` 已归档
 - [x] Ralph 正式 agent 身份已完成收口：`agent_id / workspace / docs / skills / defaults`
 - [x] GitHub issue -> worker claim -> Ralph 编码 -> PR -> review -> repair -> approved 主闭环真实跑通
 - [x] `sleep_coding` plan / execution usage 已接入 request ledger
@@ -110,8 +108,8 @@
 - [x] shared LLM runtime 已补统一重试策略：`platform.json` 可配置 `llm.request_timeout_seconds / request_max_attempts / request_retry_base_delay_seconds`，默认按 3 次尝试 + 指数退避执行
 - [x] 全量 `python -m unittest discover -s tests -v` 已通过（106 tests）
 - [x] 新增会话继承文档：`docs/status/session-handoff.md`
-- [x] 文档入口已收口：`docs/README.md` 现在只指向当前 MVP 主事实来源，历史 phase 文档已迁到 `docs/archive/`
-- [x] `docs/status/backlog.md` 已退出主入口并迁档，避免继续与 `current-status.md` 形成双事实源
+- [x] 文档入口已收口：`docs/README.md` 现在只指向当前 MVP 主事实来源
+- [x] `docs/status/backlog.md` 已退出主入口并从当前分支移除，避免继续与 `current-status.md` 形成双事实源
 - [x] `docs/review-runs/` 已改为运行时产物目录并从版本控制移出，避免 review artifact 持续放大 PR
 
 ## 正在进行
@@ -159,7 +157,7 @@
 - worker 第一版 lease / heartbeat / timeout / retry 已落地；`stuck-task / cancel / resume` 作为运行治理增强项，放在主链路稳定之后
 - 当前 agent runtime 已覆盖 main-agent、sleep-coding、review 的核心认知链路，剩余 service 风格逻辑主要在状态机和回写编排层
 - LLM 请求层此前只有 timeout，没有统一 retry；现已补到 shared runtime，避免偶发网络/TLS 抖动直接打穿主链路
-- 文档层此前同时混有当前事实、历史 phase 计划、未来方向预研和 review 运行产物；现已开始按“当前入口 / 历史归档 / 运行时产物”三类收口
+- 文档层此前同时混有当前事实、历史 phase 计划、未来方向预研和 review 运行产物；现已开始按“当前入口 / 运行时产物”收口，并把历史/中间方案直接从当前分支剥离
 - daily token summary 已具备生成入口，但“每日 10 点”真实调度仍待联调环境验证
 
 ## 当前技术决定

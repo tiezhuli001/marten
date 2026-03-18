@@ -10,6 +10,7 @@ from app.models.schemas import TokenUsage
 
 def build_settings(database_path: Path) -> Settings:
     return Settings(
+        app_env="test",
         database_url=f"sqlite:///{database_path}",
         langsmith_tracing=False,
     )
@@ -32,6 +33,10 @@ class TokenLedgerTests(unittest.TestCase):
                     prompt_tokens=11,
                     completion_tokens=7,
                     total_tokens=18,
+                    cache_read_tokens=5,
+                    reasoning_tokens=2,
+                    message_count=3,
+                    duration_seconds=1.5,
                     model_name="gpt-5-mini",
                     provider="openai",
                     cost_usd=0.12,
@@ -45,6 +50,66 @@ class TokenLedgerTests(unittest.TestCase):
             self.assertEqual(persisted_usage.provider, "openai")
             self.assertEqual(persisted_usage.cost_usd, 0.12)
             self.assertEqual(persisted_usage.step_name, "general_handler")
+            self.assertEqual(persisted_usage.cache_read_tokens, 5)
+            self.assertEqual(persisted_usage.reasoning_tokens, 2)
+            self.assertEqual(persisted_usage.message_count, 3)
+            self.assertAlmostEqual(persisted_usage.duration_seconds, 1.5)
+
+    def test_append_usage_accumulates_multiple_steps_for_same_request(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database_path = Path(temp_dir) / "ledger.db"
+            service = TokenLedgerService(build_settings(database_path))
+            service.record_request(
+                request_id="req-1",
+                run_id="run-1",
+                user_id="user-1",
+                source="manual",
+                intent="sleep_coding",
+                content="hello",
+                usage=TokenUsage(
+                    prompt_tokens=10,
+                    completion_tokens=5,
+                    total_tokens=15,
+                    message_count=2,
+                    duration_seconds=1.0,
+                    model_name="gpt-5-mini",
+                    provider="openai",
+                    cost_usd=0.01,
+                    step_name="main_agent_issue_intake",
+                ),
+            )
+            service.append_usage(
+                request_id="req-1",
+                run_id="run-2",
+                usage=TokenUsage(
+                    prompt_tokens=20,
+                    completion_tokens=10,
+                    total_tokens=30,
+                    cache_read_tokens=8,
+                    cache_write_tokens=3,
+                    reasoning_tokens=4,
+                    message_count=2,
+                    duration_seconds=2.5,
+                    model_name="MiniMax-M2.5",
+                    provider="minimax",
+                    cost_usd=0.02,
+                    step_name="sleep_coding_plan",
+                ),
+            )
+
+            usage = service.get_request_usage("req-1")
+
+            self.assertEqual(usage.prompt_tokens, 30)
+            self.assertEqual(usage.completion_tokens, 15)
+            self.assertEqual(usage.total_tokens, 45)
+            self.assertEqual(usage.cache_read_tokens, 8)
+            self.assertEqual(usage.cache_write_tokens, 3)
+            self.assertEqual(usage.reasoning_tokens, 4)
+            self.assertEqual(usage.message_count, 4)
+            self.assertAlmostEqual(usage.duration_seconds, 3.5)
+            self.assertIsNone(usage.step_name)
+            self.assertIsNone(usage.provider)
+            self.assertIsNone(usage.model_name)
 
     def test_get_window_report_aggregates_recent_usage(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

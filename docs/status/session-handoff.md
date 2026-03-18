@@ -54,6 +54,11 @@
 - 收口了测试环境对本机 `.env` 的污染：
   - `tests.test_main_agent / tests.test_review / tests.test_automation / tests.test_mvp_e2e` 的 settings helper 现在会显式把 `openai_api_key / minimax_api_key` 置空
   - 避免测试因为本机真实 MiniMax 凭据而误走外网
+- shared runtime 继续补了 LLM 请求韧性：
+  - `SharedLLMRuntime` 现在统一通过 `platform.json` 读取 `llm.request_timeout_seconds / request_max_attempts / request_retry_base_delay_seconds`
+  - 默认行为是总共 3 次尝试，按指数退避等待后重试
+  - 这样 OpenAI / MiniMax 两条 provider 链路不需要在各 service 里重复写 retry 逻辑
+  - 若达到最大尝试次数仍失败，仍会按当前“正式环境显式失败”的语义向上抛错，不再静默回退
 
 - 将 GitHub 外部操作继续收口到 MCP-only：
   - `MainAgentService` 创建 issue 不再走 REST fallback

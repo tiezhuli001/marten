@@ -1,0 +1,22 @@
+{
+  "agents": {
+    "main-agent": {
+      "workspace": "agents/main-agent",
+      "skills": ["issue-writer"],
+      "mcp_servers": ["github"],
+      "model_profile": "default"
+    },
+    "ralph": {
+      "workspace": "agents/ralph",
+      "skills": ["coding-planner", "coding-executor"],
+      "mcp_servers": ["github"],
+      "model_profile": "coding"
+    },
+    "code-review-agent": {
+      "workspace": "agents/code-review-agent",
+      "skills": ["code-review"],
+      "mcp_servers": ["github"],
+      "model_profile": "review"
+    }
+  }
+}

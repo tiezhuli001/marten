@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -283,14 +284,24 @@ class ReviewServiceTests(unittest.TestCase):
     def test_review_skill_command_takes_precedence_over_llm_credentials(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
+            (root / "platform.json").write_text(
+                json.dumps(
+                    {
+                        "review": {
+                            "skill_command": "echo",
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
             settings = Settings(
                 app_env="test",
                 database_url=f"sqlite:///{root / 'review.db'}",
                 review_runs_dir=str(root / "review-runs"),
+                platform_config_path=str(root / "platform.json"),
                 github_repository="tiezhuli001/youmeng-gateway",
                 minimax_api_key="test-key",
                 openai_api_key=None,
-                review_skill_command="echo",
                 langsmith_tracing=False,
             )
             skill = ReviewSkillService(

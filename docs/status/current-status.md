@@ -107,6 +107,7 @@
 - [x] 已收口正式环境的 LLM 失败语义：真实 provider 已配置但 `main-agent / sleep-coding / review` 调用失败时，不再静默回退 heuristic / dry-run
 - [x] `ReviewSkillService` 现在会优先执行显式 `review_skill_command`，不再被环境里的模型凭据抢占
 - [x] 测试 helper 已显式隔离本机 `.env` 中的真实模型凭据，避免 `app_env=test` 用例误打外网
+- [x] shared LLM runtime 已补统一重试策略：`platform.json` 可配置 `llm.request_timeout_seconds / request_max_attempts / request_retry_base_delay_seconds`，默认按 3 次尝试 + 指数退避执行
 - [x] 全量 `python -m unittest discover -s tests -v` 已通过（106 tests）
 - [x] 新增会话继承文档：`docs/status/session-handoff.md`
 
@@ -154,6 +155,7 @@
 - 飞书出站已从纯文本切到中文 card 模式，且已补概览区、分段标题和结构化 token 展示；当前剩余问题主要在真实联调里验证“最终成品感”，而不是基础样式能力
 - worker 第一版 lease / heartbeat / timeout / retry 已落地；`stuck-task / cancel / resume` 作为运行治理增强项，放在主链路稳定之后
 - 当前 agent runtime 已覆盖 main-agent、sleep-coding、review 的核心认知链路，剩余 service 风格逻辑主要在状态机和回写编排层
+- LLM 请求层此前只有 timeout，没有统一 retry；现已补到 shared runtime，避免偶发网络/TLS 抖动直接打穿主链路
 - daily token summary 已具备生成入口，但“每日 10 点”真实调度仍待联调环境验证
 
 ## 当前技术决定

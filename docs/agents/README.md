@@ -4,7 +4,7 @@
 
 当前规划中的 Agent：
 
-- Sleep Coding Agent
+- Ralph
 - Code Review Agent
 - Novel Ingest Agent
 - TCM Health Agent
@@ -12,5 +12,5 @@
 
 第一阶段优先：
 
-- Sleep Coding Agent
+- Ralph
 - Code Review Agent

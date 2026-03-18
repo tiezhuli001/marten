@@ -1,25 +1,41 @@
 from functools import lru_cache
 
-from fastapi import APIRouter, Depends, HTTPException
+from typing import Any
+
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.core.config import get_settings
 from app.graph.workflow import WorkflowRunner
 from app.ledger.service import TokenLedgerService
 from app.models.schemas import (
+    ControlTask,
+    ControlTaskEvent,
     DailyTokenSummary,
     GatewayMessageRequest,
     GatewayMessageResponse,
+    MainAgentIntakeRequest,
+    MainAgentIntakeResponse,
     ReviewActionRequest,
     ReviewRun,
     ReviewRunRequest,
     SleepCodingTask,
     SleepCodingTaskActionRequest,
     SleepCodingTaskRequest,
+    SleepCodingWorkerClaim,
+    SleepCodingWorkerPollRequest,
+    SleepCodingWorkerPollResponse,
     TokenReportResponse,
 )
+from app.services.automation import AutomationService
+from app.services.diagnostics import IntegrationDiagnosticsService
 from app.services.review import ReviewService
+from app.services.feishu import FeishuWebhookService
+from app.services.main_agent import MainAgentService
+from app.services.scheduler import WorkerSchedulerService
+from app.services.sleep_coding_worker import SleepCodingWorkerService
 from app.services.status import StatusService
 from app.services.sleep_coding import SleepCodingService
+from app.services.task_registry import TaskRegistryService
 
 router = APIRouter()
 
@@ -35,8 +51,46 @@ def get_status_service() -> StatusService:
 
 
 @lru_cache(maxsize=1)
+def get_feishu_webhook_service() -> FeishuWebhookService:
+    return FeishuWebhookService(
+        get_settings(),
+        get_workflow_runner(),
+        get_automation_service(),
+    )
+
+
+@lru_cache(maxsize=1)
+def get_main_agent_service() -> MainAgentService:
+    return MainAgentService(get_settings())
+
+
+@lru_cache(maxsize=1)
 def get_sleep_coding_service() -> SleepCodingService:
     return SleepCodingService()
+
+
+@lru_cache(maxsize=1)
+def get_automation_service() -> AutomationService:
+    settings = get_settings()
+    sleep_coding = get_sleep_coding_service()
+    review = ReviewService(settings=settings, sleep_coding=sleep_coding)
+    worker = SleepCodingWorkerService(settings=settings, sleep_coding=sleep_coding)
+    return AutomationService(
+        settings=settings,
+        sleep_coding=sleep_coding,
+        review=review,
+        worker=worker,
+    )
+
+
+@lru_cache(maxsize=1)
+def get_sleep_coding_worker_service() -> SleepCodingWorkerService:
+    return SleepCodingWorkerService(get_settings())
+
+
+@lru_cache(maxsize=1)
+def get_worker_scheduler_service() -> WorkerSchedulerService:
+    return WorkerSchedulerService(get_settings(), get_automation_service())
 
 
 @lru_cache(maxsize=1)
@@ -47,6 +101,16 @@ def get_review_service() -> ReviewService:
 @lru_cache(maxsize=1)
 def get_token_ledger_service() -> TokenLedgerService:
     return TokenLedgerService(get_settings())
+
+
+@lru_cache(maxsize=1)
+def get_task_registry_service() -> TaskRegistryService:
+    return TaskRegistryService(get_settings())
+
+
+@lru_cache(maxsize=1)
+def get_integration_diagnostics_service() -> IntegrationDiagnosticsService:
+    return IntegrationDiagnosticsService(get_settings())
 
 
 @router.get("/health")
@@ -62,11 +126,67 @@ def handle_message(
     return workflow.run(payload)
 
 
+@router.post("/webhooks/feishu/events")
+async def handle_feishu_events(
+    request: Request,
+    service: FeishuWebhookService = Depends(get_feishu_webhook_service),
+) -> dict[str, Any]:
+    try:
+        return service.handle_event(await request.body(), request.headers)
+    except PermissionError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/main-agent/intake", response_model=MainAgentIntakeResponse)
+def intake_main_agent(
+    payload: MainAgentIntakeRequest,
+    service: MainAgentService = Depends(get_main_agent_service),
+) -> MainAgentIntakeResponse:
+    try:
+        return service.intake(payload)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/status/current")
 def current_status(
     status_service: StatusService = Depends(get_status_service),
 ) -> dict[str, str]:
     return {"content": status_service.read_current_status()}
+
+
+@router.get("/diagnostics/integrations")
+def integration_diagnostics(
+    service: IntegrationDiagnosticsService = Depends(get_integration_diagnostics_service),
+) -> dict[str, object]:
+    return service.get_report()
+
+
+@router.get("/control/tasks/{task_id}", response_model=ControlTask)
+def get_control_task(
+    task_id: str,
+    service: TaskRegistryService = Depends(get_task_registry_service),
+) -> ControlTask:
+    try:
+        return service.get_task(task_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/control/tasks/{task_id}/events", response_model=list[ControlTaskEvent])
+def list_control_task_events(
+    task_id: str,
+    service: TaskRegistryService = Depends(get_task_registry_service),
+) -> list[ControlTaskEvent]:
+    try:
+        service.get_task(task_id)
+        return service.list_events(task_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.post("/tasks/sleep-coding", response_model=SleepCodingTask)
@@ -80,6 +200,38 @@ def create_sleep_coding_task(
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/workers/sleep-coding/poll", response_model=SleepCodingWorkerPollResponse)
+def poll_sleep_coding_worker(
+    payload: SleepCodingWorkerPollRequest,
+    service: AutomationService = Depends(get_automation_service),
+) -> SleepCodingWorkerPollResponse:
+    try:
+        return service.process_worker_poll_async(payload)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/workers/sleep-coding/claims", response_model=list[SleepCodingWorkerClaim])
+def list_sleep_coding_claims(
+    repo: str | None = None,
+    service: SleepCodingWorkerService = Depends(get_sleep_coding_worker_service),
+) -> list[SleepCodingWorkerClaim]:
+    try:
+        return service.list_claims(repo=repo)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/workers/sleep-coding/run-once")
+def run_sleep_coding_scheduler_once(
+    service: WorkerSchedulerService = Depends(get_worker_scheduler_service),
+) -> dict[str, str]:
+    service.run_once()
+    return {"status": "ok"}
 
 
 @router.get("/tasks/sleep-coding/{task_id}", response_model=SleepCodingTask)
@@ -97,10 +249,10 @@ def get_sleep_coding_task(
 def apply_sleep_coding_action(
     task_id: str,
     payload: SleepCodingTaskActionRequest,
-    service: SleepCodingService = Depends(get_sleep_coding_service),
+    service: AutomationService = Depends(get_automation_service),
 ) -> SleepCodingTask:
     try:
-        return service.apply_action(task_id, payload)
+        return service.handle_sleep_coding_action_async(task_id, payload.action)
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     except ValueError as exc:

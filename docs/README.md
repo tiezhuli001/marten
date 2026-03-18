@@ -32,6 +32,9 @@
 6. `acceptance/phase-0-4-mvp-checklist.md`
 7. `requirements/mvp-gap-analysis.md`
 8. `plans/mvp-execution-plan.md`
+9. `architecture/mvp-agent-first-architecture.md`
+10. `architecture/multi-agent-refactor-plan.md`
+11. `architecture/multi-agent-platform-roadmap.md`
 
 阶段计划总览：
 

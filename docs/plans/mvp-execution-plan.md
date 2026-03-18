@@ -1,11 +1,19 @@
 # MVP Execution Plan
 
-> 更新时间：2026-03-16
+> 更新时间：2026-03-18
 > 目标：基于 `mvp-gap-analysis.md`，分阶段收口到可用 MVP。
 
 ## 一、计划目标
 
 本计划不再按 `Phase 0 / 1 / 2 / 3 / 4` 迭代视角推进，而是按“离可用 MVP 还差什么”来推进。
+
+同时，本计划参考 OpenClaw 的核心架构思路：
+
+- Gateway 作为控制平面
+- Channel Adapter 与 Agent Runtime 解耦
+- Shared Runtime 复用 provider / skill / MCP / tools
+- Agent 只表达角色、上下文和权限边界
+- 配置层采用 JSON-first，`.env` 只保留 secrets 与基础运行参数
 
 最终目标是形成这样一条真实闭环：
 
@@ -31,6 +39,7 @@ Feishu 用户提需求
 - token/cost 记账
 - Feishu 鉴权与事件接入
 - GitHub / GitLab / MCP 连接配置
+- `agents.json / models.json / platform.json / mcp.json` 的加载与默认值策略
 - scheduler / polling / retry / timeout
 - task / review / repair loop 状态机
 
@@ -45,7 +54,21 @@ Feishu 用户提需求
 - repair 决策
 - 最终总结文案
 
-## 三、实施分段
+## 三、目标结构
+
+MVP 的推荐结构应固定为：
+
+1. `Gateway`
+2. `Channel Layer (Feishu)`
+3. `Shared Agent Runtime`
+4. `Main Agent`
+5. `Ralph`
+6. `Code Review Agent`
+7. `Shared Infra`
+
+后续所有实现都应围绕这 7 个角色展开，而不是继续增加分散的 service 模块。
+
+## 四、实施分段
 
 ### MVP-A 真实入口与模型层
 
@@ -67,7 +90,7 @@ Feishu 用户提需求
 - Gateway 可调用 OpenAI / Minimax 至少一类真实模型
 - token ledger 可记录真实 usage 和 cost
 
-### MVP-B GitHub Issue Intake 与主 Agent
+### MVP-B Main Agent 与 GitHub Issue Intake
 
 目标：把“用户问题 -> GitHub issue”打通。
 
@@ -76,7 +99,7 @@ Feishu 用户提需求
 1. 增加主 Agent 服务
 2. 使用 LLM + skill 生成 issue title / body / labels 草案
 3. 接入 GitHub issue 创建能力
-4. 评估并接入 GitHub MCP；若当前环境受限，则定义 MCP 优先、REST fallback
+4. 接入 GitHub MCP，并以 `mcp.json` 作为唯一配置入口；未配置时默认失败，不再保留 REST fallback
 5. issue 创建成功后回写 Feishu 通知
 
 通过标准：
@@ -85,7 +108,7 @@ Feishu 用户提需求
 - 主 Agent 可在目标 GitHub 仓库创建 issue
 - issue 链接可回传给用户
 
-### MVP-C Sleep Coding Worker
+### MVP-C Ralph
 
 目标：把 Sleep Coding 从手动 API 原型升级为真实子 Agent。
 
@@ -105,7 +128,7 @@ Feishu 用户提需求
 - Sleep Coding 可自动从 issue 进入 PR
 - plan 和执行痕迹可查询
 
-### MVP-D Auto Review Loop
+### MVP-D Code Review Agent 与 Auto Review Loop
 
 目标：实现 Ralph 风格的自动 review / repair 闭环。
 
@@ -142,7 +165,7 @@ Feishu 用户提需求
 - 用户收到一次完整的收尾消息
 - 消息中包含 issue / PR / review / token / 状态结论
 
-## 四、推荐实施顺序
+## 五、推荐实施顺序
 
 1. 先做 `MVP-A`，因为没有真实模型和 Feishu 入口，后面都只是原型
 2. 再做 `MVP-B`，把对话入口和 GitHub issue intake 打通
@@ -150,7 +173,7 @@ Feishu 用户提需求
 4. 再做 `MVP-D`，把自动 review / repair loop 接上
 5. 最后做 `MVP-E`，收口到最终用户体验
 
-## 五、每段的实现方式建议
+## 六、每段的实现方式建议
 
 ### 对 LLM 能力的使用
 
@@ -176,7 +199,18 @@ Fallback 方案：
 
 - MCP 不可用时，保留 REST API fallback
 
-## 六、第一轮优先事项
+### 对成熟库的偏好
+
+为避免过度工程化，后续优先选择成熟库，而不是继续手写大量集成层：
+
+- `FastAPI`: Gateway / Feishu webhook API
+- `httpx`: 统一 HTTP client
+- `APScheduler`: polling / cron / heartbeat
+- `openai` 官方 SDK: OpenAI provider
+- `MiniMax` 官方 SDK 或稳定 HTTP API 封装: MiniMax provider
+- `MCP Python SDK`: MCP 集成
+
+## 七、第一轮优先事项
 
 如果按最小增量推进，下一轮应只做三件事：
 
@@ -189,7 +223,7 @@ Fallback 方案：
 - 这是后续所有 agent 行为的前提
 - 没有这三项，Sleep Coding 和 Auto Review 仍只是手动原型
 
-## 七、验收口径
+## 八、验收口径
 
 只有满足下面这些条件，才可称为目标 MVP：
 
@@ -200,3 +234,25 @@ Fallback 方案：
 - review / repair loop 最多执行 3 轮
 - 系统可输出真实 token / cost 统计
 - 最终结果可通过 Feishu 回传
+
+## 九、当前执行落点（2026-03-18）
+
+当前主线目标没有偏移，仍然是：
+
+- 保持 `Gateway + main-agent + ralph + code-review-agent + shared runtime`
+- 保持 JSON-first：`agents.json / models.json / platform.json / mcp.json`
+- 在真实环境下把 issue -> PR -> review -> repair -> notify 主闭环做稳
+
+截至 2026-03-18，已经额外确认/完成：
+
+- 主闭环已经真实跑通，不再是只靠 dry-run 的原型验证
+- GitHub MCP、review、Feishu 已完成真实联调样本验证
+- token ledger 的 `record_request` SQL 插入错误已修复
+- `sleep_coding` plan / execution usage 已改为在主事务提交后追加到账本，避免 SQLite 锁等待
+- 最终通知中的 token/cost 已按表格化格式输出，作为后续统一展示口径
+
+接下来优先做的不是扩模块，而是继续收口：
+
+1. task / review / final delivery 三处 token 展示的一致性
+2. HTTP 长请求的同步/异步边界，避免响应体验和底层状态迁移脱节
+3. worker stuck-task 扫描与人工接管能力

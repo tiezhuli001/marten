@@ -1,3 +1,6 @@
+import json
+import shlex
+from functools import cached_property
 from functools import lru_cache
 from pathlib import Path
 
@@ -13,20 +16,65 @@ class Settings(BaseSettings):
     langsmith_project: str = "youmeng-gateway"
     langsmith_tracing: bool = False
     openai_api_key: str | None = None
+    openai_api_base: str = "https://api.openai.com/v1"
+    openai_model: str = "gpt-4.1-mini"
+    minimax_api_key: str | None = None
+    minimax_api_base: str = "https://api.minimaxi.com"
+    minimax_model: str = "MiniMax-M2.5"
+    llm_default_provider: str = "openai"
+    llm_default_model: str | None = None
+    llm_request_timeout_seconds: float = 30.0
+    llm_request_max_attempts: int = 3
+    llm_request_retry_base_delay_seconds: float = 1.0
+    minimax_usd_per_cny: float = 0.14
+    platform_config_path: str = "platform.json"
+    agents_config_path: str = "agents.json"
+    models_config_path: str = "models.json"
+    skills_root_dir: str = "skills"
+    main_agent_workspace: str = "agents/main-agent"
+    main_agent_skills: str = "issue-writer"
+    main_agent_mcp_servers: str = "github"
+    sleep_coding_workspace: str = "agents/ralph"
+    sleep_coding_skills: str = "coding-planner,coding-executor"
+    sleep_coding_mcp_servers: str = "github"
+    mcp_config_path: str = "mcp.json"
+    mcp_github_server_name: str = "github"
+    mcp_github_enabled: bool = False
+    mcp_github_command: str = "npx"
+    mcp_github_args: str = "-y github-mcp-server stdio"
+    mcp_github_env: str = ""
+    mcp_github_cwd: str | None = None
+    mcp_request_timeout_seconds: float = 30.0
     database_url: str = "sqlite:///data/youmeng_gateway.db"
     github_token: str | None = None
     github_api_base: str = "https://api.github.com"
     github_repository: str = "tiezhuli001/youmeng-gateway"
     channel_provider: str = "feishu"
     channel_webhook_url: str | None = None
+    feishu_verification_token: str | None = None
+    feishu_encrypt_key: str | None = None
     sleep_coding_labels: str = "agent:ralph,workflow:sleep-coding"
+    sleep_coding_worker_poll_labels: str = "agent:ralph,workflow:sleep-coding"
+    sleep_coding_worker_auto_approve_plan: bool = False
+    sleep_coding_worker_poll_interval_seconds: int = 300
+    sleep_coding_worker_lease_seconds: int = 600
+    sleep_coding_worker_heartbeat_timeout_seconds: int = 900
+    sleep_coding_worker_max_retries: int = 3
+    sleep_coding_worker_retry_backoff_seconds: int = 60
+    sleep_coding_scheduler_enabled: bool = False
+    review_max_repair_rounds: int = 3
     sleep_coding_worktree_root: str = ".worktrees"
     sleep_coding_enable_git_commit: bool = False
     sleep_coding_enable_git_push: bool = False
     git_remote_name: str = "origin"
+    sleep_coding_validation_command: str = "python -m unittest discover -s tests"
     review_runs_dir: str = "docs/review-runs"
+    review_workspace: str = "agents/code-review-agent"
+    review_skills: str = "code-review"
+    review_mcp_servers: str = "github"
     review_skill_name: str = "code-review"
     review_skill_command: str | None = None
+    review_force_blocking_first_pass: bool = False
     gitlab_api_base: str = "https://gitlab.com/api/v4"
     gitlab_token: str | None = None
 
@@ -59,21 +107,477 @@ class Settings(BaseSettings):
 
     @property
     def resolved_sleep_coding_labels(self) -> list[str]:
-        return [
-            item.strip()
-            for item in self.sleep_coding_labels.split(",")
-            if item.strip()
-        ]
+        return self._resolve_string_list(
+            self._get_platform_setting(
+                ("sleep_coding", "labels"),
+                self.sleep_coding_labels,
+            )
+        )
+
+    @property
+    def resolved_sleep_coding_worker_poll_labels(self) -> list[str]:
+        return self._resolve_string_list(
+            self._get_platform_setting(
+                ("sleep_coding", "worker", "poll_labels"),
+                self.sleep_coding_worker_poll_labels,
+            )
+        )
 
     @property
     def resolved_sleep_coding_worktree_root(self) -> Path:
-        root = Path(self.sleep_coding_worktree_root).expanduser()
+        raw = self._get_platform_setting(
+            ("sleep_coding", "git", "worktree_root"),
+            self.sleep_coding_worktree_root,
+        )
+        root = Path(str(raw)).expanduser()
         return root if root.is_absolute() else self.project_root / root
 
     @property
     def resolved_review_runs_dir(self) -> Path:
         review_dir = Path(self.review_runs_dir).expanduser()
         return review_dir if review_dir.is_absolute() else self.project_root / review_dir
+
+    @property
+    def resolved_review_force_blocking_first_pass(self) -> bool:
+        if self.review_force_blocking_first_pass:
+            return True
+        return bool(
+            self._get_platform_setting(
+                ("review", "force_blocking_first_pass"),
+                False,
+            )
+        )
+
+    @property
+    def resolved_github_repository(self) -> str:
+        value = self._get_platform_setting(
+            ("github", "repository"),
+            self.github_repository,
+        )
+        return str(value).strip()
+
+    @property
+    def resolved_channel_provider(self) -> str:
+        value = self._get_platform_setting(
+            ("channel", "provider"),
+            self.channel_provider,
+        )
+        return str(value).strip()
+
+    @property
+    def resolved_platform_config_path(self) -> Path:
+        config_path = Path(self.platform_config_path).expanduser()
+        return config_path if config_path.is_absolute() else self.project_root / config_path
+
+    @property
+    def resolved_agents_config_path(self) -> Path:
+        config_path = Path(self.agents_config_path).expanduser()
+        return config_path if config_path.is_absolute() else self.project_root / config_path
+
+    @property
+    def resolved_models_config_path(self) -> Path:
+        config_path = Path(self.models_config_path).expanduser()
+        return config_path if config_path.is_absolute() else self.project_root / config_path
+
+    @cached_property
+    def platform_config(self) -> dict[str, object]:
+        return self._load_json_config(self.resolved_platform_config_path)
+
+    @cached_property
+    def agents_config(self) -> dict[str, object]:
+        return self._load_json_config(self.resolved_agents_config_path)
+
+    @cached_property
+    def models_config(self) -> dict[str, object]:
+        return self._load_json_config(self.resolved_models_config_path)
+
+    @property
+    def resolved_skills_root_dir(self) -> Path:
+        skills_dir = Path(self.skills_root_dir).expanduser()
+        return skills_dir if skills_dir.is_absolute() else self.project_root / skills_dir
+
+    @property
+    def resolved_main_agent_workspace(self) -> Path:
+        workspace = Path(self._get_agent_setting("main-agent", "workspace", self.main_agent_workspace)).expanduser()
+        return workspace if workspace.is_absolute() else self.project_root / workspace
+
+    @property
+    def resolved_main_agent_skills(self) -> list[str]:
+        return self._resolve_string_list(
+            self._get_agent_setting("main-agent", "skills", self.main_agent_skills)
+        )
+
+    @property
+    def resolved_main_agent_mcp_servers(self) -> list[str]:
+        return self._resolve_string_list(
+            self._get_agent_setting("main-agent", "mcp_servers", self.main_agent_mcp_servers)
+        )
+
+    @property
+    def resolved_main_agent_model_profile(self) -> str | None:
+        return self._get_agent_setting("main-agent", "model_profile", None)
+
+    @property
+    def resolved_sleep_coding_workspace(self) -> Path:
+        workspace = Path(
+            self._get_agent_setting(
+                "ralph",
+                "workspace",
+                self.sleep_coding_workspace,
+            )
+        ).expanduser()
+        return workspace if workspace.is_absolute() else self.project_root / workspace
+
+    @property
+    def resolved_sleep_coding_skills(self) -> list[str]:
+        return self._resolve_string_list(
+            self._get_agent_setting(
+                "ralph",
+                "skills",
+                self.sleep_coding_skills,
+            )
+        )
+
+    @property
+    def resolved_sleep_coding_mcp_servers(self) -> list[str]:
+        return self._resolve_string_list(
+            self._get_agent_setting(
+                "ralph",
+                "mcp_servers",
+                self.sleep_coding_mcp_servers,
+            )
+        )
+
+    @property
+    def resolved_sleep_coding_model_profile(self) -> str | None:
+        return self._get_agent_setting("ralph", "model_profile", None)
+
+    @property
+    def resolved_review_workspace(self) -> Path:
+        workspace = Path(
+            self._get_agent_setting("code-review-agent", "workspace", self.review_workspace)
+        ).expanduser()
+        return workspace if workspace.is_absolute() else self.project_root / workspace
+
+    @property
+    def resolved_review_skills(self) -> list[str]:
+        return self._resolve_string_list(
+            self._get_agent_setting("code-review-agent", "skills", self.review_skills)
+        )
+
+    @property
+    def resolved_review_mcp_servers(self) -> list[str]:
+        return self._resolve_string_list(
+            self._get_agent_setting(
+                "code-review-agent",
+                "mcp_servers",
+                self.review_mcp_servers,
+            )
+        )
+
+    @property
+    def resolved_review_model_profile(self) -> str | None:
+        return self._get_agent_setting("code-review-agent", "model_profile", None)
+
+    @property
+    def resolved_review_skill_name(self) -> str:
+        return str(
+            self._get_platform_setting(
+                ("review", "skill_name"),
+                self.review_skill_name,
+            )
+        )
+
+    @property
+    def resolved_review_skill_command(self) -> str | None:
+        value = self._get_platform_setting(
+            ("review", "skill_command"),
+            self.review_skill_command,
+        )
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
+
+    @property
+    def resolved_mcp_github_args(self) -> list[str]:
+        return shlex.split(self.mcp_github_args)
+
+    @property
+    def resolved_mcp_github_env(self) -> dict[str, str]:
+        raw = self.mcp_github_env.strip()
+        if not raw:
+            return {}
+        if raw.startswith("{"):
+            loaded = json.loads(raw)
+            if not isinstance(loaded, dict):
+                raise ValueError("MCP_GITHUB_ENV JSON must be an object")
+            return {str(key): str(value) for key, value in loaded.items()}
+
+        env: dict[str, str] = {}
+        for line in raw.replace(",", "\n").splitlines():
+            item = line.strip()
+            if not item:
+                continue
+            key, separator, value = item.partition("=")
+            if not separator:
+                raise ValueError("MCP_GITHUB_ENV entries must use KEY=VALUE format")
+            env[key.strip()] = value.strip()
+        return env
+
+    @property
+    def resolved_mcp_github_cwd(self) -> Path | None:
+        if not self.mcp_github_cwd:
+            return None
+        cwd = Path(self.mcp_github_cwd).expanduser()
+        return cwd if cwd.is_absolute() else self.project_root / cwd
+
+    @property
+    def resolved_mcp_config_path(self) -> Path:
+        config_path = Path(self.mcp_config_path).expanduser()
+        return config_path if config_path.is_absolute() else self.project_root / config_path
+
+    @property
+    def resolved_llm_default_provider(self) -> str:
+        return str(
+            self._get_default_model_profile().get("provider", self.llm_default_provider)
+        )
+
+    @property
+    def resolved_llm_default_model(self) -> str | None:
+        value = self._get_default_model_profile().get("model")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        return self.llm_default_model
+
+    @property
+    def resolved_llm_request_timeout_seconds(self) -> float:
+        return float(
+            self._get_platform_setting(
+                ("llm", "request_timeout_seconds"),
+                self.llm_request_timeout_seconds,
+            )
+        )
+
+    @property
+    def resolved_llm_request_max_attempts(self) -> int:
+        return max(
+            1,
+            int(
+                self._get_platform_setting(
+                    ("llm", "request_max_attempts"),
+                    self.llm_request_max_attempts,
+                )
+            ),
+        )
+
+    @property
+    def resolved_llm_request_retry_base_delay_seconds(self) -> float:
+        return max(
+            0.0,
+            float(
+                self._get_platform_setting(
+                    ("llm", "request_retry_base_delay_seconds"),
+                    self.llm_request_retry_base_delay_seconds,
+                )
+            ),
+        )
+
+    @property
+    def resolved_openai_model(self) -> str:
+        return str(
+            self._get_provider_model("openai", self.openai_model)
+        )
+
+    @property
+    def resolved_minimax_model(self) -> str:
+        return str(
+            self._get_provider_model("minimax", self.minimax_model)
+        )
+
+    @property
+    def resolved_sleep_coding_worker_poll_interval_seconds(self) -> int:
+        return int(
+            self._get_platform_setting(
+                ("sleep_coding", "worker", "poll_interval_seconds"),
+                self.sleep_coding_worker_poll_interval_seconds,
+            )
+        )
+
+    @property
+    def resolved_sleep_coding_worker_lease_seconds(self) -> int:
+        return int(
+            self._get_platform_setting(
+                ("sleep_coding", "worker", "lease_seconds"),
+                self.sleep_coding_worker_lease_seconds,
+            )
+        )
+
+    @property
+    def resolved_sleep_coding_worker_heartbeat_timeout_seconds(self) -> int:
+        return int(
+            self._get_platform_setting(
+                ("sleep_coding", "worker", "heartbeat_timeout_seconds"),
+                self.sleep_coding_worker_heartbeat_timeout_seconds,
+            )
+        )
+
+    @property
+    def resolved_sleep_coding_worker_max_retries(self) -> int:
+        return int(
+            self._get_platform_setting(
+                ("sleep_coding", "worker", "max_retries"),
+                self.sleep_coding_worker_max_retries,
+            )
+        )
+
+    @property
+    def resolved_sleep_coding_worker_retry_backoff_seconds(self) -> int:
+        return int(
+            self._get_platform_setting(
+                ("sleep_coding", "worker", "retry_backoff_seconds"),
+                self.sleep_coding_worker_retry_backoff_seconds,
+            )
+        )
+
+    @property
+    def resolved_sleep_coding_worker_auto_approve_plan(self) -> bool:
+        return bool(
+            self._get_platform_setting(
+                ("sleep_coding", "worker", "auto_approve_plan"),
+                self.sleep_coding_worker_auto_approve_plan,
+            )
+        )
+
+    @property
+    def resolved_sleep_coding_scheduler_enabled(self) -> bool:
+        return bool(
+            self._get_platform_setting(
+                ("sleep_coding", "worker", "scheduler_enabled"),
+                self.sleep_coding_scheduler_enabled,
+            )
+        )
+
+    @property
+    def resolved_sleep_coding_enable_git_commit(self) -> bool:
+        return bool(
+            self._get_platform_setting(
+                ("sleep_coding", "git", "enable_commit"),
+                self.sleep_coding_enable_git_commit,
+            )
+        )
+
+    @property
+    def resolved_sleep_coding_enable_git_push(self) -> bool:
+        return bool(
+            self._get_platform_setting(
+                ("sleep_coding", "git", "enable_push"),
+                self.sleep_coding_enable_git_push,
+            )
+        )
+
+    @property
+    def resolved_git_remote_name(self) -> str:
+        return str(
+            self._get_platform_setting(
+                ("sleep_coding", "git", "remote_name"),
+                self.git_remote_name,
+            )
+        )
+
+    @property
+    def resolved_sleep_coding_validation_command(self) -> str:
+        return str(
+            self._get_platform_setting(
+                ("sleep_coding", "validation", "command"),
+                self.sleep_coding_validation_command,
+            )
+        ).strip()
+
+    @property
+    def resolved_review_max_repair_rounds(self) -> int:
+        return int(
+            self._get_platform_setting(
+                ("review", "max_repair_rounds"),
+                self.review_max_repair_rounds,
+            )
+        )
+
+    def resolve_model_profile(
+        self,
+        profile_name: str | None,
+    ) -> tuple[str | None, str | None]:
+        if not profile_name:
+            return None, None
+        profiles = self.models_config.get("profiles", {})
+        if not isinstance(profiles, dict):
+            return None, None
+        profile = profiles.get(profile_name)
+        if not isinstance(profile, dict):
+            return None, None
+        provider = profile.get("provider")
+        model = profile.get("model")
+        return (
+            str(provider).strip() if isinstance(provider, str) and provider.strip() else None,
+            str(model).strip() if isinstance(model, str) and model.strip() else None,
+        )
+
+    def _load_json_config(self, path: Path) -> dict[str, object]:
+        if not path.exists():
+            return {}
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(loaded, dict):
+            raise ValueError(f"JSON config must be an object: {path}")
+        return loaded
+
+    def _get_agent_setting(
+        self,
+        agent_id: str,
+        key: str,
+        default: object,
+    ) -> object:
+        agents = self.agents_config.get("agents", {})
+        if isinstance(agents, dict):
+            agent = agents.get(agent_id)
+            if isinstance(agent, dict) and key in agent:
+                return agent[key]
+        return default
+
+    def _get_platform_setting(
+        self,
+        path: tuple[str, ...],
+        default: object,
+    ) -> object:
+        current: object = self.platform_config
+        for key in path:
+            if not isinstance(current, dict) or key not in current:
+                return default
+            current = current[key]
+        return current
+
+    def _resolve_string_list(self, raw: object) -> list[str]:
+        if isinstance(raw, list):
+            return [str(item).strip() for item in raw if str(item).strip()]
+        if isinstance(raw, str):
+            return [item.strip() for item in raw.split(",") if item.strip()]
+        return []
+
+    def _get_default_model_profile(self) -> dict[str, object]:
+        profiles = self.models_config.get("profiles", {})
+        if not isinstance(profiles, dict):
+            return {}
+        profile = profiles.get("default")
+        return profile if isinstance(profile, dict) else {}
+
+    def _get_provider_model(self, provider: str, fallback: str) -> str:
+        providers = self.models_config.get("providers", {})
+        if isinstance(providers, dict):
+            provider_config = providers.get(provider)
+            if isinstance(provider_config, dict):
+                model = provider_config.get("default_model")
+                if isinstance(model, str) and model.strip():
+                    return model.strip()
+        return fallback
 
 
 @lru_cache(maxsize=1)

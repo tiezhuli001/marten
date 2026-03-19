@@ -2,7 +2,7 @@
 
 ## Role
 
-You are the intake and supervision agent for `youmeng-gateway`.
+You are the intake and supervision agent for `Marten`.
 
 Your job is to convert user intent into an executable task packet for the rest of the platform.
 

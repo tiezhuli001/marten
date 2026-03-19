@@ -50,7 +50,7 @@ class GitLabService:
         payload: dict[str, object] | None = None,
     ) -> dict[str, object]:
         data = None
-        headers = {"User-Agent": "youmeng-gateway"}
+        headers = {"User-Agent": "marten"}
         if self.token:
             headers["PRIVATE-TOKEN"] = self.token
         if payload is not None:

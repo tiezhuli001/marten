@@ -8,6 +8,10 @@ from uuid import uuid4
 from app.agents.code_review_agent.bridge import ReviewCommentBridge
 from app.agents.code_review_agent.context import ReviewContextBuilder
 from app.agents.code_review_agent.gitlab import GitLabService
+from app.agents.code_review_agent.materializer import (
+    ReviewMaterializationError,
+    ReviewSourceMaterializer,
+)
 from app.agents.code_review_agent.skill import (
     ReviewSkillRunResult,
     ReviewSkillService,
@@ -58,6 +62,7 @@ class ReviewService:
             sleep_coding=self.sleep_coding,
             source_support=self.source_support,
         )
+        self.materializer = ReviewSourceMaterializer(self.settings, self.sleep_coding)
         self.database_path = self.store.database_path
         self.review_runs_dir = self.store.review_runs_dir
 
@@ -65,10 +70,10 @@ class ReviewService:
         self.bridge.mcp_client = self.mcp_client
         self.bridge.github_server = self.github_server
 
-    def start_review(self, payload: ReviewRunRequest) -> ReviewRun:
+    def start_review(self, payload: ReviewRunRequest, *, write_comment: bool = True) -> ReviewRun:
         self._sync_helpers()
         review_id = str(uuid4())
-        source = self._normalize_source(payload.source)
+        source = self._materialize_source(self._normalize_source(payload.source))
         parent_control_task = self._resolve_parent_control_task(source)
         parent_run_session_id = (
             parent_control_task.payload.get("run_session_id")
@@ -87,7 +92,7 @@ class ReviewService:
         )
         content = structured.review_markdown or structured.summary
         artifact_path = self._write_artifact(review_id, source, content)
-        comment = self.bridge.write_comment(source, content)
+        comment = self.bridge.write_comment(source, content) if write_comment else None
         run_session = self.sessions.create_child_session(
             session_type="run_session",
             parent_session_id=parent_run_session_id,
@@ -115,7 +120,7 @@ class ReviewService:
                 "source_type": source.source_type,
                 "blocking": is_blocking,
                 "artifact_path": str(artifact_path),
-                "comment_url": comment.html_url,
+                "comment_url": comment.html_url if comment is not None else None,
                 "run_session_id": run_session.session_id,
             },
         )
@@ -161,7 +166,7 @@ class ReviewService:
                     source.model_dump_json(),
                     "completed",
                     str(artifact_path),
-                    comment.html_url,
+                    comment.html_url if comment is not None else None,
                     structured.summary,
                     content,
                     json.dumps([finding.model_dump(mode="json") for finding in structured.findings], ensure_ascii=True),
@@ -256,7 +261,13 @@ class ReviewService:
             }
         )
 
-    def apply_action(self, review_id: str, payload: ReviewActionRequest) -> ReviewRun:
+    def apply_action(
+        self,
+        review_id: str,
+        payload: ReviewActionRequest,
+        *,
+        write_remote: bool = True,
+    ) -> ReviewRun:
         self._sync_helpers()
         with closing(self._connect()) as connection:
             row = connection.execute(
@@ -302,7 +313,7 @@ class ReviewService:
                 {"review_id": review_id, "task_id": review.task_id},
             )
         if review.task_id:
-            if review.source.repo and review.source.pr_number:
+            if write_remote and review.source.repo and review.source.pr_number:
                 if payload.action == "request_changes":
                     self.bridge.write_pr_review(
                         review.source,
@@ -329,7 +340,7 @@ class ReviewService:
                     )
         return self.get_review(review_id)
 
-    def trigger_for_task(self, task_id: str) -> ReviewRun:
+    def trigger_for_task(self, task_id: str, *, write_comment: bool = True) -> ReviewRun:
         task = self.sleep_coding.get_task(task_id)
         source = ReviewSource(
             source_type="sleep_coding_task",
@@ -340,7 +351,23 @@ class ReviewService:
             head_branch=task.head_branch,
             task_id=task.task_id,
         )
-        return self.start_review(ReviewRunRequest(source=source))
+        return self.start_review(ReviewRunRequest(source=source), write_comment=write_comment)
+
+    def publish_final_result(self, review_id: str, action: str) -> ReviewRun:
+        review = self.get_review(review_id)
+        body = self.bridge.render_review_decision_comment(review, action)
+        comment = self.bridge.write_comment(review.source, body)
+        with closing(self._connect()) as connection:
+            connection.execute(
+                """
+                UPDATE review_runs
+                SET comment_url = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE review_id = ?
+                """,
+                (comment.html_url, review_id),
+            )
+            connection.commit()
+        return self.get_review(review_id)
 
     def list_task_reviews(self, task_id: str) -> list[ReviewRun]:
         return self.store.list_task_reviews(task_id)
@@ -359,6 +386,14 @@ class ReviewService:
 
     def _normalize_source(self, source: ReviewSource) -> ReviewSource:
         return self.source_support.normalize_source(source)
+
+    def _materialize_source(self, source: ReviewSource) -> ReviewSource:
+        try:
+            return self.materializer.materialize(source)
+        except ReviewMaterializationError:
+            if source.source_type in {"github_pr", "gitlab_mr"}:
+                raise
+            return source
 
     def _build_context(
         self,

@@ -29,7 +29,7 @@ class ReviewRunStore:
             self.database_path.parent.mkdir(parents=True, exist_ok=True)
             self.review_runs_dir.mkdir(parents=True, exist_ok=True)
         except PermissionError:
-            fallback_dir = Path(tempfile.gettempdir()) / "youmeng-gateway"
+            fallback_dir = Path(tempfile.gettempdir()) / "marten"
             fallback_dir.mkdir(parents=True, exist_ok=True)
             self.database_path = fallback_dir / self.database_path.name
             self.review_runs_dir = fallback_dir / "review-runs"

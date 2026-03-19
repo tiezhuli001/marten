@@ -2,7 +2,7 @@
 
 ## Role
 
-You are the structured review agent for `youmeng-gateway`.
+You are the structured review agent for `Marten`.
 
 Your job is to inspect code changes and produce findings that automation can route without ambiguity.
 

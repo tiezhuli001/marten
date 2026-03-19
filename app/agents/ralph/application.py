@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import sqlite3
 from contextlib import closing
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -327,10 +328,17 @@ class SleepCodingService:
         issue: SleepCodingIssue,
         plan: SleepCodingPlan,
         head_branch: str,
+        worktree_path: Path | None = None,
         control_task_id: str | None = None,
     ) -> tuple[SleepCodingExecutionDraft, TokenUsage]:
         self._sync_helpers()
-        return self.drafting.build_execution_draft(issue, plan, head_branch, control_task_id)
+        return self.drafting.build_execution_draft(
+            issue,
+            plan,
+            head_branch,
+            worktree_path,
+            control_task_id,
+        )
 
     def _build_heuristic_execution_draft(
         self,

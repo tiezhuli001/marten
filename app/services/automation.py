@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from time import sleep
+
 from app.agents.code_review_agent import ReviewService
 from app.agents.ralph import SleepCodingService
 from app.channel.delivery import DeliveryMessageBuilder
@@ -137,12 +139,18 @@ class AutomationService:
                 last_review = None
                 continue
             if decision.action == "run_review":
-                last_review = self.review.trigger_for_task(current_task.task_id)
+                last_review = self.review.trigger_for_task(
+                    current_task.task_id,
+                    write_comment=not self.settings.resolved_review_writeback_final_only,
+                )
+                review_round = len(self.review.list_task_reviews(current_task.task_id))
+                self._publish_review_feedback(current_task, last_review, review_round)
                 continue
             if decision.action == "request_changes":
                 self.review.apply_action(
                     last_review.review_id,
                     ReviewActionRequest(action="request_changes"),
+                    write_remote=not self.settings.resolved_review_writeback_final_only,
                 )
                 current_task = self._rerun_coding(current_task.task_id)
                 last_review = None
@@ -151,7 +159,13 @@ class AutomationService:
                 self.review.apply_action(
                     last_review.review_id,
                     ReviewActionRequest(action="request_changes"),
+                    write_remote=not self.settings.resolved_review_writeback_final_only,
                 )
+                if self.settings.resolved_review_writeback_final_only:
+                    last_review = self.review.publish_final_result(
+                        last_review.review_id,
+                        "request_changes",
+                    )
                 current_task = self.sleep_coding.get_task(current_task.task_id)
                 self._publish_manual_handoff(current_task, last_review, decision.blocking_reviews)
                 return current_task
@@ -159,7 +173,13 @@ class AutomationService:
                 self.review.apply_action(
                     last_review.review_id,
                     ReviewActionRequest(action="approve_review"),
+                    write_remote=not self.settings.resolved_review_writeback_final_only,
                 )
+                if self.settings.resolved_review_writeback_final_only:
+                    last_review = self.review.publish_final_result(
+                        last_review.review_id,
+                        "approve_review",
+                    )
                 current_task = self.sleep_coding.get_task(current_task.task_id)
                 self._publish_final_delivery(current_task, last_review)
                 return current_task
@@ -185,6 +205,9 @@ class AutomationService:
     def _run_scheduled_follow_up(self, task_id: str) -> SleepCodingTask:
         self.follow_up.mark_state(task_id, "processing")
         try:
+            delay_seconds = self.settings.resolved_review_follow_up_delay_seconds
+            if delay_seconds > 0:
+                sleep(delay_seconds)
             task = self.run_review_loop(task_id)
         except Exception as exc:
             self.follow_up.mark_state(
@@ -199,6 +222,20 @@ class AutomationService:
             payload={"task_status": task.status},
         )
         return task
+
+    def _publish_review_feedback(
+        self,
+        task: SleepCodingTask,
+        review: ReviewRun,
+        review_round: int,
+    ) -> None:
+        title, lines = self.delivery.build_review_feedback(
+            task,
+            review,
+            review_round=review_round,
+            max_repair_rounds=self.max_repair_rounds,
+        )
+        self.channel.notify(title=title, lines=lines)
 
     def _publish_manual_handoff(
         self,

@@ -14,6 +14,7 @@ class IntegrationDiagnosticsService:
     def get_report(self) -> dict[str, Any]:
         return {
             "github_mcp": self._github_mcp_status(),
+            "ralph_execution": self._ralph_execution_status(),
             "review_skill": self._review_skill_status(),
             "feishu": self._feishu_status(),
         }
@@ -58,6 +59,28 @@ class IntegrationDiagnosticsService:
         if which("opencode") is not None:
             return {"status": "ok", "mode": "opencode_fallback"}
         return {"status": "not_configured", "detail": "No review skill command or model credentials configured"}
+
+    def _ralph_execution_status(self) -> dict[str, Any]:
+        if self.settings.resolved_sleep_coding_execution_command:
+            command = self.settings.resolved_sleep_coding_execution_command.split()[0]
+            if which(command) is None:
+                return {"status": "error", "detail": f"Command not found: {command}"}
+            return {
+                "status": "ok",
+                "mode": "command",
+                "command": self.settings.resolved_sleep_coding_execution_command,
+            }
+        if self.settings.resolved_sleep_coding_execution_allow_llm_fallback:
+            if self.settings.openai_api_key or self.settings.minimax_api_key:
+                return {"status": "ok", "mode": "runtime_llm_fallback"}
+            return {
+                "status": "error",
+                "detail": "LLM fallback is enabled but no model credentials are configured",
+            }
+        return {
+            "status": "error",
+            "detail": "No local coding command configured. Define `sleep_coding.execution.command` or explicitly enable LLM fallback.",
+        }
 
     def _feishu_status(self) -> dict[str, Any]:
         inbound_ready = bool(

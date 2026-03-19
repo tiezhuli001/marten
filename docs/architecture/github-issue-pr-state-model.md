@@ -122,7 +122,7 @@ created
 
 1. 计划生成完成时写回 Issue
 2. PR 创建时写回 Issue 和 PR
-3. 最终完成时写回 Issue、PR 和 `docs/status/current-status.md`
+3. 最终完成时写回 Issue、PR 和内部状态存储
 
 标签与通知补充：
 

@@ -192,6 +192,7 @@ class RalphTaskWorkflow:
             issue,
             plan,
             task["head_branch"],
+            Path(git_execution.worktree_path) if git_execution.worktree_path else None,
             task["control_task_id"],
         )
         artifact_result = self.service.git_workspace.write_task_artifact(

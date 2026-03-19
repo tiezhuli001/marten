@@ -1,1 +1,1 @@
-"""youmeng-gateway application package."""
+"""Marten application package."""

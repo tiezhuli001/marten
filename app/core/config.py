@@ -23,11 +23,11 @@ class AgentSpec:
 
 class Settings(BaseSettings):
     app_env: str = "development"
-    app_name: str = "youmeng-gateway"
+    app_name: str = "marten"
     app_port: int = 8000
     app_data_dir: str = "data"
     langsmith_api_key: str | None = None
-    langsmith_project: str = "youmeng-gateway"
+    langsmith_project: str = "marten"
     langsmith_tracing: bool = False
     openai_api_key: str | None = None
     openai_api_base: str = "https://api.openai.com/v1"
@@ -62,7 +62,7 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///data/youmeng_gateway.db"
     github_token: str | None = None
     github_api_base: str = "https://api.github.com"
-    github_repository: str = "tiezhuli001/youmeng-gateway"
+    github_repository: str = "your-org/marten"
     channel_provider: str = "feishu"
     channel_webhook_url: str | None = None
     feishu_verification_token: str | None = None
@@ -82,13 +82,17 @@ class Settings(BaseSettings):
     sleep_coding_enable_git_push: bool = False
     git_remote_name: str = "origin"
     sleep_coding_validation_command: str = "python -m unittest discover -s tests"
-    review_runs_dir: str = "docs/review-runs"
+    sleep_coding_execution_command: str | None = None
+    sleep_coding_execution_allow_llm_fallback: bool = False
+    review_runs_dir: str = "data/review-runs"
     review_workspace: str = "agents/code-review-agent"
     review_skills: str = "code-review"
     review_mcp_servers: str = "github"
     review_skill_name: str = "code-review"
     review_skill_command: str | None = None
     review_force_blocking_first_pass: bool = False
+    review_writeback_final_only: bool = True
+    review_follow_up_delay_seconds: int = 0
     gitlab_api_base: str = "https://gitlab.com/api/v4"
     gitlab_token: str | None = None
 
@@ -152,6 +156,28 @@ class Settings(BaseSettings):
         return review_dir if review_dir.is_absolute() else self.project_root / review_dir
 
     @property
+    def resolved_sleep_coding_execution_command(self) -> str | None:
+        value = self._get_platform_setting(
+            ("sleep_coding", "execution", "command"),
+            self.sleep_coding_execution_command,
+        )
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
+
+    @property
+    def resolved_sleep_coding_execution_allow_llm_fallback(self) -> bool:
+        if self.sleep_coding_execution_allow_llm_fallback:
+            return True
+        return bool(
+            self._get_platform_setting(
+                ("sleep_coding", "execution", "allow_llm_fallback"),
+                False,
+            )
+        )
+
+    @property
     def resolved_review_force_blocking_first_pass(self) -> bool:
         if self.review_force_blocking_first_pass:
             return True
@@ -161,6 +187,25 @@ class Settings(BaseSettings):
                 False,
             )
         )
+
+    @property
+    def resolved_review_writeback_final_only(self) -> bool:
+        if not self.review_writeback_final_only:
+            return bool(
+                self._get_platform_setting(
+                    ("review", "writeback_final_only"),
+                    False,
+                )
+            )
+        return True
+
+    @property
+    def resolved_review_follow_up_delay_seconds(self) -> int:
+        value = self._get_platform_setting(
+            ("review", "follow_up_delay_seconds"),
+            self.review_follow_up_delay_seconds,
+        )
+        return max(int(value), 0)
 
     @property
     def resolved_github_repository(self) -> str:

@@ -23,6 +23,13 @@ class ReviewContextBuilder:
     ) -> str:
         base_context: str
         if source.source_type == "sleep_coding_task" and source.task_id:
+            if source.local_path:
+                base_context = self.source_support.build_local_code_context(source)
+                return self.context.build_agent_input(
+                    session_id=run_session_id,
+                    current_input=base_context,
+                    heading="Current Review Context",
+                )
             task = self.sleep_coding.get_task(source.task_id)
             latest_commit_message = "n/a"
             file_changes: list[str] = []

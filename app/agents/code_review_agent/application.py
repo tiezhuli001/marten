@@ -1,369 +1,27 @@
 from __future__ import annotations
 
 import json
-import re
-import shlex
 import sqlite3
-import subprocess
-import tempfile
-from dataclasses import dataclass
 from contextlib import closing
-from pathlib import Path
-from shutil import which
 from uuid import uuid4
 
 from app.agents.code_review_agent.bridge import ReviewCommentBridge
 from app.agents.code_review_agent.context import ReviewContextBuilder
+from app.agents.code_review_agent.gitlab import GitLabService
+from app.agents.code_review_agent.skill import (
+    ReviewSkillRunResult,
+    ReviewSkillService,
+    count_findings_by_severity,
+)
 from app.agents.code_review_agent.store import ReviewRunStore, ReviewSourceSupport
 from app.control.context import ContextAssemblyService
 from app.control.events import ControlEventType
 from app.core.config import Settings, get_settings
-from app.models.schemas import (
-    ReviewActionRequest,
-    ReviewFinding,
-    ReviewRun,
-    ReviewRunRequest,
-    ReviewSkillOutput,
-    ReviewSource,
-    SleepCodingTaskActionRequest,
-    TokenUsage,
-)
-from app.runtime.agent_runtime import AgentDescriptor, AgentRuntime
-from app.runtime.mcp import MCPClient, MCPToolCall, build_default_mcp_client
-from app.runtime.pricing import PricingRegistry
-from app.runtime.token_counting import TokenCountingService
-from app.services.gitlab import GitLabService
+from app.models.schemas import ReviewActionRequest, ReviewFinding, ReviewRun, ReviewRunRequest, ReviewSkillOutput, ReviewSource, SleepCodingTaskActionRequest, TokenUsage
+from app.runtime.mcp import MCPClient, build_default_mcp_client
 from app.services.session_registry import SessionRegistryService
 from app.agents.ralph import SleepCodingService
 from app.services.task_registry import TaskRegistryService
-
-
-@dataclass(frozen=True)
-class ReviewSkillRunResult:
-    output: ReviewSkillOutput
-    token_usage: TokenUsage
-
-
-class ReviewSkillService:
-    def __init__(
-        self,
-        settings: Settings,
-        agent_runtime: AgentRuntime | None = None,
-        mcp_client: MCPClient | None = None,
-    ) -> None:
-        self.settings = settings
-        self.skill_name = settings.resolved_review_skill_name
-        self.command = settings.resolved_review_skill_command
-        self.project_root = settings.project_root
-        self.mcp_client = mcp_client or build_default_mcp_client(settings)
-        self.agent_runtime = agent_runtime or AgentRuntime(
-            settings,
-            mcp_client=self.mcp_client,
-        )
-        self.token_counter = TokenCountingService()
-        self.pricing = PricingRegistry(settings)
-
-    def run(self, source: ReviewSource, context: str) -> ReviewSkillRunResult:
-        command = self._resolve_command(source)
-        if command is not None:
-            return self._run_with_command(command, source, context)
-        if self.settings.openai_api_key or self.settings.minimax_api_key:
-            try:
-                return self._run_with_agent_runtime(source, context)
-            except Exception:
-                if self.settings.app_env != "test":
-                    raise
-                return self._build_dry_run_output(source, context)
-        return self._build_dry_run_output(source, context)
-
-    def _run_with_agent_runtime(self, source: ReviewSource, context: str) -> ReviewSkillRunResult:
-        response = self.agent_runtime.generate_structured_output(
-            self._build_agent_descriptor(),
-            user_prompt=(
-                "Review the following code change context and return structured findings.\n\n"
-                f"Source type: {source.source_type}\n\n"
-                f"{context}"
-            ),
-            output_contract=(
-                "Return strict JSON with keys `summary`, `findings`, `repair_strategy`, `blocking`, and `review_markdown`. "
-                "`findings` must be an array of objects with keys `severity`, `title`, `detail`, and optional "
-                "`file_path`, `line`, `suggestion`. Severity must be one of `P0`, `P1`, `P2`, `P3`. "
-                "`blocking` must be true when any finding is P0 or P1, else false. "
-                "`review_markdown` must be human-readable markdown that summarizes the findings."
-            ),
-        )
-        output = ReviewSkillOutput.model_validate_json(response.output_text)
-        return ReviewSkillRunResult(
-            output=output.model_copy(
-                update={
-                    "run_mode": "real_run",
-                    "review_markdown": output.review_markdown or self._render_review_markdown(output),
-                }
-            ),
-            token_usage=response.usage.model_copy(update={"step_name": "code_review"}),
-        )
-
-    def _run_with_command(
-        self,
-        command: list[str],
-        source: ReviewSource,
-        context: str,
-    ) -> ReviewSkillRunResult:
-        prompt = self._build_prompt(source)
-        review_dir = self._resolve_dir(source)
-        with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".md", delete=False) as handle:
-            handle.write(context)
-            context_path = Path(handle.name)
-
-        try:
-            completed = subprocess.run(
-                [*command, prompt, "-f", str(context_path)],
-                cwd=review_dir,
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-        finally:
-            context_path.unlink(missing_ok=True)
-        output = "\n".join(part for part in (completed.stdout, completed.stderr) if part).strip()
-        if completed.returncode != 0:
-            raise RuntimeError(
-                f"Review skill command failed with exit_code={completed.returncode}: {output}"
-            )
-        structured = self._parse_command_output(output)
-        return ReviewSkillRunResult(
-            output=structured,
-            token_usage=self._estimate_usage(
-                input_text=f"{prompt}\n\n{context}",
-                output_text=output,
-            ),
-        )
-
-    def _parse_command_output(self, output: str) -> ReviewSkillOutput:
-        parsed_json = self._extract_json_object(output)
-        if parsed_json is not None:
-            structured = ReviewSkillOutput.model_validate(parsed_json)
-            return structured.model_copy(
-                update={
-                    "run_mode": "real_run",
-                    "review_markdown": structured.review_markdown or self._render_review_markdown(structured),
-                }
-            )
-        findings = self._extract_findings_fallback(output)
-        severity_counts = _count_findings_by_severity(findings)
-        blocking = any(severity_counts.get(level, 0) > 0 for level in ("P0", "P1"))
-        structured = ReviewSkillOutput(
-            summary=self._extract_summary(output),
-            findings=findings,
-            repair_strategy=self._extract_repair_strategy(output),
-            blocking=blocking,
-            run_mode="real_run",
-            review_markdown=output,
-        )
-        return structured
-
-    def _build_dry_run_output(self, source: ReviewSource, context: str) -> ReviewSkillRunResult:
-        summary = f"Dry-run review generated for {source.source_type}."
-        review_markdown = (
-            "## Code Review Agent\n\n"
-            f"- Skill: `{self.skill_name}`\n"
-            f"- Source Type: `{source.source_type}`\n"
-            f"- Run Mode: `dry_run`\n\n"
-            "### Summary\n"
-            "Dry-run review executed because no review skill runtime is configured.\n\n"
-            "### Context\n"
-            f"{context}\n"
-        )
-        output = ReviewSkillOutput(
-            summary=summary,
-            findings=[],
-            repair_strategy=["Configure a review skill runtime for structured findings."],
-            blocking=False,
-            run_mode="dry_run",
-            review_markdown=review_markdown,
-        )
-        return ReviewSkillRunResult(
-            output=output,
-            token_usage=self._estimate_usage(
-                input_text=context,
-                output_text=review_markdown,
-            ),
-        )
-
-    def _build_agent_descriptor(self) -> AgentDescriptor:
-        return AgentDescriptor.from_spec(self.settings.resolve_agent_spec("code-review-agent"))
-
-    def _resolve_command(self, source: ReviewSource) -> list[str] | None:
-        if self.command:
-            return shlex.split(self.command)
-        if self.settings.app_env == "test":
-            return None
-        if which("opencode") is None:
-            return None
-        review_dir = self._resolve_dir(source)
-        return [
-            "opencode",
-            "run",
-            "--dir",
-            str(review_dir),
-            "--format",
-            "default",
-        ]
-
-    def _resolve_dir(self, source: ReviewSource) -> Path:
-        if source.local_path:
-            return Path(source.local_path).expanduser()
-        return self.project_root
-
-    def _build_prompt(self, source: ReviewSource) -> str:
-        return (
-            f"Use the {self.skill_name} skill to review this source. "
-            f"Source type: {source.source_type}. "
-            "Return strict JSON with summary, findings, repair_strategy, blocking, and review_markdown."
-        )
-
-    def _extract_summary(self, output: str) -> str:
-        if not output:
-            return f"Review completed via {self.skill_name}."
-        summary_match = re.search(
-            r"^### Summary\s*\n(?P<summary>(?:- .*\n?|.*\n?)+?)(?:\n### |\Z)",
-            output,
-            flags=re.MULTILINE,
-        )
-        if summary_match:
-            summary = " ".join(
-                line.strip().lstrip("-").strip()
-                for line in summary_match.group("summary").splitlines()
-                if line.strip()
-            )
-            if summary:
-                return summary
-        change_summary_match = re.search(
-            r"^### 变更摘要\s*\n(?P<summary>.+?)(?:\n---|\n### |\Z)",
-            output,
-            flags=re.MULTILINE | re.DOTALL,
-        )
-        if change_summary_match:
-            summary = " ".join(
-                line.strip()
-                for line in change_summary_match.group("summary").splitlines()
-                if line.strip()
-            )
-            if summary:
-                return summary
-        return output.splitlines()[0]
-
-    def _extract_json_object(self, output: str) -> dict[str, object] | None:
-        stripped = output.strip()
-        candidates = [stripped]
-        fenced = re.findall(r"```json\s*(\{.*?\})\s*```", stripped, flags=re.DOTALL)
-        candidates.extend(fenced)
-        for candidate in candidates:
-            if not candidate.startswith("{"):
-                continue
-            try:
-                loaded = json.loads(candidate)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(loaded, dict):
-                return loaded
-        return None
-
-    def _extract_findings_fallback(self, output: str) -> list[ReviewFinding]:
-        findings: list[ReviewFinding] = []
-        for line in output.splitlines():
-            match = re.search(r"(?<![A-Z0-9])(P[0-3])(?![A-Z0-9])[:\s-]+(.+)", line)
-            if not match:
-                continue
-            findings.append(
-                ReviewFinding(
-                    severity=match.group(1),  # type: ignore[arg-type]
-                    title=match.group(2).strip()[:120],
-                    detail=line.strip(),
-                )
-            )
-        return findings
-
-    def _extract_repair_strategy(self, output: str) -> list[str]:
-        section = re.search(
-            r"^### (Repair Strategy|修复建议)\s*\n(?P<body>(?:- .*\n?|.*\n?)+?)(?:\n### |\Z)",
-            output,
-            flags=re.MULTILINE,
-        )
-        if not section:
-            return []
-        strategies = [
-            line.strip().lstrip("-").strip()
-            for line in section.group("body").splitlines()
-            if line.strip()
-        ]
-        return [item for item in strategies if item]
-
-    def _render_review_markdown(self, output: ReviewSkillOutput) -> str:
-        findings = (
-            "\n".join(
-                (
-                    f"- [{finding.severity}] {finding.title}"
-                    + (
-                        f" ({finding.file_path}:{finding.line})"
-                        if finding.file_path and finding.line
-                        else f" ({finding.file_path})"
-                        if finding.file_path
-                        else ""
-                    )
-                    + f": {finding.detail}"
-                )
-                for finding in output.findings
-            )
-            if output.findings
-            else "- No material findings."
-        )
-        repair = (
-            "\n".join(f"- {item}" for item in output.repair_strategy)
-            if output.repair_strategy
-            else "- No repair actions required."
-        )
-        return (
-            "## Code Review Agent\n\n"
-            f"### Summary\n{output.summary}\n\n"
-            "### Findings\n"
-            f"{findings}\n\n"
-            "### Repair Strategy\n"
-            f"{repair}\n"
-        )
-
-    def _estimate_usage(
-        self,
-        *,
-        input_text: str,
-        output_text: str,
-    ) -> TokenUsage:
-        provider = self.settings.resolved_llm_default_provider
-        model = self.settings.resolved_llm_default_model
-        usage = self.token_counter.estimate_text_usage(
-            provider=provider,
-            model=model,
-            input_text=input_text,
-            output_text=output_text,
-            existing_usage=TokenUsage(),
-        )
-        return usage.model_copy(
-            update={
-                "provider": provider,
-                "model_name": model,
-                "message_count": 2,
-                "step_name": "code_review",
-                "cost_usd": self.pricing.calculate_cost_usd(
-                    provider=provider,
-                    model=model,
-                    prompt_tokens=usage.prompt_tokens,
-                    completion_tokens=usage.completion_tokens,
-                    cache_read_tokens=usage.cache_read_tokens,
-                    cache_write_tokens=usage.cache_write_tokens,
-                ),
-            }
-        )
-
 
 class ReviewService:
     def __init__(
@@ -421,13 +79,13 @@ class ReviewService:
         run_result = self.skill.run(source, context)
         structured = self._apply_blocking_override(source, run_result.output)
         review_usage = run_result.token_usage.model_copy(update={"step_name": "code_review"})
-        severity_counts = _count_findings_by_severity(structured.findings)
+        severity_counts = count_findings_by_severity(structured.findings)
         is_blocking = (
             structured.blocking
             if structured.blocking is not None
             else any(severity_counts.get(level, 0) > 0 for level in ("P0", "P1"))
         )
-        content = structured.review_markdown or self.skill._render_review_markdown(structured)
+        content = structured.review_markdown or structured.summary
         artifact_path = self._write_artifact(review_id, source, content)
         comment = self.bridge.write_comment(source, content)
         run_session = self.sessions.create_child_session(
@@ -580,7 +238,7 @@ class ReviewService:
             suggestion="Update the generated task artifact to acknowledge the blocking review.",
         )
         findings = [synthetic_finding, *structured.findings]
-        markdown = structured.review_markdown or self.skill._render_review_markdown(structured)
+        markdown = structured.review_markdown or structured.summary
         markdown += (
             "\n\n### Integration Override\n"
             "- Forced a single blocking review pass to validate Ralph repair automation.\n"
@@ -726,34 +384,6 @@ class ReviewService:
     def _artifact_name(self, review_id: str, source: ReviewSource) -> str:
         return self.store.artifact_name(review_id, source)
 
-    def _write_comment(self, source: ReviewSource, content: str) -> GitHubCommentResult:
-        return self.bridge.write_comment(source, content)
-
-    def _write_pr_review(
-        self,
-        source: ReviewSource,
-        *,
-        event: str,
-        body: str,
-    ) -> GitHubCommentResult:
-        return self.bridge.write_pr_review(source, event=event, body=body)
-
-    def _render_review_decision_comment(
-        self,
-        review: ReviewRun,
-        action: str,
-    ) -> str:
-        return self.bridge.render_review_decision_comment(review, action)
-
-    def _coerce_mapping(self, content: object) -> dict[str, object]:
-        return self.bridge.coerce_mapping(content)
-
-    def _require_github_server(self, tool: str) -> str:
-        return self.bridge.require_github_server(tool)
-
-    def _coerce_html_url(self, payload: dict[str, object]) -> str | None:
-        return self.bridge.coerce_html_url(payload)
-
     def _deserialize_review(self, row: sqlite3.Row) -> ReviewRun:
         return self.store.deserialize_review(row)
 
@@ -783,10 +413,3 @@ class ReviewService:
             )
         except ValueError:
             return
-
-
-def _count_findings_by_severity(findings: list[ReviewFinding]) -> dict[str, int]:
-    counts: dict[str, int] = {}
-    for finding in findings:
-        counts[finding.severity] = counts.get(finding.severity, 0) + 1
-    return counts

@@ -16,9 +16,9 @@ from app.models.schemas import (
     WorkerDiscoveredIssue,
 )
 from app.runtime.mcp import InMemoryMCPServer, MCPClient
-from app.services.channel import ChannelNotificationResult
-from app.services.sleep_coding import SleepCodingService
-from app.services.sleep_coding_worker import SleepCodingWorkerService
+from app.channel.notifications import ChannelNotificationResult
+from app.agents.ralph import SleepCodingService
+from app.control.sleep_coding_worker import SleepCodingWorkerService
 
 
 class FakeGitHubService:

@@ -4,7 +4,7 @@ import unittest
 
 from app.core.config import Settings
 from app.models.schemas import GatewayMessageResponse, TokenUsage
-from app.services.feishu import FeishuWebhookService
+from app.channel.feishu import FeishuWebhookService
 
 
 class FakeGatewayControlPlaneService:

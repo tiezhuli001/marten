@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from app.core.config import Settings
 from app.ledger.service import TokenLedgerService
+from app.models.github_results import GitHubCommentResult
 from app.models.schemas import (
     ReviewActionRequest,
     ReviewFinding,
@@ -20,11 +21,9 @@ from app.models.schemas import (
     ValidationResult,
 )
 from app.runtime.mcp import InMemoryMCPServer, MCPClient
-from app.services.channel import ChannelNotificationResult
-from app.services.github import GitHubCommentResult
-from app.services.gitlab import GitLabService
-from app.services.review import ReviewService, ReviewSkillRunResult, ReviewSkillService
-from app.services.sleep_coding import SleepCodingService
+from app.agents.code_review_agent import GitLabService, ReviewService, ReviewSkillRunResult, ReviewSkillService
+from app.channel.notifications import ChannelNotificationResult
+from app.agents.ralph import SleepCodingService
 
 
 class FakeGitHubService:
@@ -274,7 +273,7 @@ class ReviewServiceTests(unittest.TestCase):
                 mcp_client=MCPClient(),
             )
 
-            with patch("app.services.review.which", return_value=None):
+            with patch("app.agents.code_review_agent.skill.which", return_value=None):
                 with self.assertRaisesRegex(RuntimeError, "LLM provider is unreachable"):
                     skill.run(
                         ReviewSource(source_type="local_code", local_path=str(root)),
@@ -521,18 +520,6 @@ class ReviewServiceTests(unittest.TestCase):
             self.assertEqual(captured[0]["event"], "COMMENT")
             self.assertEqual(len(github.pr_comments), 0)
 
-    def test_summary_prefers_structured_summary_section(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            settings = build_settings(root / "review.db", root / "review-runs")
-            skill = ReviewSkillService(settings)
-
-            summary = skill._extract_summary(
-                "## AI Code Review\n\n### Summary\n- first summary line\n- second summary line\n"
-            )
-
-            self.assertEqual(summary, "first summary line second summary line")
-
     def test_command_output_json_is_parsed_into_structured_findings(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -546,6 +533,15 @@ class ReviewServiceTests(unittest.TestCase):
             self.assertEqual(structured.summary, "Blocking review")
             self.assertEqual(structured.findings[0].severity, "P1")
             self.assertTrue(structured.blocking)
+
+    def test_command_output_requires_strict_json(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = build_settings(root / "review.db", root / "review-runs")
+            skill = ReviewSkillService(settings)
+
+            with self.assertRaisesRegex(RuntimeError, "strict JSON"):
+                skill._parse_command_output("### Summary\nthis is not json")
 
     def test_local_code_context_reports_friendly_git_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

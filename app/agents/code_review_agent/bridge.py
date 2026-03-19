@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+from app.models.github_results import GitHubCommentResult
 from app.models.schemas import ReviewRun, ReviewSource
 from app.runtime.mcp import MCPClient, MCPToolCall
-from app.services.github import GitHubCommentResult
-from app.services.gitlab import GitLabService
+from app.agents.code_review_agent.gitlab import GitLabService
 
 
 class ReviewCommentBridge:

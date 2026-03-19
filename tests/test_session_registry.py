@@ -2,6 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from app.control.session_memory import SessionMemoryStore
 from app.core.config import Settings
 from app.services.session_registry import SessionRegistryService
 
@@ -69,10 +70,11 @@ class SessionRegistryServiceTests(unittest.TestCase):
             self.assertEqual(updated.payload["short_memory_summary"], "Latest intake created Issue #101.")
             self.assertEqual([item.session_id for item in chain], [user_session.session_id, agent_session.session_id])
 
-    def test_append_short_memory_persists_recent_entries(self) -> None:
+    def test_session_memory_store_persists_recent_entries(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             settings = Settings(database_url=f"sqlite:///{Path(temp_dir) / 'sessions.db'}")
             service = SessionRegistryService(settings)
+            memory = SessionMemoryStore(service)
 
             session = service.get_or_create_session(
                 session_type="user_session",
@@ -80,12 +82,13 @@ class SessionRegistryServiceTests(unittest.TestCase):
                 user_id="user-3",
                 source="manual",
             )
-            service.append_short_memory(session.session_id, "First note")
-            updated = service.append_short_memory(session.session_id, "Second note")
+            memory.append(session.session_id, "First note")
+            memory.append(session.session_id, "Second note")
+            updated = service.get_session(session.session_id)
 
             self.assertEqual(updated.payload["short_memory_summary"], "Second note")
             self.assertEqual(updated.payload["short_memory_entries"], ["First note", "Second note"])
-            self.assertEqual(service.list_short_memory(session.session_id), ["First note", "Second note"])
+            self.assertEqual(memory.list(session.session_id), ["First note", "Second note"])
 
 
 if __name__ == "__main__":

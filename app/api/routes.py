@@ -11,12 +11,10 @@ from app.channel.feishu import FeishuWebhookService
 from app.control.gateway import GatewayControlPlaneService
 from app.core.config import get_settings
 from app.infra.diagnostics import IntegrationDiagnosticsService
-from app.infra.scheduler import WorkerSchedulerService
 from app.ledger.service import TokenLedgerService
 from app.models.schemas import (
     ControlTask,
     ControlTaskEvent,
-    DailyTokenSummary,
     GatewayMessageRequest,
     GatewayMessageResponse,
     MainAgentIntakeRequest,
@@ -30,11 +28,9 @@ from app.models.schemas import (
     SleepCodingWorkerClaim,
     SleepCodingWorkerPollRequest,
     SleepCodingWorkerPollResponse,
-    TokenReportResponse,
 )
 from app.services.automation import AutomationService
 from app.control.sleep_coding_worker import SleepCodingWorkerService
-from app.services.status import StatusService
 from app.services.task_registry import TaskRegistryService
 
 router = APIRouter()
@@ -50,11 +46,6 @@ def get_gateway_control_plane_service() -> GatewayControlPlaneService:
         sleep_coding=get_sleep_coding_service(),
         sessions=get_session_registry_service(),
     )
-
-
-@lru_cache(maxsize=1)
-def get_status_service() -> StatusService:
-    return StatusService()
 
 
 @lru_cache(maxsize=1)
@@ -93,11 +84,6 @@ def get_automation_service() -> AutomationService:
 @lru_cache(maxsize=1)
 def get_sleep_coding_worker_service() -> SleepCodingWorkerService:
     return SleepCodingWorkerService(get_settings())
-
-
-@lru_cache(maxsize=1)
-def get_worker_scheduler_service() -> WorkerSchedulerService:
-    return WorkerSchedulerService(get_settings(), get_automation_service())
 
 
 @lru_cache(maxsize=1)
@@ -166,13 +152,6 @@ def intake_main_agent(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.get("/status/current")
-def current_status(
-    status_service: StatusService = Depends(get_status_service),
-) -> dict[str, str]:
-    return {"content": status_service.read_current_status()}
-
-
 @router.get("/diagnostics/integrations")
 def integration_diagnostics(
     service: IntegrationDiagnosticsService = Depends(get_integration_diagnostics_service),
@@ -238,14 +217,6 @@ def list_sleep_coding_claims(
         return service.list_claims(repo=repo)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@router.post("/workers/sleep-coding/run-once")
-def run_sleep_coding_scheduler_once(
-    service: WorkerSchedulerService = Depends(get_worker_scheduler_service),
-) -> dict[str, str]:
-    service.run_once()
-    return {"status": "ok"}
 
 
 @router.get("/tasks/sleep-coding/{task_id}", response_model=SleepCodingTask)
@@ -323,39 +294,3 @@ def trigger_sleep_coding_review(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-
-@router.get("/reports/tokens", response_model=TokenReportResponse)
-def get_token_report(
-    window: str,
-    service: TokenLedgerService = Depends(get_token_ledger_service),
-) -> TokenReportResponse:
-    try:
-        return service.get_window_report(window)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@router.get("/reports/tokens/daily/{summary_date}", response_model=DailyTokenSummary)
-def get_daily_token_summary(
-    summary_date: str,
-    service: TokenLedgerService = Depends(get_token_ledger_service),
-) -> DailyTokenSummary:
-    try:
-        return service.get_daily_summary(summary_date)
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-
-@router.post("/reports/tokens/daily/generate", response_model=DailyTokenSummary)
-def generate_daily_token_summary(
-    date: str | None = None,
-    service: TokenLedgerService = Depends(get_token_ledger_service),
-) -> DailyTokenSummary:
-    try:
-        return (
-            service.generate_daily_summary(date)
-            if date
-            else service.generate_yesterday_summary()
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc

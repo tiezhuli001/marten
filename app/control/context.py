@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Iterable
 
+from app.control.session_memory import SessionMemoryStore
 from app.services.session_registry import SessionRegistryService
 
 
@@ -9,8 +10,10 @@ class ContextAssemblyService:
     def __init__(
         self,
         sessions: SessionRegistryService,
+        memory: SessionMemoryStore | None = None,
     ) -> None:
         self.sessions = sessions
+        self.memory = memory or SessionMemoryStore(sessions)
 
     def build_main_agent_input(
         self,
@@ -43,10 +46,10 @@ class ContextAssemblyService:
         session_id: str,
         summary: str,
     ) -> None:
-        self.sessions.append_short_memory(session_id, summary)
+        self.memory.append(session_id, summary)
 
     def collect_short_memory(self, session_id: str | None) -> list[str]:
-        return self.sessions.list_short_memory(session_id)
+        return self.memory.list(session_id)
 
     def _compose(
         self,

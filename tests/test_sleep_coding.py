@@ -139,17 +139,25 @@ class FakeChannelService:
 
 
 class FakeGitWorkspaceService:
-    def __init__(self) -> None:
+    def __init__(self, root: Path | None = None) -> None:
+        self.root = root
         self.prepared_branches: list[str] = []
         self.committed_branches: list[str] = []
         self.pushed_branches: list[str] = []
         self.cleaned_branches: list[str] = []
 
+    def _worktree_path(self, branch: str) -> Path:
+        if self.root is not None:
+            return self.root / branch.replace("/", "__")
+        return Path(f"/tmp/{branch.replace('/', '__')}")
+
     def prepare_worktree(self, branch: str) -> GitExecutionResult:
         self.prepared_branches.append(branch)
+        worktree_path = self._worktree_path(branch)
+        worktree_path.mkdir(parents=True, exist_ok=True)
         return GitExecutionResult(
             status="prepared",
-            worktree_path=f"/tmp/{branch.replace('/', '__')}",
+            worktree_path=str(worktree_path),
             output="worktree prepared",
             is_dry_run=True,
         )
@@ -162,10 +170,14 @@ class FakeGitWorkspaceService:
         artifact_markdown: str,
         file_changes=None,
     ) -> GitExecutionResult:
+        worktree_path = self._worktree_path(branch)
+        artifact_path = worktree_path / ".sleep_coding" / f"issue-{issue_number}.md"
+        artifact_path.parent.mkdir(parents=True, exist_ok=True)
+        artifact_path.write_text(artifact_markdown, encoding="utf-8")
         return GitExecutionResult(
             status="prepared",
-            worktree_path=f"/tmp/{branch.replace('/', '__')}",
-            artifact_path=f"/tmp/{branch.replace('/', '__')}/.sleep_coding/issue-{issue_number}.md",
+            worktree_path=str(worktree_path),
+            artifact_path=str(artifact_path),
             output=artifact_markdown,
             is_dry_run=True,
         )
@@ -174,7 +186,7 @@ class FakeGitWorkspaceService:
         self.committed_branches.append(branch)
         return GitExecutionResult(
             status="skipped",
-            worktree_path=f"/tmp/{branch.replace('/', '__')}",
+            worktree_path=str(self._worktree_path(branch)),
             output=message,
             is_dry_run=True,
         )
@@ -183,7 +195,7 @@ class FakeGitWorkspaceService:
         self.pushed_branches.append(branch)
         return GitExecutionResult(
             status="skipped",
-            worktree_path=f"/tmp/{branch.replace('/', '__')}",
+            worktree_path=str(self._worktree_path(branch)),
             push_remote="origin",
             output="push skipped",
             is_dry_run=True,
@@ -259,9 +271,13 @@ class FailingAgentRuntime(FakeAgentRuntime):
 
 
 def build_settings(database_path: Path, **kwargs) -> Settings:
+    platform_config_path = database_path.parent / "platform.json"
+    if not platform_config_path.exists():
+        platform_config_path.write_text("{}", encoding="utf-8")
     return Settings(
         app_env="test",
         database_url=f"sqlite:///{database_path}",
+        platform_config_path=str(platform_config_path),
         github_repository="tiezhuli001/youmeng-gateway",
         langsmith_tracing=False,
         openai_api_key="test-key",
@@ -271,6 +287,35 @@ def build_settings(database_path: Path, **kwargs) -> Settings:
 
 
 class SleepCodingServiceTests(unittest.TestCase):
+    def test_heuristic_execution_draft_does_not_write_docs_e2e_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database_path = Path(temp_dir) / "sleep_coding.db"
+            settings = build_settings(database_path)
+            github = FakeGitHubService()
+            service = SleepCodingService(
+                settings=settings,
+                github=github,
+                channel=FakeChannelService(),
+                git_workspace=FakeGitWorkspaceService(),
+                validator=FakeValidationRunner("passed"),
+                agent_runtime=FakeAgentRuntime(),
+                mcp_client=build_github_mcp(github),
+            )
+            issue = SleepCodingIssue(
+                issue_number=56,
+                title="Add minimal documentation",
+                body="Please add a docs markdown artifact for validation.",
+                html_url="https://github.com/tiezhuli001/youmeng-gateway/issues/56",
+            )
+
+            draft = service._build_heuristic_execution_draft(
+                issue,
+                service._build_heuristic_plan(issue),
+                "codex/issue-56-sleep-coding",
+            )
+
+            self.assertEqual(draft.file_changes, [])
+
     def test_heuristic_execution_draft_adds_readme_change_when_issue_mentions_readme(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             database_path = Path(temp_dir) / "sleep_coding.db"
@@ -363,6 +408,57 @@ class SleepCodingServiceTests(unittest.TestCase):
             )
 
             self.assertEqual(updated.status, "in_review")
+
+    def test_approve_plan_prefers_local_execution_command_when_configured(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            database_path = root / "sleep_coding.db"
+            runner = root / "fake_coding_runner.py"
+            runner.write_text(
+                "\n".join(
+                    [
+                        "import json",
+                        "import pathlib",
+                        "import sys",
+                        "",
+                        "repo = pathlib.Path.cwd()",
+                        "(repo / 'generated.txt').write_text('local-first execution\\n', encoding='utf-8')",
+                        "print(json.dumps({",
+                        "  'artifact_markdown': '## Summary\\nExecuted local coding command',",
+                        "  'commit_message': 'feat: local-first coding command'",
+                        "}))",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            settings = build_settings(
+                database_path,
+                sleep_coding_execution_command=f"python {runner}",
+            )
+            github = FakeGitHubService()
+            git_workspace = FakeGitWorkspaceService(root / "worktrees")
+            agent_runtime = FakeAgentRuntime()
+            service = SleepCodingService(
+                settings=settings,
+                github=github,
+                channel=FakeChannelService(),
+                git_workspace=git_workspace,
+                validator=FakeValidationRunner("passed"),
+                ledger=TokenLedgerService(settings),
+                agent_runtime=agent_runtime,
+                mcp_client=build_github_mcp(github),
+            )
+            task = service.start_task(SleepCodingTaskRequest(issue_number=20))
+
+            updated = service.apply_action(
+                task.task_id,
+                SleepCodingTaskActionRequest(action="approve_plan"),
+            )
+
+            self.assertEqual(updated.status, "in_review")
+            worktree = root / "worktrees" / "codex__issue-20-sleep-coding"
+            self.assertTrue((worktree / "generated.txt").exists())
+            self.assertEqual(len(agent_runtime.calls), 1)
     
     def test_start_and_approve_plan_append_usage_to_kickoff_request(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -419,9 +515,12 @@ class SleepCodingServiceTests(unittest.TestCase):
     def test_start_task_raises_when_plan_llm_fails_with_provider_configured(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             database_path = Path(temp_dir) / "sleep_coding.db"
+            platform_config_path = Path(temp_dir) / "platform.json"
+            platform_config_path.write_text("{}", encoding="utf-8")
             settings = Settings(
                 app_env="development",
                 database_url=f"sqlite:///{database_path}",
+                platform_config_path=str(platform_config_path),
                 github_repository="tiezhuli001/youmeng-gateway",
                 langsmith_tracing=False,
                 minimax_api_key="test-key",
@@ -445,9 +544,15 @@ class SleepCodingServiceTests(unittest.TestCase):
     def test_apply_action_raises_when_execution_llm_fails_with_provider_configured(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             database_path = Path(temp_dir) / "sleep_coding.db"
+            platform_config_path = Path(temp_dir) / "platform.json"
+            platform_config_path.write_text(
+                '{"sleep_coding":{"execution":{"allow_llm_fallback":true}}}',
+                encoding="utf-8",
+            )
             settings = Settings(
                 app_env="development",
                 database_url=f"sqlite:///{database_path}",
+                platform_config_path=str(platform_config_path),
                 github_repository="tiezhuli001/youmeng-gateway",
                 langsmith_tracing=False,
                 minimax_api_key="test-key",
@@ -469,6 +574,39 @@ class SleepCodingServiceTests(unittest.TestCase):
             service.agent_runtime.mcp = build_github_mcp(github)
 
             with self.assertRaisesRegex(RuntimeError, "LLM provider is unreachable"):
+                service.apply_action(
+                    task.task_id,
+                    SleepCodingTaskActionRequest(action="approve_plan"),
+                )
+
+    def test_apply_action_requires_local_execution_command_when_llm_fallback_disabled(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database_path = Path(temp_dir) / "sleep_coding.db"
+            platform_config_path = Path(temp_dir) / "platform.json"
+            platform_config_path.write_text("{}", encoding="utf-8")
+            settings = Settings(
+                app_env="development",
+                database_url=f"sqlite:///{database_path}",
+                platform_config_path=str(platform_config_path),
+                github_repository="tiezhuli001/youmeng-gateway",
+                langsmith_tracing=False,
+                minimax_api_key="test-key",
+                openai_api_key=None,
+            )
+            github = FakeGitHubService()
+            service = SleepCodingService(
+                settings=settings,
+                github=github,
+                channel=FakeChannelService(),
+                git_workspace=FakeGitWorkspaceService(),
+                validator=FakeValidationRunner("passed"),
+                ledger=TokenLedgerService(settings),
+                agent_runtime=FakeAgentRuntime(),
+                mcp_client=build_github_mcp(github),
+            )
+            task = service.start_task(SleepCodingTaskRequest(issue_number=23))
+
+            with self.assertRaisesRegex(RuntimeError, "Local sleep coding execution command is required"):
                 service.apply_action(
                     task.task_id,
                     SleepCodingTaskActionRequest(action="approve_plan"),
@@ -713,7 +851,16 @@ class GitWorkspaceServiceTests(unittest.TestCase):
             nested.parent.mkdir(parents=True, exist_ok=True)
             nested.write_text("live smoke\n", encoding="utf-8")
 
-            service = GitWorkspaceService(build_settings(repo_root / "test.db"), mcp_client=MCPClient())
+            platform_config_path = Path(temp_dir) / "platform.json"
+            platform_config_path.write_text("{}", encoding="utf-8")
+            settings = Settings(
+                app_env="test",
+                database_url=f"sqlite:///{repo_root / 'test.db'}",
+                platform_config_path=str(platform_config_path),
+                github_repository="tiezhuli001/youmeng-gateway",
+                langsmith_tracing=False,
+            )
+            service = GitWorkspaceService(settings, mcp_client=MCPClient())
             service.repo_path = repo_root
             collected = service._collect_changed_files(worktree_path)
 

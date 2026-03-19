@@ -3,9 +3,9 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "youmeng-gateway"
+name = "marten"
 version = "0.1.0"
-description = "Minimal gateway skeleton for a personal multi-agent platform."
+description = "Local-first agent control plane for issue-driven coding and review workflows."
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 dependencies = [

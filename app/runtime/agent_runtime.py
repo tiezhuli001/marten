@@ -95,7 +95,7 @@ class AgentRuntime:
             else "No MCP tools are currently available."
         )
         return (
-            f"You are {agent.agent_id} for youmeng-gateway.\n"
+            f"You are {agent.agent_id} for {self.settings.app_name}.\n"
             f"{agent.system_instruction}\n\n"
             "Priorities:\n"
             "1. Follow workspace and skill instructions.\n"

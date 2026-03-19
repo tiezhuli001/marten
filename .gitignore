@@ -3,10 +3,12 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .DS_Store
+.sleep_coding/
+docs/internal/
 data/
 *.egg-info/
 *.json
 *.env
 .venv312
-.worktrees
+.worktrees/
 docs/review-runs/

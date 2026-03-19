@@ -222,7 +222,7 @@ class FakeReviewService:
         self.blocking_sequence = list(blocking_sequence)
         self.reviews: list[ReviewRun] = []
 
-    def trigger_for_task(self, task_id: str) -> ReviewRun:
+    def trigger_for_task(self, task_id: str, *, write_comment: bool = True) -> ReviewRun:
         task = self.sleep_coding.get_task(task_id)
         review_index = len(self.reviews) + 1
         is_blocking = self.blocking_sequence.pop(0) if self.blocking_sequence else False
@@ -237,7 +237,11 @@ class FakeReviewService:
             ),
             status="completed",
             artifact_path=f"docs/review-runs/review-{review_index}.md",
-            comment_url=f"https://github.com/{task.repo}/pull/88#issuecomment-{review_index}",
+            comment_url=(
+                f"https://github.com/{task.repo}/pull/88#issuecomment-{review_index}"
+                if write_comment
+                else None
+            ),
             summary="review",
             content="P1 blocking issue" if is_blocking else "P2 minor issue",
             severity_counts={"P1": 1} if is_blocking else {"P2": 1},
@@ -261,7 +265,16 @@ class FakeReviewService:
     def count_blocking_reviews(self, task_id: str) -> int:
         return sum(1 for review in self.reviews if review.task_id == task_id and review.is_blocking)
 
-    def apply_action(self, review_id: str, payload: ReviewActionRequest) -> ReviewRun:
+    def list_task_reviews(self, task_id: str) -> list[ReviewRun]:
+        return [review for review in self.reviews if review.task_id == task_id]
+
+    def apply_action(
+        self,
+        review_id: str,
+        payload: ReviewActionRequest,
+        *,
+        write_remote: bool = True,
+    ) -> ReviewRun:
         review = next(review for review in self.reviews if review.review_id == review_id)
         review.status = "approved" if payload.action == "approve_review" else "changes_requested"
         if review.task_id:
@@ -277,11 +290,20 @@ class FakeReviewService:
                 )
         return review
 
+    def publish_final_result(self, review_id: str, action: str) -> ReviewRun:
+        review = next(review for review in self.reviews if review.review_id == review_id)
+        review.comment_url = f"https://github.com/{review.source.repo}/pull/88#final-{action}"
+        return review
+
 
 def build_settings(database_path: Path) -> Settings:
+    platform_config_path = database_path.parent / "platform.json"
+    if not platform_config_path.exists():
+        platform_config_path.write_text("{}", encoding="utf-8")
     return Settings(
         app_env="test",
         database_url=f"sqlite:///{database_path}",
+        platform_config_path=str(platform_config_path),
         review_runs_dir=str(database_path.parent / "review-runs"),
         github_repository="tiezhuli001/youmeng-gateway",
         openai_api_key=None,

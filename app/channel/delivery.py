@@ -20,6 +20,30 @@ class DeliveryMessageBuilder:
         ]
         return title, lines
 
+    def build_review_feedback(
+        self,
+        task: SleepCodingTask,
+        review: ReviewRun,
+        *,
+        review_round: int,
+        max_repair_rounds: int,
+    ) -> tuple[str, list[str]]:
+        title = f"[Ralph] Review round {review_round} for Issue #{task.issue_number}"
+        lines = [
+            f"Task: {task.task_id}",
+            f"Repo: {task.repo}",
+            f"PR: {task.pull_request.html_url if task.pull_request else 'n/a'}",
+            f"Blocking: {'yes' if review.is_blocking else 'no'}",
+            f"Summary: {review.summary or 'n/a'}",
+            f"Review artifact: {review.artifact_path or 'n/a'}",
+            f"Rounds: {review_round}/{max_repair_rounds}",
+        ]
+        findings = review.findings[:5]
+        if findings:
+            lines.append("Findings:")
+            lines.extend(f"- [{item.severity}] {item.title}" for item in findings)
+        return title, lines
+
     def build_final_delivery(self, task: SleepCodingTask, review: ReviewRun | None = None) -> tuple[str, list[str]]:
         title = self._build_final_delivery_title(task)
         lines = [

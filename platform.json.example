@@ -1,6 +1,6 @@
 {
   "github": {
-    "repository": "tiezhuli001/youmeng-gateway"
+    "repository": "your-org/marten"
   },
   "channel": {
     "provider": "feishu"
@@ -17,6 +17,9 @@
       "enable_commit": false,
       "enable_push": false,
       "remote_name": "origin"
+    },
+    "execution": {
+      "command": "opencode run --format default"
     },
     "validation": {
       "command": "python scripts/run_sleep_coding_validation.py"
@@ -35,6 +38,8 @@
   "review": {
     "max_repair_rounds": 3,
     "skill_name": "code-review",
-    "skill_command": null
+    "skill_command": null,
+    "writeback_final_only": true,
+    "follow_up_delay_seconds": 30
   }
 }

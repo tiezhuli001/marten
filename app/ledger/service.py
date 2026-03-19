@@ -44,7 +44,7 @@ class TokenLedgerService:
         except PermissionError:
             # Keep project-local storage as the default. Only fall back in restricted
             # environments like the current sandbox, where the repo path is read-only.
-            fallback_dir = Path(tempfile.gettempdir()) / "youmeng-gateway"
+            fallback_dir = Path(tempfile.gettempdir()) / "marten"
             fallback_dir.mkdir(parents=True, exist_ok=True)
             self.database_path = fallback_dir / self.database_path.name
 

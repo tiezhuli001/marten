@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import json
+import shlex
+import subprocess
+import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -104,6 +108,7 @@ class RalphDraftingService:
         issue: SleepCodingIssue,
         plan: SleepCodingPlan,
         head_branch: str,
+        worktree_path: Path | None = None,
         control_task_id: str | None = None,
     ) -> tuple[SleepCodingExecutionDraft, TokenUsage]:
         run_session_id = None
@@ -125,6 +130,24 @@ class RalphDraftingService:
                 f"{plan.model_dump_json(indent=2)}"
             ),
         )
+        command = self._resolve_execution_command(worktree_path)
+        if command is not None and worktree_path is not None:
+            return self._run_local_execution_command(
+                command=command,
+                prompt=prompt,
+                worktree_path=worktree_path,
+                issue=issue,
+                plan=plan,
+                head_branch=head_branch,
+            )
+        if (
+            self.settings.app_env != "test"
+            and not self.settings.resolved_sleep_coding_execution_allow_llm_fallback
+        ):
+            raise RuntimeError(
+                "Local sleep coding execution command is required. "
+                "Configure `sleep_coding.execution.command` or explicitly enable `sleep_coding.execution.allow_llm_fallback`."
+            )
         if self.settings.openai_api_key or self.settings.minimax_api_key:
             try:
                 response = self.agent_runtime.generate_structured_output(
@@ -152,6 +175,82 @@ class RalphDraftingService:
             output_text=draft.model_dump_json(),
         )
         return draft, usage
+
+    def _run_local_execution_command(
+        self,
+        *,
+        command: list[str],
+        prompt: str,
+        worktree_path: Path,
+        issue: SleepCodingIssue,
+        plan: SleepCodingPlan,
+        head_branch: str,
+    ) -> tuple[SleepCodingExecutionDraft, TokenUsage]:
+        context = self._build_local_execution_context(
+            issue=issue,
+            plan=plan,
+            head_branch=head_branch,
+            worktree_path=worktree_path,
+        )
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".md", delete=False) as handle:
+            handle.write(context)
+            context_path = Path(handle.name)
+        try:
+            completed = subprocess.run(
+                [*command, prompt, "-f", str(context_path)],
+                cwd=worktree_path,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+        finally:
+            context_path.unlink(missing_ok=True)
+        output = "\n".join(part for part in (completed.stdout, completed.stderr) if part).strip()
+        if completed.returncode != 0:
+            raise RuntimeError(
+                f"Sleep coding execution command failed with exit_code={completed.returncode}: {output}"
+            )
+        try:
+            payload = json.loads(output)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("Sleep coding execution command must return strict JSON output.") from exc
+        if not isinstance(payload, dict):
+            raise RuntimeError("Sleep coding execution command must return strict JSON output.")
+        draft = SleepCodingExecutionDraft.model_validate(payload)
+        return (
+            draft,
+            self.estimate_usage(
+                step_name="sleep_coding_execution",
+                input_text=f"{prompt}\n\n{context}",
+                output_text=output,
+            ),
+        )
+
+    def _build_local_execution_context(
+        self,
+        *,
+        issue: SleepCodingIssue,
+        plan: SleepCodingPlan,
+        head_branch: str,
+        worktree_path: Path,
+    ) -> str:
+        return (
+            f"Local Worktree: {worktree_path}\n"
+            f"Issue #{issue.issue_number}: {issue.title}\n"
+            f"Branch: {head_branch}\n\n"
+            "Read and edit files directly in this worktree. "
+            "Inspect the repository before making changes. "
+            "Do not return file contents in JSON; write files locally and only summarize the task artifact and commit message.\n\n"
+            "Approved plan:\n"
+            f"{plan.model_dump_json(indent=2)}\n"
+        )
+
+    def _resolve_execution_command(self, worktree_path: Path | None) -> list[str] | None:
+        if worktree_path is None:
+            return None
+        if self.settings.resolved_sleep_coding_execution_command:
+            return shlex.split(self.settings.resolved_sleep_coding_execution_command)
+        return None
 
     def build_heuristic_execution_draft(
         self,
@@ -197,19 +296,7 @@ class RalphDraftingService:
                         )
                     ]
         if any(keyword in issue_text for keyword in ("doc", "docs", "documentation", "markdown")):
-            path = f"docs/e2e/issue-{issue.issue_number}.md"
-            content = (
-                f"# Ralph E2E Issue {issue.issue_number}\n\n"
-                f"{marker}\n\n"
-                f"Issue: {issue.title}\n"
-            )
-            return [
-                SleepCodingFileChange(
-                    path=path,
-                    content=content,
-                    description="Create a minimal documentation artifact for MVP integration validation.",
-                )
-            ]
+            return []
         return []
 
     def estimate_usage(

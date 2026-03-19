@@ -1,7 +1,7 @@
 # MVP Agent-First Architecture
 
 > 更新时间：2026-03-16
-> 目标：参考 OpenClaw 的控制平面与 agent runtime 思路，为 `youmeng-gateway` 定义更适合当前 MVP 的 agent-first 架构。
+> 目标：参考 OpenClaw 的控制平面与 agent runtime 思路，为 `Marten` 定义更适合当前 MVP 的 agent-first 架构。
 
 ## 一、设计目标
 

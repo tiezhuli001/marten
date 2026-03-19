@@ -22,6 +22,7 @@ from app.models.schemas import (
 )
 from app.runtime.mcp import InMemoryMCPServer, MCPClient
 from app.agents.code_review_agent import GitLabService, ReviewService, ReviewSkillRunResult, ReviewSkillService
+from app.agents.code_review_agent.materializer import ReviewMaterializationError
 from app.channel.notifications import ChannelNotificationResult
 from app.agents.ralph import SleepCodingService
 
@@ -243,9 +244,13 @@ class FailingAgentRuntime:
 
 
 def build_settings(database_path: Path, review_runs_dir: Path) -> Settings:
+    platform_config_path = database_path.parent / "platform.json"
+    if not platform_config_path.exists():
+        platform_config_path.write_text("{}", encoding="utf-8")
     return Settings(
         app_env="test",
         database_url=f"sqlite:///{database_path}",
+        platform_config_path=str(platform_config_path),
         review_runs_dir=str(review_runs_dir),
         github_repository="tiezhuli001/youmeng-gateway",
         langsmith_tracing=False,
@@ -519,6 +524,84 @@ class ReviewServiceTests(unittest.TestCase):
             self.assertEqual(len(captured), 1)
             self.assertEqual(captured[0]["event"], "COMMENT")
             self.assertEqual(len(github.pr_comments), 0)
+
+    def test_github_pr_review_raises_when_materialize_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = build_settings(root / "review.db", root / "review-runs")
+            github = FakeGitHubService()
+            mcp_client = build_github_mcp(github)
+            review_service = ReviewService(
+                settings=settings,
+                github=github,
+                gitlab=FakeGitLabService(),
+                sleep_coding=SleepCodingService(
+                    settings=settings,
+                    github=github,
+                    channel=FakeChannelService(),
+                    git_workspace=FakeGitWorkspaceService(),
+                    validator=FakeValidationRunner(),
+                    ledger=TokenLedgerService(settings),
+                    mcp_client=mcp_client,
+                ),
+                skill=FakeReviewSkillService(),
+                mcp_client=mcp_client,
+            )
+
+            with patch.object(
+                review_service.materializer,
+                "materialize",
+                side_effect=ReviewMaterializationError("cannot fetch remote review source"),
+            ):
+                with self.assertRaisesRegex(ReviewMaterializationError, "cannot fetch remote review source"):
+                    review_service.start_review(
+                        ReviewRunRequest(
+                            source=ReviewSource(
+                                source_type="github_pr",
+                                repo="owner/repo",
+                                pr_number=12,
+                            )
+                        )
+                    )
+
+    def test_sleep_coding_task_review_falls_back_when_materialize_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = build_settings(root / "review.db", root / "review-runs")
+            github = FakeGitHubService()
+            mcp_client = build_github_mcp(github)
+            sleep_coding = SleepCodingService(
+                settings=settings,
+                github=github,
+                channel=FakeChannelService(),
+                git_workspace=FakeGitWorkspaceService(),
+                validator=FakeValidationRunner(),
+                ledger=TokenLedgerService(settings),
+                mcp_client=mcp_client,
+            )
+            task = sleep_coding.start_task(SleepCodingTaskRequest(issue_number=55))
+            task = sleep_coding.apply_action(
+                task.task_id,
+                SleepCodingTaskActionRequest(action="approve_plan"),
+            )
+            review_service = ReviewService(
+                settings=settings,
+                github=github,
+                gitlab=FakeGitLabService(),
+                sleep_coding=sleep_coding,
+                skill=FakeReviewSkillService(),
+                mcp_client=mcp_client,
+            )
+
+            with patch.object(
+                review_service.materializer,
+                "materialize",
+                side_effect=ReviewMaterializationError("worktree missing"),
+            ):
+                review = review_service.trigger_for_task(task.task_id)
+
+            self.assertEqual(review.status, "completed")
+            self.assertIn("Issue Title: Review integration", review.content)
 
     def test_command_output_json_is_parsed_into_structured_findings(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

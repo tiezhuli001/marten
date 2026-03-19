@@ -5,7 +5,7 @@
 
 ## 目标没有变化
 
-当前项目目标仍然是把 `youmeng-gateway` 收口成一个极简的 agent-first 仓库：
+当前项目目标仍然是把 `Marten` 收口成一个极简的 agent-first 仓库：
 
 - `channel -> control plane -> runtime -> agent`
 - `LLM + MCP + skill` 优先

@@ -175,8 +175,10 @@ class FakeGitHubService:
         self.issues: dict[int, SleepCodingIssue] = {}
         self.issue_comments: list[tuple[int, str]] = []
         self.pr_comments: list[tuple[int, str]] = []
+        self.create_issue_calls = 0
 
     def create_issue(self, repo: str, draft: GitHubIssueDraft) -> GitHubIssueResult:
+        self.create_issue_calls += 1
         self.issue_counter += 1
         issue = SleepCodingIssue(
             issue_number=self.issue_counter,
@@ -483,6 +485,80 @@ class MVPE2ETests(unittest.TestCase):
             self.assertTrue(
                 any(event.event_type == "background_follow_up_completed" for event in child_events)
             )
+
+    def test_existing_issue_to_worker_to_review_to_final_delivery_without_duplicate_issue_creation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = build_settings(Path(temp_dir) / "mvp-e2e-existing-issue.db")
+            github = FakeGitHubService()
+            github.issues[56] = SleepCodingIssue(
+                issue_number=56,
+                title="Implement local-first review loop",
+                body=(
+                    "Use the existing GitHub issue as the source of truth.\n\n"
+                    "Acceptance criteria:\n"
+                    "- worker polls the issue once\n"
+                    "- Ralph codes in a local worktree\n"
+                    "- review runs locally before final writeback\n"
+                ),
+                html_url="https://github.com/tiezhuli001/youmeng-gateway/issues/56",
+                labels=["agent:ralph", "workflow:sleep-coding"],
+                is_dry_run=True,
+            )
+            channel = FakeChannelService()
+            ledger = TokenLedgerService(settings)
+            github_mcp = build_github_mcp(github)
+            sleep_coding = SleepCodingService(
+                settings=settings,
+                github=github,
+                channel=channel,
+                git_workspace=FakeGitWorkspaceService(),
+                validator=FakeValidationRunner(),
+                ledger=ledger,
+                mcp_client=github_mcp,
+            )
+            worker = SleepCodingWorkerService(
+                settings=settings,
+                github=github,
+                sleep_coding=sleep_coding,
+                mcp_client=github_mcp,
+            )
+            review = ReviewService(
+                settings=settings,
+                github=github,
+                sleep_coding=sleep_coding,
+                skill=FakeReviewSkillService(),
+                mcp_client=github_mcp,
+            )
+            automation = AutomationService(
+                settings=settings,
+                sleep_coding=sleep_coding,
+                review=review,
+                worker=worker,
+                channel=channel,
+                ledger=ledger,
+                background_jobs=ImmediateBackgroundJobs(),
+            )
+
+            poll = automation.process_worker_poll_async(
+                SleepCodingWorkerPollRequest(auto_approve_plan=True)
+            )
+
+            self.assertEqual(poll.claimed_count, 1)
+            self.assertEqual(len(github.issues), 1)
+            self.assertEqual(github.create_issue_calls, 0)
+
+            task_id = poll.tasks[0].task_id
+            task = sleep_coding.get_task(task_id)
+            reviews = review.list_task_reviews(task_id)
+
+            self.assertEqual(task.issue_number, 56)
+            self.assertEqual(task.status, "approved")
+            self.assertEqual(task.background_follow_up_status, "completed")
+            self.assertEqual(len(reviews), 1)
+            self.assertEqual(reviews[0].status, "approved")
+            self.assertTrue(github.pr_comments)
+            self.assertIn("## Ralph Review Decision", github.pr_comments[-1][1])
+            self.assertTrue(any("任务完成" in title for title, _ in channel.notifications))
 
     def test_gateway_api_to_worker_to_final_delivery_keeps_single_request_usage(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

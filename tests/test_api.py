@@ -13,14 +13,15 @@ from app.main import app
 from app.api.routes import (
     get_automation_service,
     get_feishu_webhook_service,
+    get_gateway_control_plane_service,
     get_integration_diagnostics_service,
     get_main_agent_service,
     get_review_service,
+    get_session_registry_service,
     get_sleep_coding_service,
     get_sleep_coding_worker_service,
     get_task_registry_service,
     get_token_ledger_service,
-    get_workflow_runner,
     get_worker_scheduler_service,
 )
 from app.models.schemas import (
@@ -40,7 +41,7 @@ from app.models.schemas import (
 class ApiTests(unittest.TestCase):
     def setUp(self) -> None:
         get_settings.cache_clear()
-        get_workflow_runner.cache_clear()
+        get_gateway_control_plane_service.cache_clear()
         get_sleep_coding_service.cache_clear()
         get_automation_service.cache_clear()
         get_feishu_webhook_service.cache_clear()
@@ -48,6 +49,7 @@ class ApiTests(unittest.TestCase):
         get_review_service.cache_clear()
         get_sleep_coding_worker_service.cache_clear()
         get_task_registry_service.cache_clear()
+        get_session_registry_service.cache_clear()
         get_token_ledger_service.cache_clear()
         get_worker_scheduler_service.cache_clear()
         get_integration_diagnostics_service.cache_clear()
@@ -176,7 +178,7 @@ class ApiTests(unittest.TestCase):
 
         app.dependency_overrides[get_main_agent_service] = lambda: FakeMainAgentService()
 
-        class FakeWorkflowRunner:
+        class FakeGatewayControlPlaneService:
             def run(self, payload):
                 if "统计最近7天 token 消耗" in payload.content:
                     return {
@@ -220,7 +222,9 @@ class ApiTests(unittest.TestCase):
                     "task_id": None,
                 }
 
-        app.dependency_overrides[get_workflow_runner] = lambda: FakeWorkflowRunner()
+        app.dependency_overrides[get_gateway_control_plane_service] = (
+            lambda: FakeGatewayControlPlaneService()
+        )
 
         class FakeSleepCodingService:
             def start_task(self, payload):
@@ -472,7 +476,7 @@ class ApiTests(unittest.TestCase):
     def tearDown(self) -> None:
         app.dependency_overrides.clear()
         get_settings.cache_clear()
-        get_workflow_runner.cache_clear()
+        get_gateway_control_plane_service.cache_clear()
         get_sleep_coding_service.cache_clear()
         get_automation_service.cache_clear()
         get_feishu_webhook_service.cache_clear()
@@ -480,6 +484,7 @@ class ApiTests(unittest.TestCase):
         get_review_service.cache_clear()
         get_sleep_coding_worker_service.cache_clear()
         get_task_registry_service.cache_clear()
+        get_session_registry_service.cache_clear()
         get_token_ledger_service.cache_clear()
         get_worker_scheduler_service.cache_clear()
         get_integration_diagnostics_service.cache_clear()

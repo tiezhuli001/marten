@@ -7,7 +7,7 @@ from app.models.schemas import GatewayMessageResponse, TokenUsage
 from app.services.feishu import FeishuWebhookService
 
 
-class FakeWorkflowRunner:
+class FakeGatewayControlPlaneService:
     def __init__(self) -> None:
         self.requests = []
 
@@ -55,7 +55,7 @@ class FeishuWebhookServiceTests(unittest.TestCase):
     def test_handle_url_verification_returns_challenge(self) -> None:
         service = FeishuWebhookService(
             Settings(app_env="test", feishu_verification_token="token-1", feishu_encrypt_key=None),
-            workflow=FakeWorkflowRunner(),
+            control_plane=FakeGatewayControlPlaneService(),
             automation=FakeAutomationService(),
         )
         payload = {
@@ -69,7 +69,7 @@ class FeishuWebhookServiceTests(unittest.TestCase):
         self.assertEqual(response, {"challenge": "challenge-value"})
 
     def test_handle_message_event_maps_user_and_calls_workflow(self) -> None:
-        workflow = FakeWorkflowRunner()
+        control_plane = FakeGatewayControlPlaneService()
         automation = FakeAutomationService()
         settings = Settings(
             app_env="test",
@@ -78,7 +78,7 @@ class FeishuWebhookServiceTests(unittest.TestCase):
             platform_config_path="/tmp/does-not-exist-platform.json",
             sleep_coding_worker_auto_approve_plan=True,
         )
-        service = FeishuWebhookService(settings, workflow=workflow, automation=automation)
+        service = FeishuWebhookService(settings, control_plane=control_plane, automation=automation)
         payload = {
             "schema": "2.0",
             "header": {"event_type": "im.message.receive_v1"},
@@ -101,9 +101,9 @@ class FeishuWebhookServiceTests(unittest.TestCase):
         self.assertEqual(response["code"], 0)
         self.assertEqual(response["event_type"], "im.message.receive_v1")
         self.assertEqual(response["user_id"], "feishu:ou_123")
-        self.assertEqual(workflow.requests[0].user_id, "feishu:ou_123")
-        self.assertEqual(workflow.requests[0].source, "feishu")
-        self.assertEqual(workflow.requests[0].content, "请帮我总结今天进度")
+        self.assertEqual(control_plane.requests[0].user_id, "feishu:ou_123")
+        self.assertEqual(control_plane.requests[0].source, "feishu")
+        self.assertEqual(control_plane.requests[0].content, "请帮我总结今天进度")
         self.assertTrue(response["automation_follow_up"]["triggered"])
         self.assertEqual(response["automation_follow_up"]["mode"], "worker_poll")
         self.assertEqual(response["automation_follow_up"]["claimed_count"], 1)
@@ -117,7 +117,7 @@ class FeishuWebhookServiceTests(unittest.TestCase):
                 feishu_verification_token="token-1",
                 feishu_encrypt_key="encrypt-key",
             ),
-            workflow=FakeWorkflowRunner(),
+            control_plane=FakeGatewayControlPlaneService(),
             automation=FakeAutomationService(),
         )
         payload = {

@@ -8,10 +8,11 @@ from fastapi.testclient import TestClient
 from app.api.routes import (
     get_automation_service,
     get_feishu_webhook_service,
+    get_gateway_control_plane_service,
     get_review_service,
     get_sleep_coding_service,
-    get_workflow_runner,
 )
+from app.control.gateway import GatewayControlPlaneService
 from app.main import app
 from app.core.config import Settings
 from app.ledger.service import TokenLedgerService
@@ -379,7 +380,7 @@ class MVPE2ETests(unittest.TestCase):
         from app.core.config import get_settings
 
         get_settings.cache_clear()
-        get_workflow_runner.cache_clear()
+        get_gateway_control_plane_service.cache_clear()
         get_automation_service.cache_clear()
         get_feishu_webhook_service.cache_clear()
         get_review_service.cache_clear()
@@ -390,7 +391,7 @@ class MVPE2ETests(unittest.TestCase):
         from app.core.config import get_settings
 
         get_settings.cache_clear()
-        get_workflow_runner.cache_clear()
+        get_gateway_control_plane_service.cache_clear()
         get_automation_service.cache_clear()
         get_feishu_webhook_service.cache_clear()
         get_review_service.cache_clear()
@@ -542,15 +543,14 @@ class MVPE2ETests(unittest.TestCase):
                 ledger=ledger,
                 mcp_client=github_mcp,
             )
-            from app.graph.workflow import WorkflowRunner
+            control_plane = GatewayControlPlaneService(
+                settings=settings,
+                ledger=ledger,
+                main_agent=main_agent,
+                sleep_coding=sleep_coding,
+            )
 
-            workflow = WorkflowRunner()
-            workflow.settings = settings
-            workflow.ledger = ledger
-            workflow.main_agent = main_agent
-            workflow.sleep_coding = sleep_coding
-
-            app.dependency_overrides[get_workflow_runner] = lambda: workflow
+            app.dependency_overrides[get_gateway_control_plane_service] = lambda: control_plane
             app.dependency_overrides[get_automation_service] = lambda: automation
             app.dependency_overrides[get_sleep_coding_service] = lambda: sleep_coding
             app.dependency_overrides[get_review_service] = lambda: review
@@ -712,16 +712,19 @@ class MVPE2ETests(unittest.TestCase):
                 ledger=ledger,
                 mcp_client=github_mcp,
             )
-            from app.graph.workflow import WorkflowRunner
+            control_plane = GatewayControlPlaneService(
+                settings=settings,
+                ledger=ledger,
+                main_agent=main_agent,
+                sleep_coding=sleep_coding,
+            )
+            feishu = FeishuWebhookService(
+                settings,
+                control_plane=control_plane,
+                automation=automation,
+            )
 
-            workflow = WorkflowRunner()
-            workflow.settings = settings
-            workflow.ledger = ledger
-            workflow.main_agent = main_agent
-            workflow.sleep_coding = sleep_coding
-            feishu = FeishuWebhookService(settings, workflow=workflow, automation=automation)
-
-            app.dependency_overrides[get_workflow_runner] = lambda: workflow
+            app.dependency_overrides[get_gateway_control_plane_service] = lambda: control_plane
             app.dependency_overrides[get_automation_service] = lambda: automation
             app.dependency_overrides[get_sleep_coding_service] = lambda: sleep_coding
             app.dependency_overrides[get_review_service] = lambda: review

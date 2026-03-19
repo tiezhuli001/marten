@@ -1,6 +1,6 @@
 import unittest
 
-from app.graph.router import classify_intent
+from app.control.routing import classify_intent
 
 
 class IntentRouterTests(unittest.TestCase):

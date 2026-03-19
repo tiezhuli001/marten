@@ -249,6 +249,7 @@ class RuntimeComponentTests(unittest.TestCase):
             (workspace / "skills" / "issue-writer").mkdir(parents=True)
             (workspace / "AGENTS.md").write_text("Main agent rules.", encoding="utf-8")
             (workspace / "TOOLS.md").write_text("Use MCP first.", encoding="utf-8")
+            (workspace / "SOUL.md").write_text("Stay sharp.", encoding="utf-8")
             (workspace / "skills" / "issue-writer" / "SKILL.md").write_text(
                 "---\nname: issue-writer\ndescription: Write issues\n---\n# Instructions\nUse this skill.\n",
                 encoding="utf-8",
@@ -288,6 +289,44 @@ class RuntimeComponentTests(unittest.TestCase):
             self.assertIn("Use this skill.", system_prompt)
             self.assertIn("github.create_issue", system_prompt)
             self.assertIn("Main agent rules.", system_prompt)
+            self.assertIn("Stay sharp.", system_prompt)
+            self.assertIn("Memory Policy", system_prompt)
+            self.assertIn("Execution Policy", system_prompt)
+
+    def test_settings_resolve_agent_spec_prefers_agents_json(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            agents_json = root / "agents.json"
+            agents_json.write_text(
+                json.dumps(
+                    {
+                        "agents": {
+                            "main-agent": {
+                                "workspace": str(root / "agents" / "custom-main"),
+                                "skills": ["issue-writer", "triage"],
+                                "mcp_servers": ["github", "jira"],
+                                "model_profile": "fast",
+                                "system_instruction": "Custom intake agent.",
+                                "memory_policy": "session-summary",
+                                "execution_policy": "triage-first",
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            settings = Settings(agents_config_path=str(agents_json))
+
+            spec = settings.resolve_agent_spec("main-agent")
+
+            self.assertEqual(spec.agent_id, "main-agent")
+            self.assertEqual(spec.workspace, root / "agents" / "custom-main")
+            self.assertEqual(spec.skills, ["issue-writer", "triage"])
+            self.assertEqual(spec.mcp_servers, ["github", "jira"])
+            self.assertEqual(spec.model_profile, "fast")
+            self.assertEqual(spec.system_instruction, "Custom intake agent.")
+            self.assertEqual(spec.memory_policy, "session-summary")
+            self.assertEqual(spec.execution_policy, "triage-first")
 
     def test_github_mcp_adapter_maps_aliases_to_server_tools(self) -> None:
         base = InMemoryMCPServer()

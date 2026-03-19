@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from app.core.config import Settings
+from app.core.config import AgentSpec, Settings
 from app.models.schemas import LLMMessage, LLMRequest, LLMResponse
 from app.runtime.llm import SharedLLMRuntime
 from app.runtime.mcp import MCPClient
@@ -19,6 +19,21 @@ class AgentDescriptor:
     mcp_servers: list[str]
     system_instruction: str
     model_profile: str | None = None
+    memory_policy: str = "short-memory"
+    execution_policy: str = "default"
+
+    @classmethod
+    def from_spec(cls, spec: AgentSpec) -> "AgentDescriptor":
+        return cls(
+            agent_id=spec.agent_id,
+            workspace=spec.workspace,
+            skill_names=spec.skills,
+            mcp_servers=spec.mcp_servers,
+            system_instruction=spec.system_instruction,
+            model_profile=spec.model_profile,
+            memory_policy=spec.memory_policy,
+            execution_policy=spec.execution_policy,
+        )
 
 
 class AgentRuntime:
@@ -86,6 +101,9 @@ class AgentRuntime:
             "1. Follow workspace and skill instructions.\n"
             "2. Prefer the listed skills for cognition-heavy work.\n"
             "3. Use MCP tools for external system operations; if required MCP tools are unavailable, stop and surface the missing configuration.\n\n"
+            "Agent Policies:\n"
+            f"- Memory Policy: {agent.memory_policy}\n"
+            f"- Execution Policy: {agent.execution_policy}\n\n"
             "Workspace Instructions:\n"
             f"{workspace_instructions}\n\n"
             "Available Skills:\n"
@@ -100,7 +118,7 @@ class AgentRuntime:
 
     def _load_workspace_instructions(self, workspace: Path) -> str:
         sections: list[str] = []
-        for filename in ("AGENTS.md", "TOOLS.md"):
+        for filename in ("AGENTS.md", "TOOLS.md", "SOUL.md"):
             path = workspace / filename
             if path.exists():
                 sections.append(f"## {filename}\n{path.read_text(encoding='utf-8').strip()}")

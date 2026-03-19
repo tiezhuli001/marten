@@ -151,6 +151,24 @@ class TaskRegistryService:
             if owned_connection:
                 current_connection.close()
 
+    def append_domain_event(
+        self,
+        task_id: str,
+        event_type: str,
+        payload: dict[str, Any],
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> ControlTaskEvent:
+        return self.append_event(
+            task_id,
+            event_type,
+            {
+                "domain_event": True,
+                **payload,
+            },
+            connection=connection,
+        )
+
     def get_task(self, task_id: str, *, connection: sqlite3.Connection | None = None) -> ControlTask:
         owned_connection = connection is None
         current_connection = connection or self._connect()

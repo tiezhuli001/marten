@@ -8,11 +8,12 @@
 
 1. `status/current-status.md`
 2. `status/session-handoff.md`
-3. `plans/mvp-execution-plan.md`
-4. `requirements/mvp-gap-analysis.md`
-5. `architecture/mvp-agent-first-architecture.md`
-6. `architecture/github-issue-pr-state-model.md`
-7. `runbooks/server-setup.md`
+3. `plans/capability-gap-and-optimization-plan.md`
+4. `plans/mvp-execution-plan.md`
+5. `requirements/mvp-gap-analysis.md`
+6. `architecture/mvp-agent-first-architecture.md`
+7. `architecture/github-issue-pr-state-model.md`
+8. `runbooks/server-setup.md`
 
 ## 目录说明
 

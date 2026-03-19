@@ -13,6 +13,8 @@ from app.models.schemas import ControlSession, ControlSessionType
 
 
 class SessionRegistryService:
+    _SHORT_MEMORY_LIMIT = 5
+
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
         self.database_path = self.settings.resolved_database_path
@@ -116,6 +118,91 @@ class SessionRegistryService:
         if row is None:
             raise ValueError(f"Control session not found: {session_id}")
         return self._deserialize_session(row)
+
+    def find_by_external_ref(self, external_ref: str) -> ControlSession | None:
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT * FROM control_sessions WHERE external_ref = ? LIMIT 1",
+                (external_ref,),
+            ).fetchone()
+        return self._deserialize_session(row) if row is not None else None
+
+    def update_session_payload(
+        self,
+        session_id: str,
+        payload_patch: dict[str, Any],
+    ) -> ControlSession:
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT * FROM control_sessions WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"Control session not found: {session_id}")
+            current_payload = json.loads(row["payload"] or "{}")
+            updated_payload = {**current_payload, **payload_patch}
+            connection.execute(
+                """
+                UPDATE control_sessions
+                SET payload = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE session_id = ?
+                """,
+                (json.dumps(updated_payload, ensure_ascii=True), session_id),
+            )
+            connection.commit()
+        return self.get_session(session_id)
+
+    def list_session_chain(self, session_id: str) -> list[ControlSession]:
+        sessions: list[ControlSession] = []
+        current = self.get_session(session_id)
+        sessions.append(current)
+        while current.parent_session_id:
+            current = self.get_session(current.parent_session_id)
+            sessions.append(current)
+        sessions.reverse()
+        return sessions
+
+    def append_short_memory(
+        self,
+        session_id: str,
+        summary: str,
+    ) -> ControlSession:
+        normalized = " ".join(summary.strip().split())
+        if not normalized:
+            return self.get_session(session_id)
+        session = self.get_session(session_id)
+        current_entries = session.payload.get("short_memory_entries")
+        entries = (
+            [str(item).strip() for item in current_entries if isinstance(item, str) and str(item).strip()]
+            if isinstance(current_entries, list)
+            else []
+        )
+        entries.append(normalized[:500])
+        trimmed = entries[-self._SHORT_MEMORY_LIMIT :]
+        return self.update_session_payload(
+            session_id,
+            {
+                "short_memory_summary": trimmed[-1],
+                "short_memory_entries": trimmed,
+            },
+        )
+
+    def list_short_memory(self, session_id: str | None) -> list[str]:
+        if not session_id:
+            return []
+        chain = self.list_session_chain(session_id)
+        summaries: list[str] = []
+        for session in chain:
+            raw_entries = session.payload.get("short_memory_entries")
+            if isinstance(raw_entries, list):
+                for item in raw_entries:
+                    if isinstance(item, str) and item.strip():
+                        summaries.append(item.strip())
+                continue
+            summary = session.payload.get("short_memory_summary")
+            if isinstance(summary, str) and summary.strip():
+                summaries.append(summary.strip())
+        return summaries
 
     def _ensure_parent_dir(self) -> None:
         try:

@@ -1,10 +1,24 @@
 import json
 import shlex
+from dataclasses import dataclass
 from functools import cached_property
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+@dataclass(frozen=True)
+class AgentSpec:
+    agent_id: str
+    workspace: Path
+    skills: list[str]
+    mcp_servers: list[str]
+    model_profile: str | None
+    system_instruction: str
+    memory_policy: str
+    execution_policy: str
 
 
 class Settings(BaseSettings):
@@ -279,6 +293,54 @@ class Settings(BaseSettings):
     def resolved_review_model_profile(self) -> str | None:
         return self._get_agent_setting("code-review-agent", "model_profile", None)
 
+    def resolve_agent_spec(self, agent_id: str) -> AgentSpec:
+        defaults = self._default_agent_spec(agent_id)
+        workspace_raw = self._get_agent_setting(agent_id, "workspace", defaults["workspace"])
+        workspace = Path(str(workspace_raw)).expanduser()
+        resolved_workspace = workspace if workspace.is_absolute() else self.project_root / workspace
+        skills = self._resolve_string_list(
+            self._get_agent_setting(agent_id, "skills", defaults["skills"])
+        )
+        mcp_servers = self._resolve_string_list(
+            self._get_agent_setting(agent_id, "mcp_servers", defaults["mcp_servers"])
+        )
+        model_profile = self._get_agent_setting(
+            agent_id,
+            "model_profile",
+            defaults["model_profile"],
+        )
+        system_instruction = str(
+            self._get_agent_setting(
+                agent_id,
+                "system_instruction",
+                defaults["system_instruction"],
+            )
+        ).strip()
+        memory_policy = str(
+            self._get_agent_setting(
+                agent_id,
+                "memory_policy",
+                defaults["memory_policy"],
+            )
+        ).strip()
+        execution_policy = str(
+            self._get_agent_setting(
+                agent_id,
+                "execution_policy",
+                defaults["execution_policy"],
+            )
+        ).strip()
+        return AgentSpec(
+            agent_id=agent_id,
+            workspace=resolved_workspace,
+            skills=skills,
+            mcp_servers=mcp_servers,
+            model_profile=str(model_profile).strip() if isinstance(model_profile, str) and model_profile.strip() else None,
+            system_instruction=system_instruction,
+            memory_policy=memory_policy or "short-memory",
+            execution_policy=execution_policy or "default",
+        )
+
     @property
     def resolved_review_skill_name(self) -> str:
         return str(
@@ -542,6 +604,47 @@ class Settings(BaseSettings):
             if isinstance(agent, dict) and key in agent:
                 return agent[key]
         return default
+
+    def _default_agent_spec(self, agent_id: str) -> dict[str, Any]:
+        defaults: dict[str, dict[str, Any]] = {
+            "main-agent": {
+                "workspace": self.main_agent_workspace,
+                "skills": self.main_agent_skills,
+                "mcp_servers": self.main_agent_mcp_servers,
+                "model_profile": "default",
+                "system_instruction": (
+                    "Convert user requests into executable GitHub issues that Ralph can execute "
+                    "through the sleep-coding workflow."
+                ),
+                "memory_policy": "short-memory",
+                "execution_policy": "issue-intake",
+            },
+            "ralph": {
+                "workspace": self.sleep_coding_workspace,
+                "skills": self.sleep_coding_skills,
+                "mcp_servers": self.sleep_coding_mcp_servers,
+                "model_profile": "coding",
+                "system_instruction": (
+                    "Plan and execute software tasks with concrete code changes, tests, and GitHub workflow hygiene."
+                ),
+                "memory_policy": "short-memory",
+                "execution_policy": "sleep-coding",
+            },
+            "code-review-agent": {
+                "workspace": self.review_workspace,
+                "skills": self.review_skills,
+                "mcp_servers": self.review_mcp_servers,
+                "model_profile": "review",
+                "system_instruction": (
+                    "Review code changes and return structured findings that automation can route."
+                ),
+                "memory_policy": "short-memory",
+                "execution_policy": "review",
+            },
+        }
+        if agent_id not in defaults:
+            raise ValueError(f"Unknown agent spec: {agent_id}")
+        return defaults[agent_id]
 
     def _get_platform_setting(
         self,

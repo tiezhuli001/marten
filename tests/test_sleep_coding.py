@@ -5,6 +5,7 @@ from pathlib import Path
 
 from app.core.config import Settings
 from app.ledger.service import TokenLedgerService
+from app.models.github_results import GitHubCommentResult
 from app.models.schemas import (
     GitExecutionResult,
     SleepCodingIssue,
@@ -15,11 +16,10 @@ from app.models.schemas import (
     ValidationResult,
 )
 from app.runtime.mcp import InMemoryMCPServer, MCPClient
-from app.services.channel import ChannelNotificationResult
-from app.services.git_workspace import GitWorkspaceService
-from app.services.github import GitHubCommentResult
+from app.channel.notifications import ChannelNotificationResult
+from app.infra.git_workspace import GitWorkspaceService
 from app.agents.ralph.github_bridge import RalphGitHubBridge
-from app.services.sleep_coding import SleepCodingService, ValidationRunner
+from app.agents.ralph import SleepCodingService, ValidationRunner
 
 
 class FakeGitHubService:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from app.control.context import ContextAssemblyService
 from app.models.schemas import ReviewSource
-from app.services.sleep_coding import SleepCodingService
+from app.agents.ralph import SleepCodingService
 
 
 class ReviewContextBuilder:

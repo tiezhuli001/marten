@@ -1,7 +1,7 @@
 import unittest
 
 from app.core.config import Settings
-from app.services.channel import ChannelNotificationService
+from app.channel.notifications import ChannelNotificationService
 
 
 class ChannelNotificationServiceTests(unittest.TestCase):
@@ -110,7 +110,7 @@ class ChannelNotificationServiceTests(unittest.TestCase):
                 "| 文件路径 | 说明 |",
                 "|---------|------|",
                 "| app/main.py | 调整主流程 |",
-                "| tests/test_api.py | 补充回归测试 |",
+                "| tests/test_mvp_e2e.py | 覆盖主链路回归 |",
             ],
         )
 
@@ -122,7 +122,7 @@ class ChannelNotificationServiceTests(unittest.TestCase):
         merged = "\n".join(markdown_blocks)
         self.assertIn("**一、修改文件清单**", merged)
         self.assertIn("- **app/main.py** · 说明: 调整主流程", merged)
-        self.assertIn("- **tests/test_api.py** · 说明: 补充回归测试", merged)
+        self.assertIn("- **tests/test_mvp_e2e.py** · 说明: 覆盖主链路回归", merged)
 
 
 if __name__ == "__main__":

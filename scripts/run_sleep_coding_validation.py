@@ -8,7 +8,7 @@ from pathlib import Path
 SMOKE_TESTS = (
     "tests.test_sleep_coding.SleepCodingServiceTests.test_start_task_generates_plan_and_waits_for_confirmation",
     "tests.test_sleep_coding.SleepCodingServiceTests.test_uses_configured_validation_command",
-    "tests.test_review.ReviewServiceTests.test_summary_prefers_structured_summary_section",
+    "tests.test_review.ReviewServiceTests.test_command_output_json_is_parsed_into_structured_findings",
 )
 
 

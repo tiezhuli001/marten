@@ -32,13 +32,13 @@ from app.models.schemas import (
     WorkerDiscoveredIssue,
 )
 from app.runtime.mcp import InMemoryMCPServer, MCPClient
+from app.agents.code_review_agent import ReviewService, ReviewSkillRunResult
 from app.services.automation import AutomationService
-from app.services.channel import ChannelNotificationResult
-from app.services.feishu import FeishuWebhookService
-from app.services.main_agent import MainAgentService
-from app.services.review import ReviewService, ReviewSkillRunResult
-from app.services.sleep_coding import SleepCodingService
-from app.services.sleep_coding_worker import SleepCodingWorkerService
+from app.channel.feishu import FeishuWebhookService
+from app.channel.notifications import ChannelNotificationResult
+from app.agents.main_agent import MainAgentService
+from app.agents.ralph import SleepCodingService
+from app.control.sleep_coding_worker import SleepCodingWorkerService
 
 
 def build_github_mcp(github: "FakeGitHubService") -> MCPClient:

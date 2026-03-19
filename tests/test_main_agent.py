@@ -11,7 +11,7 @@ from app.models.schemas import (
     MainAgentIntakeRequest,
     TokenUsage,
 )
-from app.services.main_agent import MainAgentService
+from app.agents.main_agent import MainAgentService
 from app.runtime.mcp import MCPClient, InMemoryMCPServer
 
 

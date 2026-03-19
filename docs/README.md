@@ -1,36 +1,23 @@
 # Docs
 
-本目录只保留当前 MVP 收口所需的高信号文档。历史 phase 文档和中间迁移方案已经从当前分支移除，避免继续放大主 PR。
+本目录只保留四类文档：
 
-## 当前入口
+- `architecture/`: 长期有效的系统边界和状态模型
+- `evolution/`: 当前仍有效的演进方向
+- `status/`: 当前事实、验证结果和风险
+- `status/session-handoff.md`: 下一位 agent 的接手摘要
 
 优先阅读顺序：
 
-1. `status/current-status.md`
-2. `status/session-handoff.md`
-3. `plans/capability-gap-and-optimization-plan.md`
-4. `plans/mvp-execution-plan.md`
-5. `requirements/mvp-gap-analysis.md`
-6. `architecture/mvp-agent-first-architecture.md`
-7. `architecture/github-issue-pr-state-model.md`
-8. `runbooks/server-setup.md`
+1. [status/current-status.md](status/current-status.md)
+2. [status/session-handoff.md](status/session-handoff.md)
+3. [evolution/mvp-evolution.md](evolution/mvp-evolution.md)
+4. [architecture/mvp-agent-first-architecture.md](architecture/mvp-agent-first-architecture.md)
+5. [architecture/github-issue-pr-state-model.md](architecture/github-issue-pr-state-model.md)
 
-## 目录说明
+清理原则：
 
-- `status/`: 当前阶段事实来源与会话交接
-- `plans/`: 当前仍有效的执行计划
-- `requirements/`: 当前 MVP 需求边界与差距分析
-- `architecture/`: 当前仍生效的架构与状态模型
-- `runbooks/`: 部署与环境说明
-- `agents/`: Agent 职责边界与工作区说明
-- `acceptance/`: 当前保留的验收清单
-- `code-review/`: 历史外部 review 归档
-
-## 关于 Review 产物
-
-`docs/review-runs/` 仍然是 code review agent 的默认运行产物目录，但它属于运行时文件，不再纳入版本控制。
-
-如果需要检查本机运行产物：
-
-1. 直接查看本地 `docs/review-runs/`
-2. 以代码、测试结果和 `status/current-status.md` 为最终事实来源
+- 不保留历史 phase 文档
+- 不保留 requirements / plans 的阶段性副本
+- 不保留 review 归档和运行产物
+- 不保留一次性部署草稿和低信息密度说明文档

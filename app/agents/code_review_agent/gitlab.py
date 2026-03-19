@@ -4,7 +4,7 @@ import json
 from urllib import error, parse, request
 
 from app.core.config import Settings
-from app.services.github import GitHubCommentResult
+from app.models.github_results import GitHubCommentResult
 
 
 class GitLabService:

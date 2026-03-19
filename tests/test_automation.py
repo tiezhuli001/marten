@@ -17,10 +17,10 @@ from app.models.schemas import (
     ValidationResult,
 )
 from app.runtime.mcp import InMemoryMCPServer, MCPClient
+from app.agents.code_review_agent import ReviewService
 from app.services.automation import AutomationService
-from app.services.channel import ChannelNotificationResult
-from app.services.review import ReviewService
-from app.services.sleep_coding import SleepCodingService
+from app.channel.notifications import ChannelNotificationResult
+from app.agents.ralph import SleepCodingService
 
 
 def build_github_mcp(github: "FakeGitHubService") -> MCPClient:

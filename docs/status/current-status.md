@@ -60,8 +60,6 @@
   - `session_registry.py`：`128`
   - `task_registry.py`：`253`
 - docs 文件已从历史混合状态收口到架构/演进/状态/交接
-- 当前 diff 继续保持净减法：
-  - `git diff --shortstat`: `+423 / -4993`
 - tests 已继续收缩到当前核心边界：
   - `18 -> 14` 个核心测试文件保留
   - 总行数：`5923 -> 5138`
@@ -102,6 +100,9 @@
   - Issue: `#56`
   - PR: `#57`
   - Merge Commit: `4e7ae48f31cf8cd7bb4fcc25006c844442ec2dfa`
+  - 参考：
+    - `https://github.com/tiezhuli001/youmeng-gateway/issues/56`
+    - `https://github.com/tiezhuli001/youmeng-gateway/pull/57`
 - 验证范围覆盖：
   - GitHub issue 创建
   - Ralph 生成变更并打开 PR

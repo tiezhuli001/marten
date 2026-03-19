@@ -9,11 +9,11 @@
 
 优先阅读顺序：
 
-1. `status/current-status.md`
-2. `status/session-handoff.md`
-3. `evolution/mvp-evolution.md`
-4. `architecture/mvp-agent-first-architecture.md`
-5. `architecture/github-issue-pr-state-model.md`
+1. [status/current-status.md](status/current-status.md)
+2. [status/session-handoff.md](status/session-handoff.md)
+3. [evolution/mvp-evolution.md](evolution/mvp-evolution.md)
+4. [architecture/mvp-agent-first-architecture.md](architecture/mvp-agent-first-architecture.md)
+5. [architecture/github-issue-pr-state-model.md](architecture/github-issue-pr-state-model.md)
 
 清理原则：
 

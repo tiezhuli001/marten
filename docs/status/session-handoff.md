@@ -1,7 +1,6 @@
 # Session Handoff
 
 > 更新时间：2026-03-19
-> 当前分支：`codex/slimdown-cleanup`
 
 ## 1. 当前目标
 
@@ -45,7 +44,6 @@
   - `app/services/automation.py`: `280 -> 263`
   - `app/services/session_registry.py`: `256 -> 128`
   - `app/services/task_registry.py`: `341 -> 253`
-  - `git diff --shortstat`: `+423 / -4993`
 - 本轮还额外删除了非主链路 API 表面积：
   - `/status/current`
   - `/workers/sleep-coding/run-once`
@@ -116,6 +114,9 @@
   - Issue `#56`
   - PR `#57`
   - merge commit `4e7ae48f31cf8cd7bb4fcc25006c844442ec2dfa`
+  - 参考：
+    - `https://github.com/tiezhuli001/youmeng-gateway/issues/56`
+    - `https://github.com/tiezhuli001/youmeng-gateway/pull/57`
 - 真实阻塞点已确认并修复：
   - `scripts/run_sleep_coding_validation.py` 原先引用了已删除的历史测试，导致 `approve_plan` 后 validation 失败
 - 真实外部结果已确认：

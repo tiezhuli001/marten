@@ -16,7 +16,7 @@
 项目已经过了“补齐 MVP 主链路”的阶段，当前处于：
 
 - `channel -> control plane -> runtime -> agent` 骨架稳定
-- 真实链路已验证到 `review -> final delivery`
+- 真实链路已验证到 `issue -> fix -> pr -> review -> merge`
 - 持续做仓库瘦身，优先删除历史文档、过渡兼容层和非主链路噪音
 
 ## 当前能力
@@ -106,8 +106,8 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
    - `OPENAI_API_KEY` 或 `MINIMAX_API_KEY`
    - `CHANNEL_WEBHOOK_URL`
    - `FEISHU_VERIFICATION_TOKEN`
-   - GitHub MCP server 需要的 token 环境变量
-2. 在 `mcp.json` 配 GitHub MCP
+   - `mcp.json` 中引用到的凭据环境变量
+2. 在 `mcp.json` 配置 GitHub MCP server 的 `command / args / env`
 3. 在 `agents.json / models.json / platform.json` 保留默认或按需调整
 4. 启动服务
 5. 调用：
@@ -134,10 +134,10 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 优先阅读：
 
-1. [docs/status/current-status.md](/Users/litiezhu/workspace/github/youmeng-gateway/docs/status/current-status.md)
-2. [docs/status/session-handoff.md](/Users/litiezhu/workspace/github/youmeng-gateway/docs/status/session-handoff.md)
-3. [docs/evolution/mvp-evolution.md](/Users/litiezhu/workspace/github/youmeng-gateway/docs/evolution/mvp-evolution.md)
-4. [docs/architecture/mvp-agent-first-architecture.md](/Users/litiezhu/workspace/github/youmeng-gateway/docs/architecture/mvp-agent-first-architecture.md)
-5. [docs/architecture/github-issue-pr-state-model.md](/Users/litiezhu/workspace/github/youmeng-gateway/docs/architecture/github-issue-pr-state-model.md)
+1. [docs/status/current-status.md](docs/status/current-status.md)
+2. [docs/status/session-handoff.md](docs/status/session-handoff.md)
+3. [docs/evolution/mvp-evolution.md](docs/evolution/mvp-evolution.md)
+4. [docs/architecture/mvp-agent-first-architecture.md](docs/architecture/mvp-agent-first-architecture.md)
+5. [docs/architecture/github-issue-pr-state-model.md](docs/architecture/github-issue-pr-state-model.md)
 
 仓库内文档只保留当前仍生效的架构、演进、状态和交接文档。历史验收稿、阶段性计划、需求分析和 review 归档已从当前分支持续移除。

@@ -1,8 +1,8 @@
 # Current Status
 
-> 更新时间：2026-03-18
-> 当前阶段：多 Agent MVP 主链路已真实跑通，进入主链路验收与 token/cost 口径收口阶段
-> 当前目标：先按 `gateway -> issue -> claim -> coding -> review -> final delivery` 收口真实 MVP 链路，并验证 token/cost 计算与输出；运行治理增强项暂不前置扩展
+> 更新时间：2026-03-19
+> 当前阶段：已进入能力内聚阶段，`Round Next-C` 收尾验证已完成
+> 当前目标：在 `channel -> control plane -> runtime -> agent` 的极简骨架上继续压缩可压缩复杂度，并保持 agent spec / control event / short-memory facade 为稳定边界，同时补齐真实链路验收
 
 ## 当前结论
 
@@ -11,7 +11,7 @@
 - 当前交互模式确定为：
   - `OpenClaw`: 沟通、进度反馈、飞书入口
   - `OpenCode`: 服务器上的交互式编码助手
-  - `LangGraph + LangSmith`: 第一阶段编排与观测方案
+  - `Gateway Control Plane + Shared Runtime + LangSmith`: 当前编排与观测方案
 
 ## 已完成
 
@@ -111,6 +111,55 @@
 - [x] 文档入口已收口：`docs/README.md` 现在只指向当前 MVP 主事实来源
 - [x] `docs/status/backlog.md` 已退出主入口并从当前分支移除，避免继续与 `current-status.md` 形成双事实源
 - [x] `docs/review-runs/` 已改为运行时产物目录并从版本控制移出，避免 review artifact 持续放大 PR
+- [x] `/gateway/message` 已退出 `LangGraph WorkflowRunner` 主入口，改由 `GatewayControlPlaneService` 承接 control plane 编排
+- [x] 已新增轻量 control 目录：`app/control/gateway.py / routing.py / events.py`
+- [x] automation follow-up 已从直接 threadpool 回调收口到 `ControlEventBus`
+- [x] `app/graph/*` 已从当前主路径移除并删除，避免继续形成双编排中心
+- [x] 旧的 4 轮架构收敛计划已完成并退出文档主入口，当前由 `docs/plans/capability-gap-and-optimization-plan.md` 继续承接
+- [x] Round 2 第一版 agent application modules 已落地：`app/agents/main_agent / ralph / code_review_agent`
+- [x] control plane / API / automation / worker 的主路径 import 已切到 `app/agents/*`
+- [x] `app/services/main_agent.py / sleep_coding.py / review.py` 已降为兼容壳层，避免一次性迁移破坏测试与调用方
+- [x] Round 3 第一版 context assembly / short-memory boundary 已落地：`app/control/context.py`
+- [x] `control_sessions.payload` 已支持 short memory summary 挂载；session registry 已补 payload update / ancestry chain 查询
+- [x] main-agent / ralph / code-review-agent 已开始统一通过 context assembly 读写 short memory
+- [x] 全量 `python -m unittest discover -s tests -v` 已通过（110 tests）
+- [x] Round 4 第一版 infra / channel 边界收敛已落地：`app/channel/*` 与 `app/infra/*`
+- [x] `app/main.py`、`app/api/routes.py`、`app/services/automation.py`、agent 主路径 imports 已切到 `channel/infra` 边界
+- [x] `app/services/channel.py / feishu.py / background_jobs.py / scheduler.py / diagnostics.py / git_workspace.py` 已降为兼容 facade
+- [x] `app/channel/__init__.py / app/control/__init__.py / app/infra/__init__.py` 已改为最小入口，避免 package eager import 放大循环依赖
+- [x] Round 4 高相关回归已通过：`test_channel / test_feishu / test_scheduler / test_automation / test_api / test_mvp_e2e / test_control_context / test_session_registry / test_router`
+- [x] Round 4 全量 `python -m unittest discover -s tests -v` 已通过（110 tests, 129.891s）
+- [x] 真实配置诊断已通过：`github_mcp=ok`、`review_skill=runtime_llm`、`feishu=inbound/outbound ok`
+- [x] 已完成一轮安全近真实全链路模拟：`Feishu signature -> gateway -> main-agent -> worker poll -> Ralph -> review -> notification`
+- [x] 近真实全链路模拟在关闭真实 LLM 出口后已跑通，结果为：Issue 创建成功、3 条通知发出、claim 最终 `failed`（失败点为 validation）
+- [x] 能力差异与优化清单计划已归档：`docs/plans/capability-gap-and-optimization-plan.md`
+- [x] 下一轮收敛顺序已明确：先压 `Ralph / Review Agent / Worker` 三个复杂度黑洞，再收 agent spec，再收 event/memory 边界
+- [x] `Round Next-A` 第一版已完成：Ralph drafting / GitHub bridge 已拆出 helper modules
+- [x] `Round Next-A` 第一版已完成：Review Agent store / source support 已拆出 helper modules
+- [x] `Round Next-A` 第一版已完成：worker 实现已迁到 `app/control/sleep_coding_worker.py`
+- [x] 已删除已完成且形成双事实源的旧计划文档：`mvp-architecture-convergence-plan.md`、`mvp-multi-round-execution-plan.md`
+- [x] `Round Next-A` 完成后全量测试仍通过：`110 tests OK`
+- [x] `Round Next-A` 第二版已完成：Ralph task persistence/store 已拆到 `app/agents/ralph/store.py`
+- [x] `Round Next-A` 第二版已完成：Review comment writeback / context assembly 已拆到 `app/agents/code_review_agent/bridge.py` 与 `context.py`
+- [x] `Round Next-A` 第二版已完成：worker claim store 已拆到 `app/control/sleep_coding_worker_store.py`
+- [x] 复杂度黑洞厚度进一步下降：`ralph/application.py 1293 -> 995`、`review/application.py 902 -> 779`、`worker 735 -> 504`
+- [x] `Round Next-A` 第二版回归已通过：高相关 `60 tests OK`，全量 `110 tests OK`
+- [x] `Round Next-B` 第一版已完成：`AgentSpec` 与 `Settings.resolve_agent_spec(agent_id)` 已落地
+- [x] `Round Next-B` 第一版已完成：`AgentDescriptor.from_spec(...)` 已成为 agent descriptor 主路径
+- [x] `Round Next-B` 第一版已完成：runtime workspace instructions 已正式纳入 `SOUL.md`
+- [x] `Round Next-B` 第一版已完成：`agents.json` 已补 `system_instruction / memory_policy / execution_policy`
+- [x] `Round Next-B` 第一版已完成：三个 agent workspace 已补 `SOUL.md`
+- [x] `Round Next-B` 第一版回归已通过：高相关 `67 tests OK`，全量 `111 tests OK`
+- [x] `Round Next-C` 第一版已完成：control event 已开始显式化为 domain events，并保持 legacy event 兼容
+- [x] `Round Next-C` 第一版已完成：short memory 已从单一 summary 挂点升级为 `append/list` facade
+- [x] `Round Next-C` 第一版回归已通过：高相关 `44 tests OK`，全量 `112 tests OK`
+- [x] `Round Next-C` 收尾压缩已完成：`app/services/automation.py` 已从 `528 -> 280`
+- [x] `Round Next-C` 收尾压缩已完成：follow-up 控制已拆到 `app/control/follow_up.py`
+- [x] `Round Next-C` 收尾压缩已完成：交付文案组装已拆到 `app/channel/delivery.py`
+- [x] `Round Next-C` 收尾压缩回归已通过：高相关 `39 tests OK`，全量 `112 tests OK`
+- [x] 真实 Feishu 出站验证已补：webhook 实发成功，`delivered=True`
+- [x] GitHub 实链路核验已补：真实 issue/PR 已创建，最新验证样本为 `issue #45` / `PR #46`
+- [x] 全量回归已再次通过：`python -m unittest discover -s tests`，`114 tests OK`
 
 ## 正在进行
 
@@ -132,20 +181,41 @@
 - [x] `mcp.json` 配置入口收敛
 - [x] agent / skill workspace 文案重写
 - [x] `platform.json / agents.json / models.json` 配置入口收敛
-- [ ] shared runtime 收敛并替换剩余 service-style agent logic
+- [x] MVP 第一轮结构收敛：gateway control plane / event bus / graph cleanup
+- [x] MVP 第二轮第一版收敛：agent application modules 显式化
+- [x] MVP 第三轮第一版收敛：context assembly / 短记忆边界
+- [x] MVP 第四轮第一版收敛：infra / channel 边界显式化与兼容壳层压缩
+- [x] 下一轮复杂度压缩计划已成文，并已纳入文档入口
+- [x] `Round Next-A` 第一版复杂度压缩已落地
 - [ ] HTTP 长请求的同步/异步行为继续收口，避免“接口看起来挂住但状态已迁移完成”的体验分裂
+- [ ] 真实 MiniMax 链路的 `SSL: UNEXPECTED_EOF_WHILE_READING` 需要继续定位
+- [x] Round Next-A 第二版：继续拆薄 `Ralph / Review Agent / Worker`
+- [x] Round Next-B：收口 declarative agent spec
+- [x] Round Next-C：收口 control event / memory boundary
+- [x] 下一轮复杂度压缩第一版已完成：`automation` 主编排已显著收薄
+- [x] 真实 Feishu / GitHub MCP 验收已补：主链路稳定跑到 `PR Ready`
+- [ ] 继续压缩剩余厚 application 文件，避免 domain event / memory facade 再回流
+- [ ] 真实 review / final delivery 的全外部系统闭环仍需继续压测，避免重复 issue/PR 验证样本累积
 
 ## 下一步
 
-1. 继续固化围绕 `feishu -> gateway -> issue -> claim -> coding -> review -> final delivery` 的 MVP smoke suite，作为当前阶段主验收口径
-2. 继续核对 `feishu / gateway / task / review / final delivery` 五处 token/cost 聚合与展示，确保同一条链路内对外输出一致
-3. 继续以 `mcp.json` 为唯一 GitHub/GitLab 配置入口补跑真正的 `issue/PR write` 真实联调，不再补 REST fallback
-4. 继续追查 review `real_run` 在本机到 MiniMax 的 TLS/网络问题，避免真实链路在 review 阶段退回 `dry_run`
+1. 继续压缩 `Ralph / Review Agent` 剩余厚文件，保持 `Automation / FollowUp / Delivery` 的新边界不回流
+2. 补真实 review / final delivery 的外部系统闭环验收，避免全链路只稳定在 `PR Ready`
+3. 编码前持续检查是否仍符合 `channel -> control plane -> runtime -> agent`
+4. 编码后跑测试，再更新 `current-status.md` 和 `session-handoff.md`
+5. 保持 `agents.json -> resolve_agent_spec -> AgentDescriptor.from_spec -> runtime prompt` 为单一事实源
+6. 在结构继续稳定后，再回到真实 MiniMax `SSL EOF` 问题
 
 ## 当前阻塞
 
 - 当前本机 `python3` 为 3.14，LangChain 生态有兼容性警告；正式环境应固定在 Python 3.11/3.12
+- 当前真实 MiniMax 调用在本机近真实回测里出现 `SSL: UNEXPECTED_EOF_WHILE_READING`；控制面与模拟外部系统链路正常，阻塞点集中在 provider 传输层
+- 真实 Feishu 出站已经确认可用，GitHub MCP issue/PR 写链路也再次确认可用；当前真实外部链路剩余不稳定点主要在 review/final delivery 收尾与 MiniMax 传输层
 - 主闭环已真实跑通，长请求也已有 `background_follow_up` 可观测状态；当前阶段的主要缺口不再是治理功能数量，而是主链路验收与 token 输出是否稳定
+- `gateway` 主入口已收口到 control plane，agent application modules 与 context assembly 也已显式化；当前剩余缺口转为 infra 边界与兼容壳层压缩
+- Round 4 已把 `channel/infra` 目录边界立起来，当前 `services/*` 中剩余的大多是兼容 facade 或仍承载领域服务的稳定模块，不应再做无收益迁移
+- 新增能力差异文档后，当前收敛顺序已经明确：先压厚文件和 worker 边界，再收 declarative agent spec，再补 event/memory；不应跳步骤并行重构
+- `Round Next-A`、`Round Next-B`、`Round Next-C` 已完成第一版；agent spec、control event、short-memory facade 都已立起稳定边界，`automation` 也已显著收薄，当前主要剩余厚度集中在 `Ralph / Review Agent`
 - token ledger 已支持 request 级聚合，`feishu / gateway / task / review / final delivery` 已基本统一到同一口径；gateway 包装 main-agent intake 的重复记账问题已修复，多 step 聚合也不再伪装成单 step 元数据
 - Feishu webhook 现在会继续触发 automation follow-up；当前平台默认已经切到自动批准 plan，以保证 MVP 闭环可真实跑通
 - auto-approve 模式下，通知链路已从“重复的 awaiting_confirmation”收口为“issue 进入执行 -> final delivery 完成”两段式；当前剩余工作主要是把最终通知内容继续贴近产品预期
@@ -153,6 +223,8 @@
 - GitHub/GitLab 外部写操作现在以 `mcp.json` 为唯一主配置入口；若缺少对应 server 或 tool，会显式失败并提示补齐配置，而不是静默退回 REST/env
 - issue prepared、PR ready、review decision、final delivery 四段外显现在都已带摘要信息；当前更大的剩余问题是“真实联调环境里这些文案是否已经完全符合产品预期”
 - 本轮新的真实 issue/PR 联调已经再次证明 GitHub MCP 写链路可用；当前更突出的剩余风险转为 review LLM 在真实环境下偶发 `SSL: UNEXPECTED_EOF_WHILE_READING`
+- 本轮已新增一条真实 Feishu webhook 出站验证消息；如果用户飞书侧已看到 `Youmeng Gateway 全链路验证` 卡片，说明当前 webhook 出站链路可用
+- 真实 GitHub 外部样本已推进到 `issue #45 -> PR #46`，且 issue 评论已出现 `Ralph PR Ready` 回写；当前更大的剩余问题不是写链路，而是避免重复验证时不断堆积 issue/PR 样本
 - 飞书出站已从纯文本切到中文 card 模式，且已补概览区、分段标题和结构化 token 展示；当前剩余问题主要在真实联调里验证“最终成品感”，而不是基础样式能力
 - worker 第一版 lease / heartbeat / timeout / retry 已落地；`stuck-task / cancel / resume` 作为运行治理增强项，放在主链路稳定之后
 - 当前 agent runtime 已覆盖 main-agent、sleep-coding、review 的核心认知链路，剩余 service 风格逻辑主要在状态机和回写编排层
@@ -181,6 +253,13 @@
 - 进入 MVP 收口阶段后，issue 理解、计划、编码、review、repair 等认知工作优先交给 LLM + skill + MCP
 - Feishu 鉴权、token 账本、调度、幂等、状态机等基础设施继续保持工程化实现
 - MVP 文档方向已修正为 OpenClaw 风格：Gateway 作为控制平面，Shared Runtime 复用 provider / skill / MCP，Agent 只保留角色与边界
+- 当前代码主入口已进一步向 `nanobot/OpenClaw` 风格收口：`channel -> control plane -> runtime -> agent`
+- agent 代码结构已开始与运行时/控制平面解耦：`app/agents/*` 成为显式应用层入口，`app/services/*` 暂时保留兼容 facade
+- 当前短记忆策略确定为：先把 summary 挂在 `control_sessions.payload`，通过 `ContextAssemblyService` 统一读写；长记忆接口后置，不在当前阶段前置复杂检索
+- 当前 infra / channel 策略确定为：主路径直接依赖 `app/channel/*` 与 `app/infra/*`，`app/services/*` 只保留仍有调用价值的领域服务与过渡 facade
+- 当前 `Round Next-A` 策略已完成：通过 helper/module/store 抽离压缩厚文件，且没有改变 `SleepCodingService / ReviewService / WorkerService` 对外接口
+- 当前 `Round Next-B` 策略已完成：继续保持主链路不变，已收口 agent spec 与 workspace docs 驱动能力，没有引入新的平台层
+- 当前 `Round Next-C` 策略确定为：优先显式化 domain events 与 short-memory facade，不做 RAG、向量库或 MQ 扩张
 - 当前 shared runtime 的最小边界已明确为：`llm`、`skills`、`mcp`、`agent_runtime`
 - Main Agent 与 Ralph 的核心认知链路已开始按 workspace + skill + MCP 的方式表达能力，而不是继续增加 if/else 逻辑
 - review 运行产物默认仍写入 `docs/review-runs/`，但该目录现在只作为本地运行时目录，不再作为仓库内长期事实源

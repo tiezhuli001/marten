@@ -4,8 +4,14 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+from app.agents.code_review_agent import ReviewService
+from app.agents.main_agent import MainAgentService
+from app.agents.ralph import SleepCodingService
+from app.channel.feishu import FeishuWebhookService
+from app.control.gateway import GatewayControlPlaneService
 from app.core.config import get_settings
-from app.graph.workflow import WorkflowRunner
+from app.infra.diagnostics import IntegrationDiagnosticsService
+from app.infra.scheduler import WorkerSchedulerService
 from app.ledger.service import TokenLedgerService
 from app.models.schemas import (
     ControlTask,
@@ -27,22 +33,23 @@ from app.models.schemas import (
     TokenReportResponse,
 )
 from app.services.automation import AutomationService
-from app.services.diagnostics import IntegrationDiagnosticsService
-from app.services.review import ReviewService
-from app.services.feishu import FeishuWebhookService
-from app.services.main_agent import MainAgentService
-from app.services.scheduler import WorkerSchedulerService
-from app.services.sleep_coding_worker import SleepCodingWorkerService
+from app.control.sleep_coding_worker import SleepCodingWorkerService
 from app.services.status import StatusService
-from app.services.sleep_coding import SleepCodingService
 from app.services.task_registry import TaskRegistryService
 
 router = APIRouter()
 
 
 @lru_cache(maxsize=1)
-def get_workflow_runner() -> WorkflowRunner:
-    return WorkflowRunner()
+def get_gateway_control_plane_service() -> GatewayControlPlaneService:
+    settings = get_settings()
+    return GatewayControlPlaneService(
+        settings=settings,
+        ledger=get_token_ledger_service(),
+        main_agent=get_main_agent_service(),
+        sleep_coding=get_sleep_coding_service(),
+        sessions=get_session_registry_service(),
+    )
 
 
 @lru_cache(maxsize=1)
@@ -54,7 +61,7 @@ def get_status_service() -> StatusService:
 def get_feishu_webhook_service() -> FeishuWebhookService:
     return FeishuWebhookService(
         get_settings(),
-        get_workflow_runner(),
+        get_gateway_control_plane_service(),
         get_automation_service(),
     )
 
@@ -109,6 +116,13 @@ def get_task_registry_service() -> TaskRegistryService:
 
 
 @lru_cache(maxsize=1)
+def get_session_registry_service():
+    from app.services.session_registry import SessionRegistryService
+
+    return SessionRegistryService(get_settings())
+
+
+@lru_cache(maxsize=1)
 def get_integration_diagnostics_service() -> IntegrationDiagnosticsService:
     return IntegrationDiagnosticsService(get_settings())
 
@@ -121,9 +135,9 @@ def healthcheck() -> dict[str, str]:
 @router.post("/gateway/message", response_model=GatewayMessageResponse)
 def handle_message(
     payload: GatewayMessageRequest,
-    workflow: WorkflowRunner = Depends(get_workflow_runner),
+    control_plane: GatewayControlPlaneService = Depends(get_gateway_control_plane_service),
 ) -> GatewayMessageResponse:
-    return workflow.run(payload)
+    return control_plane.run(payload)
 
 
 @router.post("/webhooks/feishu/events")

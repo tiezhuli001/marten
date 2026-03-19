@@ -18,7 +18,8 @@ from app.runtime.mcp import InMemoryMCPServer, MCPClient
 from app.services.channel import ChannelNotificationResult
 from app.services.git_workspace import GitWorkspaceService
 from app.services.github import GitHubCommentResult
-from app.services.sleep_coding import SleepCodingService
+from app.agents.ralph.github_bridge import RalphGitHubBridge
+from app.services.sleep_coding import SleepCodingService, ValidationRunner
 
 
 class FakeGitHubService:
@@ -504,6 +505,42 @@ class SleepCodingServiceTests(unittest.TestCase):
             )
             task = service.start_task(SleepCodingTaskRequest(issue_number=21))
             self.assertIn("python -m unittest tests.test_main_agent", task.plan.validation[0])
+
+    def test_validation_runner_prefers_project_venv_python_for_worktree_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project_root = Path(temp_dir) / "project"
+            worktree = project_root / ".worktrees" / "issue-1"
+            project_python = project_root / ".venv" / "bin" / "python"
+            script_path = project_root / "scripts" / "run_sleep_coding_validation.py"
+            project_python.parent.mkdir(parents=True, exist_ok=True)
+            script_path.parent.mkdir(parents=True, exist_ok=True)
+            project_python.write_text("#!/bin/sh\n", encoding="utf-8")
+            script_path.write_text("print('ok')\n", encoding="utf-8")
+            worktree.mkdir(parents=True, exist_ok=True)
+
+            runner = ValidationRunner(
+                command="python scripts/run_sleep_coding_validation.py",
+                project_root=project_root,
+            )
+
+            resolved = runner._resolve_command_args(
+                ["python", "scripts/run_sleep_coding_validation.py"],
+                worktree,
+            )
+
+            self.assertEqual(resolved[0], str(project_python))
+            self.assertEqual(resolved[1], str(script_path))
+
+    def test_github_bridge_coerces_string_url_payload(self) -> None:
+        settings = Settings(app_env="test", github_repository="tiezhuli001/youmeng-gateway")
+        bridge = RalphGitHubBridge(settings, MCPClient())
+        payload = bridge.coerce_mapping(
+            "created pull request: https://github.com/tiezhuli001/youmeng-gateway/pull/123"
+        )
+        self.assertEqual(
+            payload["html_url"],
+            "https://github.com/tiezhuli001/youmeng-gateway/pull/123",
+        )
 
     def test_failed_validation_marks_task_failed(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

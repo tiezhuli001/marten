@@ -11,15 +11,23 @@ python -m pip install --upgrade pip
 pip install -e .
 ```
 
-Copy the example configuration files before running the service:
+Copy the required config first:
 
 ```bash
 cp .env.example .env
-cp agents.json.example agents.json
+cp mcp.json.example mcp.json
 cp models.json.example models.json
 cp platform.json.example platform.json
-cp mcp.json.example mcp.json
 ```
+
+JSON config is the primary control surface:
+
+- `mcp.json`: MCP servers and their auth/env
+- `models.json`: provider keys, bases, models, profiles
+- `platform.json`: repo, worker, review, git, validation behavior
+- `agents.json`: optional agent-spec overrides
+
+Use `.env` for runtime overrides and deployment-specific values. It is not the only place secrets can live.
 
 ## Tests
 

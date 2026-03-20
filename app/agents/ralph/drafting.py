@@ -4,8 +4,11 @@ import json
 import shlex
 import subprocess
 import tempfile
+from datetime import date
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+from pydantic import ValidationError
 
 from app.models.schemas import (
     SleepCodingExecutionDraft,
@@ -16,6 +19,7 @@ from app.models.schemas import (
 )
 from app.runtime.agent_runtime import AgentDescriptor
 from app.runtime.pricing import PricingRegistry
+from app.runtime.structured_output import parse_structured_object
 from app.runtime.token_counting import TokenCountingService
 
 if TYPE_CHECKING:
@@ -57,7 +61,7 @@ class RalphDraftingService:
                 f"{issue.body.strip() or 'Issue body is empty.'}"
             ),
         )
-        if self.settings.openai_api_key or self.settings.minimax_api_key:
+        if self.settings.has_runtime_llm_credentials:
             try:
                 response = self.agent_runtime.generate_structured_output(
                     self.build_agent_descriptor(),
@@ -68,10 +72,11 @@ class RalphDraftingService:
                         "The plan must emphasize concrete code changes and tests."
                     ),
                 )
-                return (
-                    SleepCodingPlan.model_validate_json(response.output_text),
-                    response.usage.model_copy(update={"step_name": "sleep_coding_plan"}),
-                )
+                try:
+                    plan = self._parse_plan_output(response.output_text)
+                except (RuntimeError, json.JSONDecodeError, ValidationError, ValueError, SyntaxError):
+                    plan = self.build_heuristic_plan(issue)
+                return (plan, response.usage.model_copy(update={"step_name": "sleep_coding_plan"}))
             except Exception:
                 if self.settings.app_env != "test":
                     raise
@@ -102,6 +107,18 @@ class RalphDraftingService:
                 f"Current issue context: {issue_body[:160]}",
             ],
         )
+
+    def _parse_plan_output(self, output_text: str) -> SleepCodingPlan:
+        parsed = parse_structured_object(output_text)
+        if not isinstance(parsed, dict):
+            raise RuntimeError("Sleep coding plan output must be a JSON object.")
+        normalized = dict(parsed)
+        summary = normalized.get("summary")
+        if isinstance(summary, list):
+            normalized["summary"] = " ".join(
+                str(item).strip() for item in summary if str(item).strip()
+            )
+        return SleepCodingPlan.model_validate(normalized)
 
     def build_execution_draft(
         self,
@@ -148,7 +165,7 @@ class RalphDraftingService:
                 "Local sleep coding execution command is required. "
                 "Configure `sleep_coding.execution.command` or explicitly enable `sleep_coding.execution.allow_llm_fallback`."
             )
-        if self.settings.openai_api_key or self.settings.minimax_api_key:
+        if self.settings.has_runtime_llm_credentials:
             try:
                 response = self.agent_runtime.generate_structured_output(
                     self.build_agent_descriptor(),
@@ -161,10 +178,13 @@ class RalphDraftingService:
                         "Only include relative repo paths and include tests when code changes are proposed."
                     ),
                 )
-                return (
-                    SleepCodingExecutionDraft.model_validate_json(response.output_text),
-                    response.usage.model_copy(update={"step_name": "sleep_coding_execution"}),
-                )
+                try:
+                    draft = SleepCodingExecutionDraft.model_validate(
+                        parse_structured_object(response.output_text)
+                    )
+                except (json.JSONDecodeError, ValidationError, ValueError, SyntaxError):
+                    draft = self.build_heuristic_execution_draft(issue, plan, head_branch)
+                return (draft, response.usage.model_copy(update={"step_name": "sleep_coding_execution"}))
             except Exception:
                 if self.settings.app_env != "test":
                     raise
@@ -282,6 +302,30 @@ class RalphDraftingService:
     ) -> list[SleepCodingFileChange]:
         issue_text = f"{issue.title}\n{issue.body}".lower()
         marker = f"<!-- ralph-e2e-issue-{issue.issue_number} -->"
+        live_chain_path = "docs/internal/live-chain-validation.md"
+        if live_chain_path in issue_text:
+            target = self.repo_path / live_chain_path
+            marker_line = f"- live validation marker: {date.today().isoformat()} {marker}"
+            if target.exists():
+                existing = target.read_text(encoding="utf-8")
+                if marker not in existing:
+                    content = existing.rstrip() + f"\n{marker_line}\n"
+                    return [
+                        SleepCodingFileChange(
+                            path=live_chain_path,
+                            content=content,
+                            description="Append a dated live-chain validation marker for the current issue.",
+                        )
+                    ]
+            else:
+                content = f"# Live Chain Validation\n\n{marker_line}\n"
+                return [
+                    SleepCodingFileChange(
+                        path=live_chain_path,
+                        content=content,
+                        description="Create the live-chain validation note file with a dated marker.",
+                    )
+                ]
         if "readme" in issue_text:
             readme_path = self.repo_path / "README.md"
             if readme_path.exists():

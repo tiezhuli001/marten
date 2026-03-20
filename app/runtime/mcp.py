@@ -562,6 +562,16 @@ def load_mcp_server_definitions(settings: Settings) -> list[MCPServerConfigDefin
     return _load_mcp_server_definitions_from_file(settings)
 
 
+def get_mcp_server_definition(
+    settings: Settings,
+    server_name: str,
+) -> MCPServerConfigDefinition | None:
+    for definition in load_mcp_server_definitions(settings):
+        if definition.server_name == server_name:
+            return definition
+    return None
+
+
 def _load_mcp_server_definitions_from_file(
     settings: Settings,
 ) -> list[MCPServerConfigDefinition]:
@@ -573,6 +583,7 @@ def _load_mcp_server_definitions_from_file(
     if not isinstance(servers, dict):
         raise ValueError("mcp.json `servers` must be an object")
     definitions: list[MCPServerConfigDefinition] = []
+    placeholder_context = _build_placeholder_context(settings)
     for server_name, raw in servers.items():
         if not isinstance(raw, dict):
             raise ValueError(f"mcp.json server config must be an object: {server_name}")
@@ -599,9 +610,9 @@ def _load_mcp_server_definitions_from_file(
                 server_name=str(server_name),
                 transport=transport,
                 command=command,
-                args=[_resolve_env_placeholders(str(item)) for item in args],
+                args=[_resolve_env_placeholders(str(item), placeholder_context) for item in args],
                 env={
-                    str(key): _resolve_env_placeholders(str(value))
+                    str(key): _resolve_env_placeholders(str(value), placeholder_context)
                     for key, value in env.items()
                 },
                 cwd=cwd,
@@ -611,29 +622,17 @@ def _load_mcp_server_definitions_from_file(
         )
     return definitions
 
-
-def _load_legacy_mcp_server_definitions(
-    settings: Settings,
-) -> list[MCPServerConfigDefinition]:
-    if not settings.mcp_github_enabled:
-        return []
-    return [
-        MCPServerConfigDefinition(
-            server_name=settings.mcp_github_server_name,
-            transport="stdio",
-            command=settings.mcp_github_command,
-            args=settings.resolved_mcp_github_args,
-            env=settings.resolved_mcp_github_env,
-            cwd=settings.resolved_mcp_github_cwd,
-            timeout_seconds=settings.mcp_request_timeout_seconds,
-            adapter="github",
-        )
-    ]
+def _build_placeholder_context(settings: Settings) -> dict[str, str]:
+    return {
+        key: value
+        for key, value in os.environ.items()
+        if isinstance(value, str)
+    }
 
 
-def _resolve_env_placeholders(raw: str) -> str:
+def _resolve_env_placeholders(raw: str, placeholder_context: dict[str, str]) -> str:
     resolved = raw
-    for key, value in os.environ.items():
+    for key, value in placeholder_context.items():
         resolved = resolved.replace(f"${{{key}}}", value)
     return resolved
 

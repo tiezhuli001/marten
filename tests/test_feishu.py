@@ -15,6 +15,7 @@ class FakeGatewayControlPlaneService:
         self.requests.append(payload)
         return GatewayMessageResponse(
             request_id="req-feishu-1",
+            chain_request_id="chain-feishu-1",
             intent="general",
             message="processed",
             token_usage=TokenUsage(
@@ -108,6 +109,7 @@ class FeishuWebhookServiceTests(unittest.TestCase):
         self.assertEqual(response["automation_follow_up"]["mode"], "worker_poll")
         self.assertEqual(response["automation_follow_up"]["claimed_count"], 1)
         self.assertEqual(response["gateway_response"]["task_id"], "task-feishu-1")
+        self.assertEqual(response["gateway_response"]["chain_request_id"], "chain-feishu-1")
         self.assertEqual(len(automation.worker_polls), 1)
 
     def test_handle_message_event_rejects_invalid_signature(self) -> None:

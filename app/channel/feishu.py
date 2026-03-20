@@ -102,11 +102,6 @@ class FeishuWebhookService:
             event_type = header.get("event_type")
             if isinstance(event_type, str) and event_type:
                 return event_type
-        event = payload.get("event")
-        if isinstance(event, dict):
-            legacy_type = event.get("type")
-            if isinstance(legacy_type, str) and legacy_type:
-                return legacy_type
         return "unknown"
 
     def _normalize_message_event(
@@ -173,6 +168,8 @@ class FeishuWebhookService:
             "message_id": message.message_id,
             "gateway_response": {
                 "request_id": workflow_response.request_id,
+                "chain_request_id": workflow_response.chain_request_id,
+                "run_session_id": workflow_response.run_session_id,
                 "intent": workflow_response.intent,
                 "message": workflow_response.message,
                 "token_usage": workflow_response.token_usage.model_dump(),

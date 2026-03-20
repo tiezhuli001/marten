@@ -54,7 +54,6 @@ class FollowUpControlService:
             "background_follow_up_error": error,
             **(payload or {}),
         }
-        legacy_event_type = f"background_follow_up_{state}"
         domain_event_type = {
             "queued": ControlEventType.FOLLOW_UP_QUEUED,
             "processing": ControlEventType.FOLLOW_UP_PROCESSING,
@@ -65,11 +64,6 @@ class FollowUpControlService:
             task.control_task_id,
             payload_patch=control_payload,
         )
-        self.tasks.append_event(
-            task.control_task_id,
-            legacy_event_type,
-            {"domain_task_id": task_id, **control_payload},
-        )
         self.tasks.append_domain_event(
             task.control_task_id,
             domain_event_type,
@@ -77,15 +71,6 @@ class FollowUpControlService:
         )
         control_task = self.tasks.get_task(task.control_task_id)
         if control_task.parent_task_id:
-            self.tasks.append_event(
-                control_task.parent_task_id,
-                f"child_background_follow_up_{state}",
-                {
-                    "child_control_task_id": task.control_task_id,
-                    "domain_task_id": task_id,
-                    **control_payload,
-                },
-            )
             self.tasks.append_domain_event(
                 control_task.parent_task_id,
                 {

@@ -5,7 +5,7 @@
 - `architecture/`: 长期有效的系统边界和状态模型
 - `evolution/`: 当前仍有效的演进方向
 
-对内 handoff、临时状态、工作草稿统一放到 `docs/internal/`，并在 `.gitignore` 中忽略。
+对内 handoff、临时状态、工作草稿统一放到 `docs/internal/`。新的临时文档默认不进入公开主文档树。
 
 优先阅读顺序：
 

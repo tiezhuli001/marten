@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import tempfile
 from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 
+from app.infra.sqlite_utils import connect_sqlite, ensure_writable_parent
 from app.models.schemas import SleepCodingTask, SleepCodingWorkerClaim, WorkerDiscoveredIssue
 
 
@@ -17,19 +17,10 @@ class SleepCodingWorkerStore:
         self.initialize_schema()
 
     def ensure_parent_dir(self) -> None:
-        try:
-            self.database_path.parent.mkdir(parents=True, exist_ok=True)
-        except PermissionError:
-            fallback_dir = Path(tempfile.gettempdir()) / "marten"
-            fallback_dir.mkdir(parents=True, exist_ok=True)
-            self.database_path = fallback_dir / self.database_path.name
+        self.database_path = ensure_writable_parent(self.database_path)
 
     def connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.database_path, timeout=30.0)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA journal_mode=WAL")
-        connection.execute("PRAGMA busy_timeout = 30000")
-        return connection
+        return connect_sqlite(self.database_path)
 
     def initialize_schema(self) -> None:
         with closing(self.connect()) as connection:

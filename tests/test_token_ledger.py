@@ -9,9 +9,13 @@ from app.models.schemas import TokenUsage
 
 
 def build_settings(database_path: Path) -> Settings:
+    models_config_path = database_path.parent / "models.json"
+    if not models_config_path.exists():
+        models_config_path.write_text("{}", encoding="utf-8")
     return Settings(
         app_env="test",
         database_url=f"sqlite:///{database_path}",
+        models_config_path=str(models_config_path),
         langsmith_tracing=False,
     )
 

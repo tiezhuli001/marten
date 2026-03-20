@@ -31,7 +31,6 @@ class ReviewService:
     def __init__(
         self,
         settings: Settings | None = None,
-        github: object | None = None,
         gitlab: GitLabService | None = None,
         sleep_coding: SleepCodingService | None = None,
         skill: ReviewSkillService | None = None,
@@ -375,14 +374,8 @@ class ReviewService:
     def count_blocking_reviews(self, task_id: str) -> int:
         return self.store.count_blocking_reviews(task_id)
 
-    def _ensure_parent_dir(self) -> None:
-        self.store.ensure_parent_dir()
-
     def _connect(self) -> sqlite3.Connection:
         return self.store.connect()
-
-    def _initialize_schema(self) -> None:
-        self.store.initialize_schema()
 
     def _normalize_source(self, source: ReviewSource) -> ReviewSource:
         return self.source_support.normalize_source(source)
@@ -395,32 +388,8 @@ class ReviewService:
                 raise
             return source
 
-    def _build_context(
-        self,
-        source: ReviewSource,
-        run_session_id: str | None = None,
-    ) -> str:
-        return self.context_builder.build_context(source, run_session_id)
-
-    def _build_local_code_context(self, source: ReviewSource) -> str:
-        return self.source_support.build_local_code_context(source)
-
-    def _format_git_output(
-        self,
-        completed: subprocess.CompletedProcess[str],
-        success_label: str,
-        failure_label: str,
-    ) -> str:
-        return self.source_support.format_git_output(completed, success_label, failure_label)
-
     def _write_artifact(self, review_id: str, source: ReviewSource, content: str) -> Path:
         return self.store.write_artifact(review_id, source, content)
-
-    def _artifact_name(self, review_id: str, source: ReviewSource) -> str:
-        return self.store.artifact_name(review_id, source)
-
-    def _deserialize_review(self, row: sqlite3.Row) -> ReviewRun:
-        return self.store.deserialize_review(row)
 
     def _resolve_parent_control_task(self, source: ReviewSource):
         if source.task_id:

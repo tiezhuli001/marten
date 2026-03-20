@@ -1,12 +1,12 @@
 {
   "profiles": {
     "default": {
-      "provider": "openai",
-      "model": "gpt-4.1-mini"
+      "provider": "minimax",
+      "model": "MiniMax-M2.5"
     },
     "coding": {
-      "provider": "openai",
-      "model": "gpt-4.1-mini"
+      "provider": "minimax",
+      "model": "MiniMax-M2.5"
     },
     "review": {
       "provider": "openai",
@@ -15,9 +15,14 @@
   },
   "providers": {
     "openai": {
+      "api_key": "your-openai-api-key",
+      "api_base": "https://api.openai.com/v1",
       "default_model": "gpt-4.1-mini"
     },
     "minimax": {
+      "protocol": "openai",
+      "api_key": "your-minimax-api-key",
+      "api_base": "https://api.minimax.io/v1",
       "default_model": "MiniMax-M2.5"
     }
   }

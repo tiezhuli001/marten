@@ -241,7 +241,17 @@ MVP 应做：
 - 1 套共享 Infra
 - 1 套最小 binding / session 机制
 
-## 七、依赖库选择原则
+## 七、当前收敛补充
+
+当前代码库已经明确收敛到以下原则：
+
+- provider/model 由 `models.json` 驱动，`.env` 只做 override
+- MCP server 由 `mcp.json` 驱动，不再依赖代码里注入 `GITHUB_TOKEN` / `OPENAI_API_KEY` 之类 placeholder alias
+- GitHub 平台操作只走 MCP bridge，不再保留 GitHub REST 恢复路径
+- MiniMax 内建 provider 现在只是默认的 OpenAI-compatible provider，不再保留专用 runtime 分支
+- pricing 主路径优先读取 provider 配置，内建价格表只作为零配置 fallback
+
+## 八、依赖库选择原则
 
 参考 OpenClaw“尽量复用成熟库”的思路，Python 侧建议：
 
@@ -249,15 +259,14 @@ MVP 应做：
 - `httpx`: 统一外部 HTTP 调用
 - `pydantic` / `pydantic-settings`: 配置与 schema
 - `APScheduler`: cron / polling / heartbeat
-- `openai` 官方 SDK: OpenAI provider
-- `MiniMax` 官方 SDK 或稳定 HTTP API 封装: MiniMax provider
+- `openai` 官方 SDK 或 OpenAI-compatible HTTP API: provider 主路径
 - `MCP Python SDK`: MCP 客户端接入
 - 飞书官方 SDK 或稳定 event/webhook SDK：Feishu channel adapter
 - `SQLite` 先继续使用，后续再迁 PostgreSQL
 
 不建议继续新增大量自写 HTTP 封装和 provider 逻辑，除非没有成熟库。
 
-## 八、推荐的 MVP 形态
+## 九、推荐的 MVP 形态
 
 最适合当前项目的 MVP 不是：
 

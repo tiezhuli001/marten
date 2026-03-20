@@ -298,12 +298,16 @@ class FakeReviewService:
 
 def build_settings(database_path: Path) -> Settings:
     platform_config_path = database_path.parent / "platform.json"
+    models_config_path = database_path.parent / "models.json"
     if not platform_config_path.exists():
         platform_config_path.write_text("{}", encoding="utf-8")
+    if not models_config_path.exists():
+        models_config_path.write_text("{}", encoding="utf-8")
     return Settings(
         app_env="test",
         database_url=f"sqlite:///{database_path}",
         platform_config_path=str(platform_config_path),
+        models_config_path=str(models_config_path),
         review_runs_dir=str(database_path.parent / "review-runs"),
         github_repository="tiezhuli001/youmeng-gateway",
         openai_api_key=None,
@@ -322,7 +326,6 @@ class AutomationServiceTests(unittest.TestCase):
             background = FakeBackgroundJobs()
             sleep_coding = SleepCodingService(
                 settings=settings,
-                github=github,
                 channel=channel,
                 git_workspace=FakeGitWorkspaceService(),
                 validator=FakeValidationRunner(),
@@ -346,7 +349,7 @@ class AutomationServiceTests(unittest.TestCase):
             reloaded = sleep_coding.get_task(task.task_id)
             self.assertEqual(reloaded.background_follow_up_status, "queued")
             self.assertTrue(
-                any(event.event_type == "background_follow_up_queued" for event in reloaded.events)
+                any(event.event_type == "follow_up.queued" for event in reloaded.events)
             )
 
     def test_auto_review_approves_clean_pr_and_sends_final_delivery(self) -> None:
@@ -372,7 +375,6 @@ class AutomationServiceTests(unittest.TestCase):
             )
             sleep_coding = SleepCodingService(
                 settings=settings,
-                github=github,
                 channel=channel,
                 git_workspace=FakeGitWorkspaceService(),
                 validator=FakeValidationRunner(),
@@ -417,7 +419,6 @@ class AutomationServiceTests(unittest.TestCase):
             channel = FakeChannelService()
             sleep_coding = SleepCodingService(
                 settings=settings,
-                github=github,
                 channel=channel,
                 git_workspace=FakeGitWorkspaceService(),
                 validator=FakeValidationRunner(),
@@ -447,7 +448,6 @@ class AutomationServiceTests(unittest.TestCase):
             channel = FakeChannelService()
             sleep_coding = SleepCodingService(
                 settings=settings,
-                github=github,
                 channel=channel,
                 git_workspace=FakeGitWorkspaceService(),
                 validator=FakeValidationRunner(),
@@ -456,7 +456,6 @@ class AutomationServiceTests(unittest.TestCase):
             )
             review = ReviewService(
                 settings=settings,
-                github=github,
                 sleep_coding=sleep_coding,
                 mcp_client=build_github_mcp(github),
             )
@@ -487,7 +486,6 @@ class AutomationServiceTests(unittest.TestCase):
             channel = FakeChannelService()
             sleep_coding = SleepCodingService(
                 settings=settings,
-                github=github,
                 channel=channel,
                 git_workspace=FakeGitWorkspaceService(),
                 validator=FakeValidationRunner(),
@@ -496,7 +494,6 @@ class AutomationServiceTests(unittest.TestCase):
             )
             review = ReviewService(
                 settings=settings,
-                github=github,
                 sleep_coding=sleep_coding,
                 mcp_client=build_github_mcp(github),
             )
@@ -573,7 +570,6 @@ class AutomationServiceTests(unittest.TestCase):
             background = FakeBackgroundJobs()
             sleep_coding = SleepCodingService(
                 settings=settings,
-                github=github,
                 channel=channel,
                 git_workspace=FakeGitWorkspaceService(),
                 validator=FakeValidationRunner(),
@@ -623,7 +619,6 @@ class AutomationServiceTests(unittest.TestCase):
             channel = FakeChannelService()
             sleep_coding = SleepCodingService(
                 settings=settings,
-                github=github,
                 channel=channel,
                 git_workspace=FakeGitWorkspaceService(),
                 validator=FakeValidationRunner(),
@@ -646,16 +641,16 @@ class AutomationServiceTests(unittest.TestCase):
             self.assertEqual(updated_task.status, "approved")
             self.assertEqual(updated_task.background_follow_up_status, "completed")
             event_types = [event.event_type for event in updated_task.events]
-            self.assertIn("background_follow_up_processing", event_types)
-            self.assertIn("background_follow_up_completed", event_types)
+            self.assertIn("follow_up.processing", event_types)
+            self.assertIn("follow_up.completed", event_types)
 
             control_task = automation.tasks.get_task(updated_task.control_task_id)
             self.assertEqual(control_task.payload["background_follow_up_status"], "completed")
             control_events = [
                 event.event_type for event in automation.tasks.list_events(control_task.task_id)
             ]
-            self.assertIn("background_follow_up_processing", control_events)
-            self.assertIn("background_follow_up_completed", control_events)
+            self.assertIn("follow_up.processing", control_events)
+            self.assertIn("follow_up.completed", control_events)
 
 
 if __name__ == "__main__":

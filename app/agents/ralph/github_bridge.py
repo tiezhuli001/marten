@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 import re
-import time
 from dataclasses import dataclass
+from collections.abc import Callable
 from typing import Any
+from time import sleep
 
 from app.core.config import Settings
 from app.models.schemas import (
@@ -29,9 +30,16 @@ class GitHubLabelLike:
 
 
 class RalphGitHubBridge:
-    def __init__(self, settings: Settings, mcp_client: MCPClient) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        mcp_client: MCPClient,
+        retry_sleep_fn: Callable[[float], None] | None = None,
+    ) -> None:
         self.settings = settings
         self.mcp_client = mcp_client
+        default_retry_sleep_fn = (lambda seconds: None) if settings.app_env == "test" else sleep
+        self.retry_sleep_fn = retry_sleep_fn or default_retry_sleep_fn
 
     def get_issue(
         self,
@@ -161,7 +169,7 @@ class RalphGitHubBridge:
             except Exception:
                 if attempt == 2:
                     raise
-                time.sleep(2)
+                self.retry_sleep_fn(2)
         raise RuntimeError("Failed to create pull request")
 
     def require_github_server(self, tool: str) -> str:
@@ -178,6 +186,12 @@ class RalphGitHubBridge:
 
     def coerce_mapping(self, content: object) -> dict[str, Any]:
         if isinstance(content, dict):
+            for key in ("text", "content"):
+                nested = content.get(key)
+                if isinstance(nested, str):
+                    candidate = self.coerce_mapping(nested)
+                    if candidate:
+                        return candidate
             return content
         if isinstance(content, str):
             text = content.strip()
@@ -195,12 +209,9 @@ class RalphGitHubBridge:
                 return {"url": url, "html_url": url}
         if isinstance(content, list):
             for item in content:
-                if isinstance(item, dict):
-                    return item
-                if isinstance(item, str):
-                    candidate = self.coerce_mapping(item)
-                    if candidate:
-                        return candidate
+                candidate = self.coerce_mapping(item)
+                if candidate:
+                    return candidate
         raise ValueError("MCP response did not contain a mapping payload")
 
     def coerce_html_url(self, payload: dict[str, Any]) -> str | None:

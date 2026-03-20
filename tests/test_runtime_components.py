@@ -153,6 +153,152 @@ class RuntimeComponentTests(unittest.TestCase):
             self.assertEqual(settings.resolved_github_repository, "demo/repo")
             self.assertEqual(settings.resolved_channel_provider, "feishu")
 
+    def test_settings_use_builtin_local_first_defaults_when_platform_json_is_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "platform.json").write_text("{}", encoding="utf-8")
+            settings = Settings(platform_config_path=str(root / "platform.json"))
+
+            self.assertIsNone(settings.resolved_sleep_coding_execution_command)
+            self.assertTrue(settings.resolved_sleep_coding_execution_allow_llm_fallback)
+            self.assertTrue(settings.resolved_review_writeback_final_only)
+            self.assertEqual(settings.resolved_review_follow_up_delay_seconds, 30)
+
+    def test_settings_allow_platform_json_to_override_review_writeback_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "platform.json").write_text(
+                json.dumps({"review": {"writeback_final_only": False}}),
+                encoding="utf-8",
+            )
+            settings = Settings(platform_config_path=str(root / "platform.json"))
+
+            self.assertFalse(settings.resolved_review_writeback_final_only)
+
+    def test_settings_allow_platform_json_to_disable_llm_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "platform.json").write_text(
+                json.dumps({"sleep_coding": {"execution": {"allow_llm_fallback": False}}}),
+                encoding="utf-8",
+            )
+            settings = Settings(
+                platform_config_path=str(root / "platform.json"),
+                sleep_coding_execution_allow_llm_fallback=True,
+            )
+
+            self.assertFalse(settings.resolved_sleep_coding_execution_allow_llm_fallback)
+
+    def test_settings_allow_platform_json_to_disable_forced_first_pass(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "platform.json").write_text(
+                json.dumps({"review": {"force_blocking_first_pass": False}}),
+                encoding="utf-8",
+            )
+            settings = Settings(
+                platform_config_path=str(root / "platform.json"),
+                review_force_blocking_first_pass=True,
+            )
+
+            self.assertFalse(settings.resolved_review_force_blocking_first_pass)
+
+    def test_settings_use_builtin_agent_and_model_defaults_when_override_files_are_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            agents_json = root / "agents.json"
+            models_json = root / "models.json"
+            agents_json.write_text("{}", encoding="utf-8")
+            models_json.write_text("{}", encoding="utf-8")
+            settings = Settings(
+                agents_config_path=str(agents_json),
+                models_config_path=str(models_json),
+            )
+
+            spec = settings.resolve_agent_spec("ralph")
+
+            self.assertEqual(spec.workspace, settings.project_root / "agents/ralph")
+            self.assertEqual(spec.skills, ["coding-planner", "coding-executor"])
+            self.assertEqual(spec.mcp_servers, ["github"])
+            self.assertEqual(spec.model_profile, "coding")
+            self.assertEqual(settings.resolved_llm_default_provider, "openai")
+
+    def test_settings_prefer_models_json_provider_credentials_over_env_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            models_json = root / "models.json"
+            models_json.write_text(
+                json.dumps(
+                    {
+                        "providers": {
+                            "openai": {
+                                "api_key": "json-openai-key",
+                                "api_base": "https://openai.internal/v1",
+                                "default_model": "gpt-4.1",
+                            },
+                            "minimax": {
+                                "api_key": "json-minimax-key",
+                                "api_base": "https://api.minimax.io/v1",
+                                "default_model": "MiniMax-M2.5",
+                            },
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            settings = Settings(
+                models_config_path=str(models_json),
+                openai_api_key="env-openai-key",
+                openai_api_base="https://api.openai.com/v1",
+                minimax_api_key="env-minimax-key",
+                minimax_api_base="https://api.minimax.io/v1",
+            )
+
+            self.assertEqual(settings.resolved_openai_api_key, "json-openai-key")
+            self.assertEqual(settings.resolved_openai_api_base, "https://openai.internal/v1")
+            self.assertEqual(settings.resolved_openai_model, "gpt-4.1")
+            self.assertEqual(settings.resolved_minimax_api_key, "json-minimax-key")
+            self.assertEqual(settings.resolved_minimax_api_base, "https://api.minimax.io/v1")
+            self.assertEqual(settings.resolved_minimax_model, "MiniMax-M2.5")
+            self.assertTrue(settings.has_runtime_llm_credentials)
+
+    def test_settings_support_custom_provider_ids_and_provider_model_syntax(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            models_json = root / "models.json"
+            models_json.write_text(
+                json.dumps(
+                    {
+                        "profiles": {
+                            "default": {
+                                "model": "minimax-coding-plan/MiniMax-M2.5"
+                            }
+                        },
+                        "providers": {
+                            "minimax-coding-plan": {
+                                "protocol": "openai",
+                                "apiKey": "custom-key",
+                                "options": {
+                                    "baseURL": "https://llm.example.com/v1"
+                                },
+                                "defaultModel": "MiniMax-M2.5",
+                                "pricingProvider": "minimax",
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            settings = Settings(models_config_path=str(models_json))
+
+            self.assertEqual(settings.resolved_llm_default_provider, "minimax-coding-plan")
+            self.assertEqual(settings.resolved_llm_default_model, "MiniMax-M2.5")
+            self.assertEqual(settings.resolve_provider_protocol("minimax-coding-plan"), "openai")
+            self.assertEqual(settings.resolve_provider_api_key("minimax-coding-plan"), "custom-key")
+            self.assertEqual(settings.resolve_provider_api_base("minimax-coding-plan"), "https://llm.example.com/v1")
+            self.assertEqual(settings.resolve_provider_pricing_provider("minimax-coding-plan"), "minimax")
+            self.assertTrue(settings.has_runtime_llm_credentials)
+
     def test_settings_keep_platform_worker_auto_approve_as_source_of_truth(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -441,7 +587,6 @@ class RuntimeComponentTests(unittest.TestCase):
             try:
                 settings = Settings(
                     mcp_config_path=str(config_path),
-                    mcp_github_enabled=False,
                 )
                 definitions = load_mcp_server_definitions(settings)
             finally:
@@ -459,13 +604,38 @@ class RuntimeComponentTests(unittest.TestCase):
             )
             self.assertEqual(definitions[0].timeout_seconds, 45)
 
+    def test_mcp_server_definitions_keep_json_configured_secrets_without_env_aliases(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config_path = root / "mcp.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "servers": {
+                            "github": {
+                                "transport": "stdio",
+                                "command": "docker",
+                                "args": ["run", "-e", "GITHUB_PERSONAL_ACCESS_TOKEN=json-first-token", "github-mcp"],
+                                "env": {
+                                    "GITHUB_PERSONAL_ACCESS_TOKEN": "json-first-token"
+                                },
+                                "adapter": "github",
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            settings = Settings(mcp_config_path=str(config_path))
+
+            definitions = load_mcp_server_definitions(settings)
+
+            self.assertEqual(definitions[0].env["GITHUB_PERSONAL_ACCESS_TOKEN"], "json-first-token")
+            self.assertIn("GITHUB_PERSONAL_ACCESS_TOKEN=json-first-token", definitions[0].args)
+
     def test_mcp_server_definitions_require_mcp_json(self) -> None:
         settings = Settings(
             mcp_config_path="/tmp/non-existent-mcp.json",
-            mcp_github_enabled=True,
-            mcp_github_command="npx",
-            mcp_github_args="-y github-mcp-server stdio",
-            mcp_github_env="GITHUB_PERSONAL_ACCESS_TOKEN=legacy-token",
         )
 
         definitions = load_mcp_server_definitions(settings)

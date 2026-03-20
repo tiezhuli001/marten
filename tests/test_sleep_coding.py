@@ -9,13 +9,14 @@ from app.models.github_results import GitHubCommentResult
 from app.models.schemas import (
     GitExecutionResult,
     SleepCodingIssue,
+    SleepCodingPlan,
     SleepCodingPullRequest,
     SleepCodingTaskActionRequest,
     SleepCodingTaskRequest,
     TokenUsage,
     ValidationResult,
 )
-from app.runtime.mcp import InMemoryMCPServer, MCPClient
+from app.runtime.mcp import InMemoryMCPServer, MCPClient, MCPTool, MCPToolResult
 from app.channel.notifications import ChannelNotificationResult
 from app.infra.git_workspace import GitWorkspaceService
 from app.agents.ralph.github_bridge import RalphGitHubBridge
@@ -270,6 +271,184 @@ class FailingAgentRuntime(FakeAgentRuntime):
         raise RuntimeError("LLM provider is unreachable")
 
 
+class ListSummaryAgentRuntime(FakeAgentRuntime):
+    def generate_structured_output(self, agent, *, user_prompt, output_contract, **kwargs):
+        self.calls.append(output_contract)
+        return type(
+            "FakeLLMResponse",
+            (),
+            {
+                "output_text": (
+                    '{"summary":["Add the smoke note file.","Keep the change minimal."],'
+                    '"scope":["Create docs/e2e-real-chain-smoke.md"],'
+                    '"validation":["python -m unittest discover -s tests"],'
+                    '"risks":["None."]}'
+                ),
+                "usage": type(
+                    "FakeUsage",
+                    (),
+                    {
+                        "prompt_tokens": 11,
+                        "completion_tokens": 13,
+                        "total_tokens": 24,
+                        "cache_read_tokens": 0,
+                        "cache_write_tokens": 0,
+                        "reasoning_tokens": 0,
+                        "message_count": 2,
+                        "duration_seconds": 0.0,
+                        "model_name": "test-model",
+                        "provider": "openai",
+                        "cost_usd": 0.0,
+                        "step_name": None,
+                        "model_copy": lambda self, update=None: self,
+                    },
+                )(),
+            },
+        )()
+
+
+class WrappedJsonPlanAgentRuntime(FakeAgentRuntime):
+    def generate_structured_output(self, agent, *, user_prompt, output_contract, **kwargs):
+        self.calls.append(output_contract)
+        return type(
+            "FakeLLMResponse",
+            (),
+            {
+                "output_text": (
+                    "<think>\nPlan the task first.\n</think>\n\n"
+                    '{"summary":"LLM generated plan","scope":["Update service code","Add tests"],'
+                    '"validation":["python scripts/run_sleep_coding_validation.py"],'
+                    '"risks":["Issue details may still need clarification."]}'
+                ),
+                "usage": type(
+                    "FakeUsage",
+                    (),
+                    {
+                        "prompt_tokens": 11,
+                        "completion_tokens": 13,
+                        "total_tokens": 24,
+                        "cache_read_tokens": 0,
+                        "cache_write_tokens": 0,
+                        "reasoning_tokens": 0,
+                        "message_count": 2,
+                        "duration_seconds": 0.0,
+                        "model_name": "test-model",
+                        "provider": "openai",
+                        "cost_usd": 0.0,
+                        "step_name": None,
+                        "model_copy": lambda self, update=None: self,
+                    },
+                )(),
+            },
+        )()
+
+
+class HashRocketPlanAgentRuntime(FakeAgentRuntime):
+    def generate_structured_output(self, agent, *, user_prompt, output_contract, **kwargs):
+        self.calls.append(output_contract)
+        return type(
+            "FakeLLMResponse",
+            (),
+            {
+                "output_text": (
+                    '{summary => "LLM generated plan", '
+                    'scope => ["Update service code", "Add tests"], '
+                    'validation => ["python scripts/run_sleep_coding_validation.py"], '
+                    'risks => ["Issue details may still need clarification."]}'
+                ),
+                "usage": type(
+                    "FakeUsage",
+                    (),
+                    {
+                        "prompt_tokens": 11,
+                        "completion_tokens": 13,
+                        "total_tokens": 24,
+                        "cache_read_tokens": 0,
+                        "cache_write_tokens": 0,
+                        "reasoning_tokens": 0,
+                        "message_count": 2,
+                        "duration_seconds": 0.0,
+                        "model_name": "test-model",
+                        "provider": "openai",
+                        "cost_usd": 0.0,
+                        "step_name": None,
+                        "model_copy": lambda self, update=None: self,
+                    },
+                )(),
+            },
+        )()
+
+
+class InvalidPlanAgentRuntime(FakeAgentRuntime):
+    def generate_structured_output(self, agent, *, user_prompt, output_contract, **kwargs):
+        self.calls.append(output_contract)
+        return type(
+            "FakeLLMResponse",
+            (),
+            {
+                "output_text": "Plan: update docs and add tests.",
+                "usage": type(
+                    "FakeUsage",
+                    (),
+                    {
+                        "prompt_tokens": 11,
+                        "completion_tokens": 13,
+                        "total_tokens": 24,
+                        "cache_read_tokens": 0,
+                        "cache_write_tokens": 0,
+                        "reasoning_tokens": 0,
+                        "message_count": 2,
+                        "duration_seconds": 0.0,
+                        "model_name": "test-model",
+                        "provider": "openai",
+                        "cost_usd": 0.0,
+                        "step_name": None,
+                        "model_copy": lambda self, update=None: self,
+                    },
+                )(),
+            },
+        )()
+
+
+class InvalidExecutionAgentRuntime(FakeAgentRuntime):
+    def generate_structured_output(self, agent, *, user_prompt, output_contract, **kwargs):
+        self.calls.append(output_contract)
+        if "artifact_markdown" in output_contract:
+            output_text = "Draft: touch docs and keep the change minimal."
+        else:
+            output_text = (
+                '{"summary":"LLM generated plan","scope":["Update docs"],'
+                '"validation":["python -m unittest discover -s tests"],'
+                '"risks":["Issue details may still need clarification."]}'
+            )
+        return type(
+            "FakeLLMResponse",
+            (),
+            {
+                "output_text": output_text,
+                "usage": type(
+                    "FakeUsage",
+                    (),
+                    {
+                        "prompt_tokens": 11,
+                        "completion_tokens": 13,
+                        "total_tokens": 24,
+                        "cache_read_tokens": 0,
+                        "cache_write_tokens": 0,
+                        "reasoning_tokens": 0,
+                        "message_count": 2,
+                        "duration_seconds": 0.0,
+                        "model_name": "test-model",
+                        "provider": "openai",
+                        "cost_usd": 0.0,
+                        "step_name": None,
+                        "model_copy": lambda self, update=None: self,
+                    },
+                )(),
+            },
+        )()
+
+
 def build_settings(database_path: Path, **kwargs) -> Settings:
     platform_config_path = database_path.parent / "platform.json"
     if not platform_config_path.exists():
@@ -287,24 +466,129 @@ def build_settings(database_path: Path, **kwargs) -> Settings:
 
 
 class SleepCodingServiceTests(unittest.TestCase):
-    def test_heuristic_execution_draft_does_not_write_docs_e2e_artifact(self) -> None:
+    def test_build_plan_normalizes_summary_list_from_llm_output(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             database_path = Path(temp_dir) / "sleep_coding.db"
             settings = build_settings(database_path)
             github = FakeGitHubService()
             service = SleepCodingService(
                 settings=settings,
-                github=github,
+                channel=FakeChannelService(),
+                git_workspace=FakeGitWorkspaceService(),
+                validator=FakeValidationRunner("passed"),
+                agent_runtime=ListSummaryAgentRuntime(),
+                mcp_client=build_github_mcp(github),
+            )
+            issue = SleepCodingIssue(
+                issue_number=62,
+                title="Add minimal real-chain smoke note file",
+                body="Add docs/e2e-real-chain-smoke.md",
+                html_url="https://github.com/tiezhuli001/youmeng-gateway/issues/62",
+            )
+
+            plan, _ = service._build_plan(issue)
+
+            self.assertEqual(
+                plan.summary,
+                "Add the smoke note file. Keep the change minimal.",
+            )
+
+    def test_build_plan_accepts_json_wrapped_in_think_text(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database_path = Path(temp_dir) / "sleep_coding.db"
+            settings = build_settings(database_path)
+            github = FakeGitHubService()
+            service = SleepCodingService(
+                settings=settings,
+                channel=FakeChannelService(),
+                git_workspace=FakeGitWorkspaceService(),
+                validator=FakeValidationRunner("passed"),
+                agent_runtime=WrappedJsonPlanAgentRuntime(),
+                mcp_client=build_github_mcp(github),
+            )
+            issue = SleepCodingIssue(
+                issue_number=63,
+                title="Add minimal real-chain smoke note file for MiniMax validation",
+                body="Add docs/e2e-real-chain-smoke-minimax.md",
+                html_url="https://github.com/tiezhuli001/youmeng-gateway/issues/63",
+            )
+
+            plan, _ = service._build_plan(issue)
+
+            self.assertEqual(plan.summary, "LLM generated plan")
+
+    def test_build_plan_accepts_hash_rocket_wrapped_object(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database_path = Path(temp_dir) / "sleep_coding.db"
+            settings = build_settings(database_path)
+            github = FakeGitHubService()
+            service = SleepCodingService(
+                settings=settings,
+                channel=FakeChannelService(),
+                git_workspace=FakeGitWorkspaceService(),
+                validator=FakeValidationRunner("passed"),
+                agent_runtime=HashRocketPlanAgentRuntime(),
+                mcp_client=build_github_mcp(github),
+            )
+            issue = SleepCodingIssue(
+                issue_number=64,
+                title="Add hash rocket plan parsing coverage",
+                body="Add docs/e2e-real-chain-smoke-minimax.md",
+                html_url="https://github.com/tiezhuli001/youmeng-gateway/issues/64",
+            )
+
+            plan, _ = service._build_plan(issue)
+
+            self.assertEqual(plan.summary, "LLM generated plan")
+
+    def test_build_plan_falls_back_to_heuristic_when_provider_output_is_not_json(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database_path = Path(temp_dir) / "sleep_coding.db"
+            settings = build_settings(database_path)
+            github = FakeGitHubService()
+            service = SleepCodingService(
+                settings=settings,
+                channel=FakeChannelService(),
+                git_workspace=FakeGitWorkspaceService(),
+                validator=FakeValidationRunner("passed"),
+                agent_runtime=InvalidPlanAgentRuntime(),
+                mcp_client=build_github_mcp(github),
+            )
+            issue = SleepCodingIssue(
+                issue_number=65,
+                title="Add live chain validation marker",
+                body="Touch docs/internal/live-chain-validation.md",
+                html_url="https://github.com/tiezhuli001/youmeng-gateway/issues/65",
+            )
+
+            plan, usage = service._build_plan(issue)
+
+            self.assertEqual(plan.summary, "Implement Issue #65: Add live chain validation marker")
+            self.assertEqual(usage.total_tokens, 24)
+
+    def test_heuristic_execution_draft_updates_live_chain_validation_doc_when_issue_targets_it(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database_path = Path(temp_dir) / "sleep_coding.db"
+            settings = build_settings(database_path)
+            github = FakeGitHubService()
+            service = SleepCodingService(
+                settings=settings,
                 channel=FakeChannelService(),
                 git_workspace=FakeGitWorkspaceService(),
                 validator=FakeValidationRunner("passed"),
                 agent_runtime=FakeAgentRuntime(),
                 mcp_client=build_github_mcp(github),
             )
+            repo_path = Path(temp_dir) / "repo"
+            target = repo_path / "docs" / "internal" / "live-chain-validation.md"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("# Live Chain Validation\n", encoding="utf-8")
+            service.repo_path = repo_path
+            service.drafting.repo_path = repo_path
             issue = SleepCodingIssue(
                 issue_number=56,
-                title="Add minimal documentation",
-                body="Please add a docs markdown artifact for validation.",
+                title="Add live chain validation marker",
+                body="Please append a dated marker to docs/internal/live-chain-validation.md.",
                 html_url="https://github.com/tiezhuli001/youmeng-gateway/issues/56",
             )
 
@@ -314,7 +598,10 @@ class SleepCodingServiceTests(unittest.TestCase):
                 "codex/issue-56-sleep-coding",
             )
 
-            self.assertEqual(draft.file_changes, [])
+            self.assertEqual(len(draft.file_changes), 1)
+            self.assertEqual(draft.file_changes[0].path, "docs/internal/live-chain-validation.md")
+            self.assertIn("live validation marker:", draft.file_changes[0].content)
+            self.assertIn("<!-- ralph-e2e-issue-56 -->", draft.file_changes[0].content)
 
     def test_heuristic_execution_draft_adds_readme_change_when_issue_mentions_readme(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -323,7 +610,6 @@ class SleepCodingServiceTests(unittest.TestCase):
             github = FakeGitHubService()
             service = SleepCodingService(
                 settings=settings,
-                github=github,
                 channel=FakeChannelService(),
                 git_workspace=FakeGitWorkspaceService(),
                 validator=FakeValidationRunner("passed"),
@@ -361,7 +647,6 @@ class SleepCodingServiceTests(unittest.TestCase):
             agent_runtime = FakeAgentRuntime()
             service = SleepCodingService(
                 settings=settings,
-                github=github,
                 channel=channel,
                 git_workspace=git_workspace,
                 validator=FakeValidationRunner("passed"),
@@ -392,7 +677,6 @@ class SleepCodingServiceTests(unittest.TestCase):
             agent_runtime = FakeAgentRuntime()
             service = SleepCodingService(
                 settings=settings,
-                github=github,
                 channel=channel,
                 git_workspace=git_workspace,
                 validator=FakeValidationRunner("passed"),
@@ -408,6 +692,32 @@ class SleepCodingServiceTests(unittest.TestCase):
             )
 
             self.assertEqual(updated.status, "in_review")
+
+    def test_approve_plan_falls_back_to_heuristic_execution_when_provider_output_is_not_json(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database_path = Path(temp_dir) / "sleep_coding.db"
+            settings = build_settings(database_path)
+            github = FakeGitHubService()
+            channel = FakeChannelService()
+            git_workspace = FakeGitWorkspaceService()
+            service = SleepCodingService(
+                settings=settings,
+                channel=channel,
+                git_workspace=git_workspace,
+                validator=FakeValidationRunner("passed"),
+                ledger=TokenLedgerService(settings),
+                agent_runtime=InvalidExecutionAgentRuntime(),
+                mcp_client=build_github_mcp(github),
+            )
+            task = service.start_task(SleepCodingTaskRequest(issue_number=66))
+
+            updated = service.apply_action(
+                task.task_id,
+                SleepCodingTaskActionRequest(action="approve_plan"),
+            )
+
+            self.assertEqual(updated.status, "in_review")
+            self.assertIsNotNone(updated.pull_request)
 
     def test_approve_plan_prefers_local_execution_command_when_configured(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -440,7 +750,6 @@ class SleepCodingServiceTests(unittest.TestCase):
             agent_runtime = FakeAgentRuntime()
             service = SleepCodingService(
                 settings=settings,
-                github=github,
                 channel=FakeChannelService(),
                 git_workspace=git_workspace,
                 validator=FakeValidationRunner("passed"),
@@ -484,7 +793,6 @@ class SleepCodingServiceTests(unittest.TestCase):
             )
             service = SleepCodingService(
                 settings=settings,
-                github=github,
                 channel=FakeChannelService(),
                 git_workspace=FakeGitWorkspaceService(),
                 validator=FakeValidationRunner("passed"),
@@ -512,6 +820,56 @@ class SleepCodingServiceTests(unittest.TestCase):
             self.assertEqual(plan_usage.step_name, "sleep_coding_plan")
             self.assertGreater(plan_usage.total_tokens, 0)
 
+    def test_start_task_inherits_request_id_from_parent_control_task(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database_path = Path(temp_dir) / "sleep_coding.db"
+            settings = build_settings(database_path)
+            ledger = TokenLedgerService(settings)
+            github = FakeGitHubService()
+            ledger.record_request(
+                request_id="req-parent-42",
+                run_id="run-parent-42",
+                user_id="user-42",
+                source="manual",
+                intent="sleep_coding",
+                content="issue 42",
+                usage=TokenUsage(
+                    prompt_tokens=3,
+                    completion_tokens=2,
+                    total_tokens=5,
+                    message_count=1,
+                    duration_seconds=0.5,
+                    step_name="main_agent_issue_intake",
+                ),
+            )
+            service = SleepCodingService(
+                settings=settings,
+                channel=FakeChannelService(),
+                git_workspace=FakeGitWorkspaceService(),
+                validator=FakeValidationRunner("passed"),
+                ledger=ledger,
+                agent_runtime=FakeAgentRuntime(),
+                mcp_client=build_github_mcp(github),
+            )
+            service.tasks.create_task(
+                task_type="main_agent_intake",
+                agent_id="main-agent",
+                status="issue_created",
+                user_id="user-42",
+                source="manual",
+                repo="tiezhuli001/youmeng-gateway",
+                issue_number=42,
+                title="Parent intake task",
+                external_ref="github_issue:tiezhuli001/youmeng-gateway#42",
+                payload={"request_id": "req-parent-42"},
+            )
+
+            task = service.start_task(SleepCodingTaskRequest(issue_number=42))
+
+            self.assertEqual(task.kickoff_request_id, "req-parent-42")
+            plan_usage = ledger.get_request_usage("req-parent-42", ["sleep_coding_plan"])
+            self.assertGreater(plan_usage.total_tokens, 0)
+
     def test_start_task_raises_when_plan_llm_fails_with_provider_configured(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             database_path = Path(temp_dir) / "sleep_coding.db"
@@ -525,11 +883,12 @@ class SleepCodingServiceTests(unittest.TestCase):
                 langsmith_tracing=False,
                 minimax_api_key="test-key",
                 openai_api_key=None,
+                sleep_coding_execution_command=None,
+                sleep_coding_execution_allow_llm_fallback=False,
             )
             github = FakeGitHubService()
             service = SleepCodingService(
                 settings=settings,
-                github=github,
                 channel=FakeChannelService(),
                 git_workspace=FakeGitWorkspaceService(),
                 validator=FakeValidationRunner("passed"),
@@ -557,11 +916,12 @@ class SleepCodingServiceTests(unittest.TestCase):
                 langsmith_tracing=False,
                 minimax_api_key="test-key",
                 openai_api_key=None,
+                sleep_coding_execution_command=None,
+                sleep_coding_execution_allow_llm_fallback=False,
             )
             github = FakeGitHubService()
             service = SleepCodingService(
                 settings=settings,
-                github=github,
                 channel=FakeChannelService(),
                 git_workspace=FakeGitWorkspaceService(),
                 validator=FakeValidationRunner("passed"),
@@ -592,11 +952,12 @@ class SleepCodingServiceTests(unittest.TestCase):
                 langsmith_tracing=False,
                 minimax_api_key="test-key",
                 openai_api_key=None,
+                sleep_coding_execution_command=None,
+                sleep_coding_execution_allow_llm_fallback=False,
             )
             github = FakeGitHubService()
             service = SleepCodingService(
                 settings=settings,
-                github=github,
                 channel=FakeChannelService(),
                 git_workspace=FakeGitWorkspaceService(),
                 validator=FakeValidationRunner("passed"),
@@ -629,7 +990,6 @@ class SleepCodingServiceTests(unittest.TestCase):
             github = FakeGitHubService()
             service = SleepCodingService(
                 settings=settings,
-                github=github,
                 channel=FakeChannelService(),
                 git_workspace=FakeGitWorkspaceService(),
                 validator=None,
@@ -680,6 +1040,24 @@ class SleepCodingServiceTests(unittest.TestCase):
             "https://github.com/tiezhuli001/youmeng-gateway/pull/123",
         )
 
+    def test_github_bridge_coerces_text_mapping_payload(self) -> None:
+        settings = Settings(app_env="test", github_repository="tiezhuli001/youmeng-gateway")
+        bridge = RalphGitHubBridge(settings, MCPClient())
+        payload = bridge.coerce_mapping(
+            [
+                {
+                    "type": "text",
+                    "text": '{"html_url":"https://github.com/tiezhuli001/youmeng-gateway/pull/456","number":456}',
+                }
+            ]
+        )
+        self.assertEqual(
+            payload["html_url"],
+            "https://github.com/tiezhuli001/youmeng-gateway/pull/456",
+        )
+        self.assertEqual(payload["number"], 456)
+
+
     def test_failed_validation_marks_task_failed(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             database_path = Path(temp_dir) / "sleep_coding.db"
@@ -690,7 +1068,6 @@ class SleepCodingServiceTests(unittest.TestCase):
             github = FakeGitHubService()
             service = SleepCodingService(
                 settings=settings,
-                github=github,
                 channel=channel,
                 git_workspace=git_workspace,
                 validator=FakeValidationRunner("failed"),
@@ -720,7 +1097,6 @@ class SleepCodingServiceTests(unittest.TestCase):
             github = FakeGitHubService()
             service = SleepCodingService(
                 settings=settings,
-                github=github,
                 channel=FakeChannelService(),
                 git_workspace=FakeGitWorkspaceService(),
                 validator=FakeValidationRunner("passed"),
@@ -754,7 +1130,6 @@ class SleepCodingServiceTests(unittest.TestCase):
             github = FakeGitHubService()
             service = SleepCodingService(
                 settings=settings,
-                github=github,
                 channel=FakeChannelService(),
                 git_workspace=FakeGitWorkspaceService(),
                 validator=FakeValidationRunner("passed"),
@@ -862,9 +1237,58 @@ class GitWorkspaceServiceTests(unittest.TestCase):
             )
             service = GitWorkspaceService(settings, mcp_client=MCPClient())
             service.repo_path = repo_root
-            collected = service._collect_changed_files(worktree_path)
+            collected = service._collect_changed_files(worktree_path, branch="codex/issue-33")
 
             self.assertEqual(
                 collected,
                 [{"path": "docs/e2e/issue-33.md", "content": "live smoke\n"}],
+            )
+
+    def test_collect_changed_files_includes_pending_ignored_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo_root = Path(temp_dir) / "repo"
+            repo_root.mkdir()
+            subprocess.run(["git", "init"], cwd=repo_root, check=True, capture_output=True, text=True)
+            subprocess.run(["git", "checkout", "-b", "main"], cwd=repo_root, check=True, capture_output=True, text=True)
+            (repo_root / ".gitignore").write_text("docs/internal/\n", encoding="utf-8")
+            subprocess.run(["git", "add", ".gitignore"], cwd=repo_root, check=True, capture_output=True, text=True)
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "user.name=Test User",
+                    "-c",
+                    "user.email=test@example.com",
+                    "commit",
+                    "-m",
+                    "init",
+                ],
+                cwd=repo_root,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+            ignored = repo_root / "docs" / "internal" / "live-chain-validation.md"
+            ignored.parent.mkdir(parents=True, exist_ok=True)
+            ignored.write_text("marker\n", encoding="utf-8")
+
+            platform_config_path = Path(temp_dir) / "platform.json"
+            platform_config_path.write_text("{}", encoding="utf-8")
+            settings = Settings(
+                app_env="test",
+                database_url=f"sqlite:///{repo_root / 'test.db'}",
+                platform_config_path=str(platform_config_path),
+                github_repository="tiezhuli001/youmeng-gateway",
+                langsmith_tracing=False,
+            )
+            service = GitWorkspaceService(settings, mcp_client=MCPClient())
+            service.repo_path = repo_root
+            service._pending_files["codex/issue-65"] = ["docs/internal/live-chain-validation.md"]
+
+            collected = service._collect_changed_files(worktree_path=repo_root, branch="codex/issue-65")
+
+            self.assertEqual(
+                collected,
+                [{"path": "docs/internal/live-chain-validation.md", "content": "marker\n"}],
             )

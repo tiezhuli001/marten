@@ -1,5 +1,4 @@
 import json
-import shlex
 from dataclasses import dataclass
 from functools import cached_property
 from functools import lru_cache
@@ -33,7 +32,7 @@ class Settings(BaseSettings):
     openai_api_base: str = "https://api.openai.com/v1"
     openai_model: str = "gpt-4.1-mini"
     minimax_api_key: str | None = None
-    minimax_api_base: str = "https://api.minimaxi.com"
+    minimax_api_base: str = "https://api.minimax.io/v1"
     minimax_model: str = "MiniMax-M2.5"
     llm_default_provider: str = "openai"
     llm_default_model: str | None = None
@@ -53,11 +52,6 @@ class Settings(BaseSettings):
     sleep_coding_mcp_servers: str = "github"
     mcp_config_path: str = "mcp.json"
     mcp_github_server_name: str = "github"
-    mcp_github_enabled: bool = False
-    mcp_github_command: str = "npx"
-    mcp_github_args: str = "-y github-mcp-server stdio"
-    mcp_github_env: str = ""
-    mcp_github_cwd: str | None = None
     mcp_request_timeout_seconds: float = 30.0
     database_url: str = "sqlite:///data/youmeng_gateway.db"
     github_token: str | None = None
@@ -81,9 +75,9 @@ class Settings(BaseSettings):
     sleep_coding_enable_git_commit: bool = False
     sleep_coding_enable_git_push: bool = False
     git_remote_name: str = "origin"
-    sleep_coding_validation_command: str = "python -m unittest discover -s tests"
+    sleep_coding_validation_command: str = "python scripts/run_sleep_coding_validation.py"
     sleep_coding_execution_command: str | None = None
-    sleep_coding_execution_allow_llm_fallback: bool = False
+    sleep_coding_execution_allow_llm_fallback: bool = True
     review_runs_dir: str = "data/review-runs"
     review_workspace: str = "agents/code-review-agent"
     review_skills: str = "code-review"
@@ -92,7 +86,7 @@ class Settings(BaseSettings):
     review_skill_command: str | None = None
     review_force_blocking_first_pass: bool = False
     review_writeback_final_only: bool = True
-    review_follow_up_delay_seconds: int = 0
+    review_follow_up_delay_seconds: int = 30
     gitlab_api_base: str = "https://gitlab.com/api/v4"
     gitlab_token: str | None = None
 
@@ -108,8 +102,7 @@ class Settings(BaseSettings):
 
     @property
     def resolved_data_dir(self) -> Path:
-        data_dir = Path(self.app_data_dir).expanduser()
-        return data_dir if data_dir.is_absolute() else self.project_root / data_dir
+        return self._resolve_project_path(self.app_data_dir)
 
     @property
     def resolved_database_path(self) -> Path:
@@ -152,8 +145,7 @@ class Settings(BaseSettings):
 
     @property
     def resolved_review_runs_dir(self) -> Path:
-        review_dir = Path(self.review_runs_dir).expanduser()
-        return review_dir if review_dir.is_absolute() else self.project_root / review_dir
+        return self._resolve_project_path(self.review_runs_dir)
 
     @property
     def resolved_sleep_coding_execution_command(self) -> str | None:
@@ -168,36 +160,26 @@ class Settings(BaseSettings):
 
     @property
     def resolved_sleep_coding_execution_allow_llm_fallback(self) -> bool:
-        if self.sleep_coding_execution_allow_llm_fallback:
-            return True
-        return bool(
-            self._get_platform_setting(
-                ("sleep_coding", "execution", "allow_llm_fallback"),
-                False,
-            )
+        return self._resolve_platform_bool(
+            ("sleep_coding", "execution", "allow_llm_fallback"),
+            self.sleep_coding_execution_allow_llm_fallback,
         )
 
     @property
     def resolved_review_force_blocking_first_pass(self) -> bool:
-        if self.review_force_blocking_first_pass:
-            return True
-        return bool(
-            self._get_platform_setting(
-                ("review", "force_blocking_first_pass"),
-                False,
-            )
+        return self._resolve_platform_bool(
+            ("review", "force_blocking_first_pass"),
+            self.review_force_blocking_first_pass,
         )
 
     @property
     def resolved_review_writeback_final_only(self) -> bool:
-        if not self.review_writeback_final_only:
-            return bool(
-                self._get_platform_setting(
-                    ("review", "writeback_final_only"),
-                    False,
-                )
+        return bool(
+            self._get_platform_setting(
+                ("review", "writeback_final_only"),
+                self.review_writeback_final_only,
             )
-        return True
+        )
 
     @property
     def resolved_review_follow_up_delay_seconds(self) -> int:
@@ -225,18 +207,15 @@ class Settings(BaseSettings):
 
     @property
     def resolved_platform_config_path(self) -> Path:
-        config_path = Path(self.platform_config_path).expanduser()
-        return config_path if config_path.is_absolute() else self.project_root / config_path
+        return self._resolve_project_path(self.platform_config_path)
 
     @property
     def resolved_agents_config_path(self) -> Path:
-        config_path = Path(self.agents_config_path).expanduser()
-        return config_path if config_path.is_absolute() else self.project_root / config_path
+        return self._resolve_project_path(self.agents_config_path)
 
     @property
     def resolved_models_config_path(self) -> Path:
-        config_path = Path(self.models_config_path).expanduser()
-        return config_path if config_path.is_absolute() else self.project_root / config_path
+        return self._resolve_project_path(self.models_config_path)
 
     @cached_property
     def platform_config(self) -> dict[str, object]:
@@ -252,13 +231,13 @@ class Settings(BaseSettings):
 
     @property
     def resolved_skills_root_dir(self) -> Path:
-        skills_dir = Path(self.skills_root_dir).expanduser()
-        return skills_dir if skills_dir.is_absolute() else self.project_root / skills_dir
+        return self._resolve_project_path(self.skills_root_dir)
 
     @property
     def resolved_main_agent_workspace(self) -> Path:
-        workspace = Path(self._get_agent_setting("main-agent", "workspace", self.main_agent_workspace)).expanduser()
-        return workspace if workspace.is_absolute() else self.project_root / workspace
+        return self._resolve_workspace_path(
+            self._get_agent_setting("main-agent", "workspace", self.main_agent_workspace)
+        )
 
     @property
     def resolved_main_agent_skills(self) -> list[str]:
@@ -278,14 +257,13 @@ class Settings(BaseSettings):
 
     @property
     def resolved_sleep_coding_workspace(self) -> Path:
-        workspace = Path(
+        return self._resolve_workspace_path(
             self._get_agent_setting(
                 "ralph",
                 "workspace",
                 self.sleep_coding_workspace,
             )
-        ).expanduser()
-        return workspace if workspace.is_absolute() else self.project_root / workspace
+        )
 
     @property
     def resolved_sleep_coding_skills(self) -> list[str]:
@@ -313,10 +291,9 @@ class Settings(BaseSettings):
 
     @property
     def resolved_review_workspace(self) -> Path:
-        workspace = Path(
+        return self._resolve_workspace_path(
             self._get_agent_setting("code-review-agent", "workspace", self.review_workspace)
-        ).expanduser()
-        return workspace if workspace.is_absolute() else self.project_root / workspace
+        )
 
     @property
     def resolved_review_skills(self) -> list[str]:
@@ -340,9 +317,9 @@ class Settings(BaseSettings):
 
     def resolve_agent_spec(self, agent_id: str) -> AgentSpec:
         defaults = self._default_agent_spec(agent_id)
-        workspace_raw = self._get_agent_setting(agent_id, "workspace", defaults["workspace"])
-        workspace = Path(str(workspace_raw)).expanduser()
-        resolved_workspace = workspace if workspace.is_absolute() else self.project_root / workspace
+        resolved_workspace = self._resolve_workspace_path(
+            self._get_agent_setting(agent_id, "workspace", defaults["workspace"])
+        )
         skills = self._resolve_string_list(
             self._get_agent_setting(agent_id, "skills", defaults["skills"])
         )
@@ -407,55 +384,24 @@ class Settings(BaseSettings):
         return text or None
 
     @property
-    def resolved_mcp_github_args(self) -> list[str]:
-        return shlex.split(self.mcp_github_args)
-
-    @property
-    def resolved_mcp_github_env(self) -> dict[str, str]:
-        raw = self.mcp_github_env.strip()
-        if not raw:
-            return {}
-        if raw.startswith("{"):
-            loaded = json.loads(raw)
-            if not isinstance(loaded, dict):
-                raise ValueError("MCP_GITHUB_ENV JSON must be an object")
-            return {str(key): str(value) for key, value in loaded.items()}
-
-        env: dict[str, str] = {}
-        for line in raw.replace(",", "\n").splitlines():
-            item = line.strip()
-            if not item:
-                continue
-            key, separator, value = item.partition("=")
-            if not separator:
-                raise ValueError("MCP_GITHUB_ENV entries must use KEY=VALUE format")
-            env[key.strip()] = value.strip()
-        return env
-
-    @property
-    def resolved_mcp_github_cwd(self) -> Path | None:
-        if not self.mcp_github_cwd:
-            return None
-        cwd = Path(self.mcp_github_cwd).expanduser()
-        return cwd if cwd.is_absolute() else self.project_root / cwd
-
-    @property
     def resolved_mcp_config_path(self) -> Path:
-        config_path = Path(self.mcp_config_path).expanduser()
-        return config_path if config_path.is_absolute() else self.project_root / config_path
+        return self._resolve_project_path(self.mcp_config_path)
 
     @property
     def resolved_llm_default_provider(self) -> str:
-        return str(
-            self._get_default_model_profile().get("provider", self.llm_default_provider)
-        )
+        provider, _ = self.resolve_model_profile("default")
+        if provider:
+            return provider
+        return self.llm_default_provider
 
     @property
     def resolved_llm_default_model(self) -> str | None:
-        value = self._get_default_model_profile().get("model")
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-        return self.llm_default_model
+        _, model = self.resolve_model_profile("default")
+        if model:
+            return model
+        if self.llm_default_model:
+            return self.llm_default_model
+        return self.resolve_provider_default_model(self.resolved_llm_default_provider)
 
     @property
     def resolved_llm_request_timeout_seconds(self) -> float:
@@ -491,6 +437,26 @@ class Settings(BaseSettings):
         )
 
     @property
+    def resolved_openai_api_key(self) -> str | None:
+        return self._get_provider_setting("openai", "api_key", self.openai_api_key)
+
+    @property
+    def resolved_openai_api_base(self) -> str:
+        return str(
+            self._get_provider_setting("openai", "api_base", self.openai_api_base)
+        ).strip()
+
+    @property
+    def resolved_minimax_api_key(self) -> str | None:
+        return self._get_provider_setting("minimax", "api_key", self.minimax_api_key)
+
+    @property
+    def resolved_minimax_api_base(self) -> str:
+        return str(
+            self._get_provider_setting("minimax", "api_base", self.minimax_api_base)
+        ).strip()
+
+    @property
     def resolved_openai_model(self) -> str:
         return str(
             self._get_provider_model("openai", self.openai_model)
@@ -501,6 +467,103 @@ class Settings(BaseSettings):
         return str(
             self._get_provider_model("minimax", self.minimax_model)
         )
+
+    def resolve_provider_protocol(self, provider: str | None) -> str:
+        provider_id = self._resolve_provider_id(provider)
+        provider_config = self._get_provider_config(provider_id)
+        protocol = self._coerce_provider_string(
+            self._get_provider_value(
+                provider_config,
+                "protocol",
+                "compat",
+                "compatibility",
+                "driver",
+                "transport",
+            )
+        )
+        if protocol:
+            return protocol
+        npm_package = self._coerce_provider_string(
+            self._get_provider_value(provider_config, "npm")
+        )
+        if npm_package and "openai" in npm_package:
+            return "openai"
+        if provider_config is not None:
+            api_base = self._coerce_provider_string(
+                self._get_provider_value(
+                    provider_config,
+                    "api_base",
+                    "apiBase",
+                    "base_url",
+                    "baseURL",
+                    "options.api_base",
+                    "options.apiBase",
+                    "options.base_url",
+                    "options.baseURL",
+                )
+            )
+            if api_base:
+                return "openai"
+        return provider_id
+
+    def resolve_provider_api_key(self, provider: str | None) -> str | None:
+        provider_id = self._resolve_provider_id(provider)
+        provider_config = self._get_provider_config(provider_id)
+        return self._coerce_provider_string(
+            self._get_provider_value(
+                provider_config,
+                "api_key",
+                "apiKey",
+                "options.api_key",
+                "options.apiKey",
+            )
+        )
+
+    def resolve_provider_api_base(self, provider: str | None) -> str | None:
+        provider_id = self._resolve_provider_id(provider)
+        provider_config = self._get_provider_config(provider_id)
+        return self._coerce_provider_string(
+            self._get_provider_value(
+                provider_config,
+                "api_base",
+                "apiBase",
+                "base_url",
+                "baseURL",
+                "options.api_base",
+                "options.apiBase",
+                "options.base_url",
+                "options.baseURL",
+            )
+        )
+
+    def resolve_provider_default_model(self, provider: str | None) -> str | None:
+        provider_id = self._resolve_provider_id(provider)
+        provider_config = self._get_provider_config(provider_id)
+        model = self._coerce_provider_string(
+            self._get_provider_value(
+                provider_config,
+                "default_model",
+                "defaultModel",
+            )
+        )
+        if model:
+            return model
+        return None
+
+    def resolve_provider_pricing_provider(self, provider: str | None) -> str:
+        provider_id = self._resolve_provider_id(provider)
+        provider_config = self._get_provider_config(provider_id)
+        value = self._coerce_provider_string(
+            self._get_provider_value(
+                provider_config,
+                "pricing_provider",
+                "pricingProvider",
+            )
+        )
+        if value:
+            return value
+        protocol = self.resolve_provider_protocol(provider_id)
+        return protocol if protocol == "openai" else provider_id
 
     @property
     def resolved_sleep_coding_worker_poll_interval_seconds(self) -> int:
@@ -610,6 +673,17 @@ class Settings(BaseSettings):
             )
         )
 
+    @property
+    def has_runtime_llm_credentials(self) -> bool:
+        if self.resolve_provider_api_key(self.resolved_llm_default_provider):
+            return True
+        providers = self.models_config.get("providers", {})
+        if isinstance(providers, dict):
+            for provider_name in providers:
+                if self.resolve_provider_api_key(str(provider_name)):
+                    return True
+        return bool(self.resolved_openai_api_key or self.resolved_minimax_api_key)
+
     def resolve_model_profile(
         self,
         profile_name: str | None,
@@ -624,9 +698,17 @@ class Settings(BaseSettings):
             return None, None
         provider = profile.get("provider")
         model = profile.get("model")
+        provider_text = str(provider).strip() if isinstance(provider, str) and provider.strip() else None
+        model_text = str(model).strip() if isinstance(model, str) and model.strip() else None
+        if provider_text is None and model_text and "/" in model_text:
+            provider_candidate, _, model_candidate = model_text.partition("/")
+            provider_candidate = provider_candidate.strip()
+            model_candidate = model_candidate.strip()
+            if provider_candidate and model_candidate:
+                return provider_candidate, model_candidate
         return (
-            str(provider).strip() if isinstance(provider, str) and provider.strip() else None,
-            str(model).strip() if isinstance(model, str) and model.strip() else None,
+            provider_text,
+            model_text,
         )
 
     def _load_json_config(self, path: Path) -> dict[str, object]:
@@ -710,6 +792,16 @@ class Settings(BaseSettings):
             return [item.strip() for item in raw.split(",") if item.strip()]
         return []
 
+    def _resolve_project_path(self, raw: str | Path) -> Path:
+        path = Path(raw).expanduser()
+        return path if path.is_absolute() else self.project_root / path
+
+    def _resolve_workspace_path(self, raw: object) -> Path:
+        return self._resolve_project_path(str(raw))
+
+    def _resolve_platform_bool(self, path: tuple[str, ...], default: bool) -> bool:
+        return bool(self._get_platform_setting(path, default))
+
     def _get_default_model_profile(self) -> dict[str, object]:
         profiles = self.models_config.get("profiles", {})
         if not isinstance(profiles, dict):
@@ -718,14 +810,94 @@ class Settings(BaseSettings):
         return profile if isinstance(profile, dict) else {}
 
     def _get_provider_model(self, provider: str, fallback: str) -> str:
+        model = self.resolve_provider_default_model(provider)
+        if model:
+            return model
+        fallback_text = fallback.strip()
+        if fallback_text:
+            return fallback_text
+        protocol = self.resolve_provider_protocol(provider)
+        if protocol == "openai":
+            return self.openai_model
+        return fallback
+
+    def _get_provider_setting(
+        self,
+        provider: str,
+        key: str,
+        fallback: str | None,
+    ) -> str | None:
+        provider_config = self._get_provider_config(provider)
+        if provider_config is not None:
+            value = self._get_provider_value(provider_config, key)
+            if value is None:
+                return fallback.strip() or None if isinstance(fallback, str) else fallback
+            text = str(value).strip()
+            return text or None
+        return fallback.strip() or None if isinstance(fallback, str) else fallback
+
+    def _get_provider_config(self, provider: str) -> dict[str, object] | None:
+        provider = provider.strip()
+        builtin = self._get_builtin_provider_config(provider)
         providers = self.models_config.get("providers", {})
         if isinstance(providers, dict):
             provider_config = providers.get(provider)
             if isinstance(provider_config, dict):
-                model = provider_config.get("default_model")
-                if isinstance(model, str) and model.strip():
-                    return model.strip()
-        return fallback
+                if builtin is None:
+                    return dict(provider_config)
+                merged = dict(builtin)
+                merged.update(provider_config)
+                return merged
+        return builtin
+
+    def _get_provider_value(
+        self,
+        provider_config: dict[str, object] | None,
+        *paths: str,
+    ) -> object:
+        if provider_config is None:
+            return None
+        for path in paths:
+            current: object = provider_config
+            for key in path.split("."):
+                if not isinstance(current, dict) or key not in current:
+                    current = None
+                    break
+                current = current[key]
+            if current is not None:
+                return current
+        return None
+
+    def _coerce_provider_string(self, value: object) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
+
+    def _resolve_provider_id(self, provider: str | None) -> str:
+        provider_id = (provider or "").strip()
+        if provider_id:
+            return provider_id
+        return self.resolved_llm_default_provider
+
+    def _get_builtin_provider_config(self, provider: str) -> dict[str, object] | None:
+        if provider == "openai":
+            return {
+                "protocol": "openai",
+                "api_key": self.openai_api_key,
+                "api_base": self.openai_api_base,
+                "default_model": self.openai_model,
+                "pricing_provider": "openai",
+            }
+        if provider == "minimax":
+            return {
+                "protocol": "openai",
+                "api_key": self.minimax_api_key,
+                "api_base": self.minimax_api_base,
+                "default_model": self.minimax_model,
+                "pricing_provider": "minimax",
+            }
+        return None
 
 
 @lru_cache(maxsize=1)

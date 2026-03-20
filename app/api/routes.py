@@ -2,6 +2,7 @@ from functools import lru_cache
 
 from typing import Any
 
+import anyio
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.agents.code_review_agent import ReviewService
@@ -132,7 +133,9 @@ async def handle_feishu_events(
     service: FeishuWebhookService = Depends(get_feishu_webhook_service),
 ) -> dict[str, Any]:
     try:
-        return service.handle_event(await request.body(), request.headers)
+        raw_body = await request.body()
+        headers = dict(request.headers)
+        return await anyio.to_thread.run_sync(service.handle_event, raw_body, headers)
     except PermissionError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
     except ValueError as exc:
@@ -293,4 +296,3 @@ def trigger_sleep_coding_review(
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-

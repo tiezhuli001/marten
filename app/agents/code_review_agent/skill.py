@@ -6,13 +6,13 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from shutil import which
 
 from app.core.config import Settings
 from app.models.schemas import ReviewFinding, ReviewSkillOutput, ReviewSource, TokenUsage
 from app.runtime.agent_runtime import AgentDescriptor, AgentRuntime
 from app.runtime.mcp import MCPClient, build_default_mcp_client
 from app.runtime.pricing import PricingRegistry
+from app.runtime.structured_output import parse_structured_object
 from app.runtime.token_counting import TokenCountingService
 
 
@@ -52,13 +52,22 @@ class ReviewSkillService:
         command = self._resolve_command(source)
         if command is not None:
             return self._run_with_command(command, source, context)
-        if self.settings.openai_api_key or self.settings.minimax_api_key:
+        if self.settings.has_runtime_llm_credentials:
             try:
                 return self._run_with_agent_runtime(source, context)
-            except Exception:
-                if self.settings.app_env != "test":
-                    raise
-                return self._build_dry_run_output(source, context)
+            except Exception as exc:
+                return ReviewSkillRunResult(
+                    output=self._build_agent_runtime_fallback_output(
+                        source,
+                        context,
+                        raw_output="",
+                        error=str(exc),
+                    ),
+                    token_usage=self._estimate_usage(
+                        input_text=context,
+                        output_text=str(exc),
+                    ),
+                )
         return self._build_dry_run_output(source, context)
 
     def _run_with_agent_runtime(self, source: ReviewSource, context: str) -> ReviewSkillRunResult:
@@ -77,7 +86,15 @@ class ReviewSkillService:
                 "`review_markdown` must be human-readable markdown that summarizes the findings."
             ),
         )
-        output = ReviewSkillOutput.model_validate_json(response.output_text)
+        try:
+            output = ReviewSkillOutput.model_validate(parse_structured_object(response.output_text))
+        except Exception as exc:
+            output = self._build_agent_runtime_fallback_output(
+                source,
+                context,
+                raw_output=response.output_text,
+                error=str(exc),
+            )
         return ReviewSkillRunResult(
             output=output.model_copy(
                 update={
@@ -122,6 +139,36 @@ class ReviewSkillService:
                 input_text=f"{prompt}\n\n{context}",
                 output_text=output,
             ),
+        )
+
+    def _build_agent_runtime_fallback_output(
+        self,
+        source: ReviewSource,
+        context: str,
+        *,
+        raw_output: str,
+        error: str,
+    ) -> ReviewSkillOutput:
+        excerpt = raw_output.strip()[:1200]
+        summary = "Review runtime returned non-contract output; falling back to a minimal review result."
+        review_markdown = (
+            "## Code Review Agent\n\n"
+            "The configured review runtime returned output that did not match the review contract.\n\n"
+            f"Source Type: `{source.source_type}`\n\n"
+            f"Parse Error: `{error}`\n\n"
+            "Raw Output Excerpt:\n"
+            f"```text\n{excerpt}\n```\n\n"
+            "Fallback decision: no structured blocking findings were produced."
+        )
+        return ReviewSkillOutput(
+            summary=summary,
+            findings=[],
+            repair_strategy=[
+                "Tighten the review output contract or switch to a more reliable review provider.",
+            ],
+            blocking=False,
+            run_mode="real_run",
+            review_markdown=review_markdown,
         )
 
     def _parse_command_output(self, output: str) -> ReviewSkillOutput:
@@ -169,19 +216,7 @@ class ReviewSkillService:
     def _resolve_command(self, source: ReviewSource) -> list[str] | None:
         if self.command:
             return shlex.split(self.command)
-        if self.settings.app_env == "test":
-            return None
-        if which("opencode") is None:
-            return None
-        review_dir = self._resolve_dir(source)
-        return [
-            "opencode",
-            "run",
-            "--dir",
-            str(review_dir),
-            "--format",
-            "default",
-        ]
+        return None
 
     def _resolve_dir(self, source: ReviewSource) -> Path:
         if source.local_path:

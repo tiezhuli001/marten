@@ -36,7 +36,6 @@ class SleepCodingWorkerService:
     def __init__(
         self,
         settings: Settings | None = None,
-        github: object | None = None,
         mcp_client: MCPClient | None = None,
         sleep_coding: SleepCodingService | None = None,
         tasks: TaskRegistryService | None = None,
@@ -203,15 +202,8 @@ class SleepCodingWorkerService:
             connection.commit()
             return self.store.list_claims(connection, target_repo)
 
-    def _ensure_parent_dir(self) -> None:
-        self.store.ensure_parent_dir()
-        self.database_path = self.store.database_path
-
     def _connect(self) -> sqlite3.Connection:
         return self.store.connect()
-
-    def _initialize_schema(self) -> None:
-        self.store.initialize_schema()
 
     def _resolve_parent_request_id(
         self,

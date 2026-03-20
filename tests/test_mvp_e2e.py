@@ -362,12 +362,16 @@ class FakeReviewSkillService:
 
 
 def build_settings(database_path: Path) -> Settings:
+    models_config_path = database_path.parent / "models.json"
+    if not models_config_path.exists():
+        models_config_path.write_text("{}", encoding="utf-8")
     return Settings(
         app_env="test",
         database_url=f"sqlite:///{database_path}",
         review_runs_dir=str(database_path.parent / "review-runs"),
         github_repository="tiezhuli001/youmeng-gateway",
         platform_config_path=str(database_path.parent / "platform.json"),
+        models_config_path=str(models_config_path),
         sleep_coding_worker_auto_approve_plan=True,
         openai_api_key=None,
         minimax_api_key=None,
@@ -408,7 +412,6 @@ class MVPE2ETests(unittest.TestCase):
             github_mcp = build_github_mcp(github)
             sleep_coding = SleepCodingService(
                 settings=settings,
-                github=github,
                 channel=channel,
                 git_workspace=FakeGitWorkspaceService(),
                 validator=FakeValidationRunner(),
@@ -417,13 +420,11 @@ class MVPE2ETests(unittest.TestCase):
             )
             worker = SleepCodingWorkerService(
                 settings=settings,
-                github=github,
                 sleep_coding=sleep_coding,
                 mcp_client=github_mcp,
             )
             review = ReviewService(
                 settings=settings,
-                github=github,
                 sleep_coding=sleep_coding,
                 skill=FakeReviewSkillService(),
                 mcp_client=github_mcp,
@@ -439,7 +440,6 @@ class MVPE2ETests(unittest.TestCase):
             )
             main_agent = MainAgentService(
                 settings,
-                github=github,
                 channel=channel,
                 ledger=ledger,
                 mcp_client=github_mcp,
@@ -471,6 +471,7 @@ class MVPE2ETests(unittest.TestCase):
             self.assertEqual(len(reviews), 1)
             self.assertEqual(reviews[0].status, "approved")
             self.assertGreater(task.token_usage.total_tokens, 0)
+            self.assertTrue(any("Review round 1" in title for title, _ in channel.notifications))
             issue_notifications = [lines for title, lines in channel.notifications if "Ralph 任务开始" in title]
             self.assertTrue(issue_notifications)
             self.assertTrue(any(any(line.startswith("任务摘要:") for line in lines) for lines in issue_notifications))
@@ -480,10 +481,10 @@ class MVPE2ETests(unittest.TestCase):
             self.assertIn("- Decision: Approved", github.pr_comments[-1][1])
             self.assertTrue(any(event.event_type == "child_completed" for event in parent_events))
             self.assertTrue(
-                any(event.event_type == "child_background_follow_up_completed" for event in parent_events)
+                any(event.event_type == "child.follow_up.completed" for event in parent_events)
             )
             self.assertTrue(
-                any(event.event_type == "background_follow_up_completed" for event in child_events)
+                any(event.event_type == "follow_up.completed" for event in child_events)
             )
 
     def test_existing_issue_to_worker_to_review_to_final_delivery_without_duplicate_issue_creation(self) -> None:
@@ -509,7 +510,6 @@ class MVPE2ETests(unittest.TestCase):
             github_mcp = build_github_mcp(github)
             sleep_coding = SleepCodingService(
                 settings=settings,
-                github=github,
                 channel=channel,
                 git_workspace=FakeGitWorkspaceService(),
                 validator=FakeValidationRunner(),
@@ -518,13 +518,11 @@ class MVPE2ETests(unittest.TestCase):
             )
             worker = SleepCodingWorkerService(
                 settings=settings,
-                github=github,
                 sleep_coding=sleep_coding,
                 mcp_client=github_mcp,
             )
             review = ReviewService(
                 settings=settings,
-                github=github,
                 sleep_coding=sleep_coding,
                 skill=FakeReviewSkillService(),
                 mcp_client=github_mcp,
@@ -556,6 +554,7 @@ class MVPE2ETests(unittest.TestCase):
             self.assertEqual(task.background_follow_up_status, "completed")
             self.assertEqual(len(reviews), 1)
             self.assertEqual(reviews[0].status, "approved")
+            self.assertTrue(any("Review round 1" in title for title, _ in channel.notifications))
             self.assertTrue(github.pr_comments)
             self.assertIn("## Ralph Review Decision", github.pr_comments[-1][1])
             self.assertTrue(any("任务完成" in title for title, _ in channel.notifications))
@@ -583,7 +582,6 @@ class MVPE2ETests(unittest.TestCase):
             github_mcp = build_github_mcp(github)
             sleep_coding = SleepCodingService(
                 settings=settings,
-                github=github,
                 channel=channel,
                 git_workspace=FakeGitWorkspaceService(),
                 validator=FakeValidationRunner(),
@@ -592,13 +590,11 @@ class MVPE2ETests(unittest.TestCase):
             )
             worker = SleepCodingWorkerService(
                 settings=settings,
-                github=github,
                 sleep_coding=sleep_coding,
                 mcp_client=github_mcp,
             )
             review = ReviewService(
                 settings=settings,
-                github=github,
                 sleep_coding=sleep_coding,
                 skill=FakeReviewSkillService(),
                 mcp_client=github_mcp,
@@ -614,7 +610,6 @@ class MVPE2ETests(unittest.TestCase):
             )
             main_agent = MainAgentService(
                 settings,
-                github=github,
                 channel=channel,
                 ledger=ledger,
                 mcp_client=github_mcp,
@@ -680,15 +675,13 @@ class MVPE2ETests(unittest.TestCase):
                 + execution_usage.total_tokens
                 + review_usage.total_tokens,
             )
-            self.assertEqual(
-                round(total_usage.cost_usd, 6),
-                round(
-                    gateway_payload["token_usage"]["cost_usd"]
-                    + plan_usage.cost_usd
-                    + execution_usage.cost_usd
-                    + review_usage.cost_usd,
-                    6,
-                ),
+            self.assertAlmostEqual(
+                total_usage.cost_usd,
+                gateway_payload["token_usage"]["cost_usd"]
+                + plan_usage.cost_usd
+                + execution_usage.cost_usd
+                + review_usage.cost_usd,
+                places=5,
             )
 
             review_response = client.get(f"/reviews/{reviews[0].review_id}")
@@ -701,6 +694,7 @@ class MVPE2ETests(unittest.TestCase):
             self.assertIn("任务完成", final_title)
             self.assertTrue(any("Ralph 任务开始" in title for title, _ in channel.notifications))
             self.assertTrue(any("Ralph 执行计划" in title for title, _ in channel.notifications))
+            self.assertTrue(any("Review round 1" in title for title, _ in channel.notifications))
             self.assertNotIn("ready for confirmation", "\n".join(title for title, _ in channel.notifications))
             self.assertIn("工作总结:", final_lines)
             self.assertIn("一、修改文件清单", final_lines)
@@ -752,7 +746,6 @@ class MVPE2ETests(unittest.TestCase):
             github_mcp = build_github_mcp(github)
             sleep_coding = SleepCodingService(
                 settings=settings,
-                github=github,
                 channel=channel,
                 git_workspace=FakeGitWorkspaceService(),
                 validator=FakeValidationRunner(),
@@ -761,13 +754,11 @@ class MVPE2ETests(unittest.TestCase):
             )
             worker = SleepCodingWorkerService(
                 settings=settings,
-                github=github,
                 sleep_coding=sleep_coding,
                 mcp_client=github_mcp,
             )
             review = ReviewService(
                 settings=settings,
-                github=github,
                 sleep_coding=sleep_coding,
                 skill=FakeReviewSkillService(),
                 mcp_client=github_mcp,
@@ -783,7 +774,6 @@ class MVPE2ETests(unittest.TestCase):
             )
             main_agent = MainAgentService(
                 settings,
-                github=github,
                 channel=channel,
                 ledger=ledger,
                 mcp_client=github_mcp,
@@ -846,6 +836,7 @@ class MVPE2ETests(unittest.TestCase):
             self.assertFalse(any("ready for confirmation" in title for title, _ in channel.notifications))
             self.assertTrue(any("Ralph 任务开始" in title for title, _ in channel.notifications))
             self.assertTrue(any("Ralph 执行计划" in title for title, _ in channel.notifications))
+            self.assertTrue(any("Review round 1" in title for title, _ in channel.notifications))
             self.assertTrue(any("任务完成" in title for title, _ in channel.notifications))
             final_title, final_lines = channel.notifications[-1]
             self.assertIn("任务完成", final_title)

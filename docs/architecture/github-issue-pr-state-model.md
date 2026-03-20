@@ -1,162 +1,80 @@
 # GitHub Issue/PR State Model
 
-> 更新时间：2026-03-15
-> 目标：为睡后编程和后续 review 流程定义统一状态模型
+> 更新时间：2026-03-20
+> 用途：记录当前真实主链路里 GitHub 外部状态和内部任务状态的最小映射。
 
-## 设计目标
+## 主链路事实
 
-需要统一三类状态：
+当前真实链路固定为：
 
-1. GitHub 外部状态
-2. 内部任务状态
-3. 用户决策状态
+`Feishu inbound -> gateway -> issue -> claim -> coding -> review -> final delivery`
 
-这样 OpenClaw、Gateway、worker 和后续 token 报表才能对齐同一份事实来源。
+GitHub 只承载协作事实：
 
-## 核心实体
+- Issue：需求入口
+- PR：代码交付物
+- Review：评审结论
 
-### 1. Issue
+内部控制面负责真实执行状态、重试、follow-up 和 token 记账。
 
-表示需求入口。
+## 外部实体
 
-关键字段：
+### Issue
 
 - `issue_number`
 - `title`
 - `body`
 - `labels`
 - `state`
-- `creator`
-- `created_at`
-- `labels`
 
-### 2. Sleep Coding Task
-
-表示内部执行状态。
-
-关键字段：
-
-- `task_id`
-- `issue_number`
-- `status`
-- `repo`
-- `base_branch`
-- `head_branch`
-- `worker_id`
-- `started_at`
-- `finished_at`
-
-### 3. Pull Request
-
-表示代码交付物。
-
-关键字段：
+### Pull Request
 
 - `pr_number`
 - `head_branch`
 - `base_branch`
 - `state`
-- `mergeable_state`
 - `review_decision`
-- `labels`
 
-## 内部任务状态建议
+### Review
 
-建议统一以下状态：
+- `review_id`
+- `state`
+- `summary`
+- `blocking_findings`
+
+## 内部任务状态
+
+当前主链路只关心这些稳定状态：
 
 1. `created`
 2. `planning`
 3. `awaiting_confirmation`
 4. `coding`
 5. `validating`
-6. `pr_opened`
-7. `in_review`
-8. `changes_requested`
-9. `approved`
-10. `merged`
-11. `failed`
-12. `cancelled`
+6. `in_review`
+7. `approved`
+8. `failed`
+9. `cancelled`
 
-## 状态流转建议
+不再把 GitHub 的 `open/closed` 直接当成业务真相。
 
-```text
-created
--> planning
--> awaiting_confirmation
--> coding
--> validating
--> pr_opened
--> in_review
--> approved -> merged
--> changes_requested -> coding
--> failed
--> cancelled
-```
+## 事件原则
 
-## GitHub 状态映射
+- Issue draft 必须先经过 MainAgent intake。
+- sleep-coding 和 review 只写当前域事件：
+  - `follow_up.*`
+  - `child.follow_up.*`
+- 不再双写历史兼容事件名。
 
-### Issue
+## 写回原则
 
-- `open`：需求可继续推进
-- `closed`：任务已结束或取消
+- 计划完成后写回 Issue
+- PR 创建后写回 Issue 和 PR
+- Review 完成后写回 PR 和内部状态
+- Final delivery 由控制面统一发送到 Feishu
 
-### Pull Request
+## 当前结论
 
-- `open`：正在 review
-- `closed + merged=false`：放弃或退回
-- `closed + merged=true`：任务完成
-
-## 用户动作模型
-
-需要支持的用户动作：
-
-1. `approve_plan`
-2. `reject_plan`
-3. `approve_pr`
-4. `request_changes`
-5. `cancel_task`
-
-## 评论与状态写回策略
-
-建议至少写回三个节点：
-
-1. 计划生成完成时写回 Issue
-2. PR 创建时写回 Issue 和 PR
-3. 最终完成时写回 Issue、PR 和内部状态存储
-
-标签与通知补充：
-
-- Issue 与 PR 默认带 `agent:ralph`、`workflow:sleep-coding`
-- Channel 负责出站通知，不替代内部真实状态表
-
-## 最小表结构建议
-
-### `sleep_coding_tasks`
-
-- `task_id`
-- `issue_number`
-- `status`
-- `repo`
-- `base_branch`
-- `head_branch`
-- `pr_number`
-- `last_error`
-- `created_at`
-- `updated_at`
-
-### `task_events`
-
-- `id`
-- `task_id`
-- `event_type`
-- `payload`
-- `created_at`
-
-## 设计结论
-
-后续不要直接拿 GitHub 的 `open/closed` 当作全部业务状态。  
-正确做法是：
-
-- GitHub 保留外部协作状态
-- 内部数据库保留真实执行状态
-- `docs/status` 保留人类可读的项目阶段摘要
+- GitHub 平台操作必须走 MCP，不再回摆到 GitHub REST 旁路。
+- 内部数据库仍是任务状态、事件和 token ledger 的唯一真相源。
+- 文档只记录当前仍有效的最小状态模型，不再保留旧阶段的大而全枚举。

@@ -3,7 +3,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 IntentType = Literal["general", "stats_query", "sleep_coding"]
-ProviderType = Literal["openai", "minimax"]
+ProviderType = str
 MessageRole = Literal["system", "user", "assistant"]
 ReviewStatus = Literal[
     "pending",
@@ -126,14 +126,18 @@ class GatewayMessageRequest(BaseModel):
     user_id: str
     content: str
     source: str = "manual"
+    request_id: str | None = None
+    chain_request_id: str | None = None
 
 
 class GatewayMessageResponse(BaseModel):
     request_id: str
+    chain_request_id: str
     intent: IntentType
     message: str
     token_usage: TokenUsage
     task_id: str | None = None
+    run_session_id: str | None = None
 
 
 class GitHubIssueDraft(BaseModel):
@@ -265,7 +269,7 @@ class ReviewSkillOutput(BaseModel):
 
 class ValidationResult(BaseModel):
     status: ValidationStatus = "pending"
-    command: str = "python -m unittest discover -s tests"
+    command: str = "python scripts/run_sleep_coding_validation.py"
     exit_code: int | None = None
     output: str = ""
 

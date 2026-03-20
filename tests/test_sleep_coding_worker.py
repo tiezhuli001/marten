@@ -239,13 +239,9 @@ class FailOnApproveSleepCodingService:
         return self.base.get_task(task_id)
 
 
-class FailIfGitHubListCalled(FakeGitHubService):
-    def list_open_issues(self, repo: str, labels: list[str] | None = None, limit: int = 20):
-        raise AssertionError("worker should use MCP issue discovery before REST fallback")
-
-
 def build_settings(database_path: Path, *, auto_approve_plan: bool = False) -> Settings:
     platform_path = database_path.parent / "platform.json"
+    models_path = database_path.parent / "models.json"
     platform_path.write_text(
         (
             '{'
@@ -256,12 +252,17 @@ def build_settings(database_path: Path, *, auto_approve_plan: bool = False) -> S
         ),
         encoding="utf-8",
     )
+    if not models_path.exists():
+        models_path.write_text("{}", encoding="utf-8")
     return Settings(
         app_env="test",
         database_url=f"sqlite:///{database_path}",
         github_repository="tiezhuli001/youmeng-gateway",
         platform_config_path=str(platform_path),
+        models_config_path=str(models_path),
         langsmith_tracing=False,
+        openai_api_key=None,
+        minimax_api_key=None,
     )
 
 
@@ -273,7 +274,6 @@ class SleepCodingWorkerServiceTests(unittest.TestCase):
             mcp_client = build_github_mcp(github)
             sleep_coding = SleepCodingService(
                 settings=settings,
-                github=github,
                 channel=FakeChannelService(),
                 git_workspace=FakeGitWorkspaceService(),
                 validator=FakeValidationRunner(),
@@ -282,7 +282,6 @@ class SleepCodingWorkerServiceTests(unittest.TestCase):
             )
             worker = SleepCodingWorkerService(
                 settings=settings,
-                github=github,
                 mcp_client=mcp_client,
                 sleep_coding=sleep_coding,
             )
@@ -316,7 +315,6 @@ class SleepCodingWorkerServiceTests(unittest.TestCase):
             mcp_client = build_github_mcp(github)
             sleep_coding = SleepCodingService(
                 settings=settings,
-                github=github,
                 channel=FakeChannelService(),
                 git_workspace=FakeGitWorkspaceService(),
                 validator=FakeValidationRunner(),
@@ -325,7 +323,6 @@ class SleepCodingWorkerServiceTests(unittest.TestCase):
             )
             worker = SleepCodingWorkerService(
                 settings=settings,
-                github=github,
                 mcp_client=mcp_client,
                 sleep_coding=sleep_coding,
             )
@@ -345,7 +342,6 @@ class SleepCodingWorkerServiceTests(unittest.TestCase):
             mcp_client = build_github_mcp(github)
             sleep_coding = SleepCodingService(
                 settings=settings,
-                github=github,
                 channel=FakeChannelService(),
                 git_workspace=FakeGitWorkspaceService(),
                 validator=FakeValidationRunner(),
@@ -362,7 +358,6 @@ class SleepCodingWorkerServiceTests(unittest.TestCase):
             )
             worker = SleepCodingWorkerService(
                 settings=settings,
-                github=github,
                 mcp_client=mcp_client,
                 sleep_coding=sleep_coding,
             )
@@ -380,7 +375,6 @@ class SleepCodingWorkerServiceTests(unittest.TestCase):
             mcp_client = build_github_mcp(github)
             worker = SleepCodingWorkerService(
                 settings=settings,
-                github=github,
                 mcp_client=mcp_client,
                 sleep_coding=FailingSleepCodingService(),  # type: ignore[arg-type]
             )
@@ -400,7 +394,6 @@ class SleepCodingWorkerServiceTests(unittest.TestCase):
             mcp_client = build_github_mcp(github)
             base_sleep_coding = SleepCodingService(
                 settings=settings,
-                github=github,
                 channel=FakeChannelService(),
                 git_workspace=FakeGitWorkspaceService(),
                 validator=FakeValidationRunner(),
@@ -409,7 +402,6 @@ class SleepCodingWorkerServiceTests(unittest.TestCase):
             )
             worker = SleepCodingWorkerService(
                 settings=settings,
-                github=github,
                 mcp_client=mcp_client,
                 sleep_coding=FailOnApproveSleepCodingService(base_sleep_coding),  # type: ignore[arg-type]
             )
@@ -446,7 +438,6 @@ class SleepCodingWorkerServiceTests(unittest.TestCase):
             mcp_client.register_adapter("github", server)
             sleep_coding = SleepCodingService(
                 settings=settings,
-                github=FakeGitHubService(),
                 channel=FakeChannelService(),
                 git_workspace=FakeGitWorkspaceService(),
                 validator=FakeValidationRunner(),
@@ -455,7 +446,6 @@ class SleepCodingWorkerServiceTests(unittest.TestCase):
             )
             worker = SleepCodingWorkerService(
                 settings=settings,
-                github=FailIfGitHubListCalled(),
                 mcp_client=mcp_client,
                 sleep_coding=sleep_coding,
             )
@@ -472,7 +462,6 @@ class SleepCodingWorkerServiceTests(unittest.TestCase):
             mcp_client = build_github_mcp(github)
             sleep_coding = SleepCodingService(
                 settings=settings,
-                github=github,
                 channel=FakeChannelService(),
                 git_workspace=FakeGitWorkspaceService(),
                 validator=FakeValidationRunner(),
@@ -481,7 +470,6 @@ class SleepCodingWorkerServiceTests(unittest.TestCase):
             )
             worker = SleepCodingWorkerService(
                 settings=settings,
-                github=github,
                 mcp_client=mcp_client,
                 sleep_coding=sleep_coding,
             )
@@ -509,7 +497,6 @@ class SleepCodingWorkerServiceTests(unittest.TestCase):
             mcp_client = build_github_mcp(github)
             sleep_coding = SleepCodingService(
                 settings=settings,
-                github=github,
                 channel=FakeChannelService(),
                 git_workspace=FakeGitWorkspaceService(),
                 validator=FakeValidationRunner("failed"),
@@ -518,7 +505,6 @@ class SleepCodingWorkerServiceTests(unittest.TestCase):
             )
             worker = SleepCodingWorkerService(
                 settings=settings,
-                github=github,
                 mcp_client=mcp_client,
                 sleep_coding=sleep_coding,
             )
@@ -542,7 +528,6 @@ class SleepCodingWorkerServiceTests(unittest.TestCase):
             mcp_client = build_github_mcp(github)
             sleep_coding = SleepCodingService(
                 settings=settings,
-                github=github,
                 channel=FakeChannelService(),
                 git_workspace=FakeGitWorkspaceService(),
                 validator=FakeValidationRunner("failed"),
@@ -551,7 +536,6 @@ class SleepCodingWorkerServiceTests(unittest.TestCase):
             )
             worker = SleepCodingWorkerService(
                 settings=settings,
-                github=github,
                 mcp_client=mcp_client,
                 sleep_coding=sleep_coding,
             )

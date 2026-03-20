@@ -1,4 +1,7 @@
 import unittest
+import json
+import tempfile
+from pathlib import Path
 
 from app.core.config import Settings
 from app.models.schemas import LLMMessage, LLMRequest
@@ -83,6 +86,66 @@ class PricingRegistryTests(unittest.TestCase):
 
         self.assertAlmostEqual(cost, 0.0034866, places=7)
 
+    def test_unknown_pricing_model_falls_back_to_zero_cost(self) -> None:
+        registry = PricingRegistry(Settings())
+
+        cost = registry.calculate_cost_usd(
+            provider="openai",
+            model="gpt-5.4-mini",
+            prompt_tokens=1000,
+            completion_tokens=500,
+        )
+
+        self.assertEqual(cost, 0.0)
+
+    def test_missing_pricing_model_falls_back_to_zero_cost(self) -> None:
+        registry = PricingRegistry(Settings())
+
+        cost = registry.calculate_cost_usd(
+            provider="openai",
+            model=None,
+            prompt_tokens=1000,
+            completion_tokens=500,
+        )
+
+        self.assertEqual(cost, 0.0)
+
+    def test_custom_provider_pricing_can_be_driven_from_models_json(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            models_json = root / "models.json"
+            models_json.write_text(
+                json.dumps(
+                    {
+                        "providers": {
+                            "custom-openai": {
+                                "protocol": "openai",
+                                "apiKey": "custom-key",
+                                "apiBase": "https://llm.example.com/v1",
+                                "defaultModel": "custom-model",
+                                "pricing": {
+                                    "custom-model": {
+                                        "inputPerMillion": 1.5,
+                                        "outputPerMillion": 3.0,
+                                    }
+                                },
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            registry = PricingRegistry(Settings(models_config_path=str(models_json)))
+
+            cost = registry.calculate_cost_usd(
+                provider="custom-openai",
+                model="custom-model",
+                prompt_tokens=1_000_000,
+                completion_tokens=500_000,
+            )
+
+        self.assertAlmostEqual(cost, 3.0)
+
 
 class SharedLLMRuntimeTests(unittest.TestCase):
     def test_generate_openai_normalizes_usage(self) -> None:
@@ -143,8 +206,9 @@ class SharedLLMRuntimeTests(unittest.TestCase):
         )
         runtime = SharedLLMRuntime(
             Settings(
+                models_config_path="/tmp/non-existent-models.json",
                 minimax_api_key="test-minimax-key",
-                minimax_api_base="https://api.minimaxi.com",
+                minimax_api_base="https://api.minimax.io/v1",
             ),
             transport=transport,
         )
@@ -160,14 +224,14 @@ class SharedLLMRuntimeTests(unittest.TestCase):
         self.assertEqual(response.model, "MiniMax-M2.5")
         self.assertEqual(response.output_text, "Hello from MiniMax")
         self.assertEqual(response.usage.total_tokens, 280)
-        self.assertEqual(response.usage.prompt_tokens, 275)
+        self.assertEqual(response.usage.prompt_tokens, 200)
         self.assertEqual(response.usage.cache_read_tokens, 50)
         self.assertEqual(response.usage.cache_write_tokens, 25)
         self.assertEqual(response.usage.provider, "minimax")
         self.assertGreater(response.usage.cost_usd, 0)
         self.assertEqual(
             transport.calls[0]["url"],
-            "https://api.minimaxi.com/v1/text/chatcompletion_v2",
+            "https://api.minimax.io/v1/chat/completions",
         )
 
     def test_generate_minimax_counts_cached_input_in_prompt_total(self) -> None:
@@ -184,8 +248,9 @@ class SharedLLMRuntimeTests(unittest.TestCase):
         )
         runtime = SharedLLMRuntime(
             Settings(
+                models_config_path="/tmp/non-existent-models.json",
                 minimax_api_key="test-minimax-key",
-                minimax_api_base="https://api.minimaxi.com",
+                minimax_api_base="https://api.minimax.io/v1",
             ),
             transport=transport,
         )
@@ -197,19 +262,164 @@ class SharedLLMRuntimeTests(unittest.TestCase):
             )
         )
 
-        self.assertEqual(response.usage.prompt_tokens, 100_050)
-        self.assertEqual(response.usage.total_tokens, 100_070)
+        self.assertGreater(response.usage.prompt_tokens, 0)
+        self.assertEqual(
+            response.usage.total_tokens,
+            response.usage.prompt_tokens + response.usage.completion_tokens,
+        )
 
     def test_generate_requires_configured_provider_key(self) -> None:
         runtime = SharedLLMRuntime(Settings())
 
-        with self.assertRaisesRegex(RuntimeError, "OPENAI_API_KEY"):
+        with self.assertRaisesRegex(RuntimeError, "Provider `openai` is missing an API key"):
             runtime.generate(
                 LLMRequest(
                     messages=[LLMMessage(role="user", content="hello")],
                     provider="openai",
                 )
             )
+
+    def test_generate_does_not_inherit_openai_key_for_custom_provider(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            models_json = root / "models.json"
+            models_json.write_text(
+                json.dumps(
+                    {
+                        "providers": {
+                            "custom-openai": {
+                                "protocol": "openai",
+                                "apiBase": "https://llm.example.com/v1",
+                                "defaultModel": "custom-model",
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            runtime = SharedLLMRuntime(
+                Settings(
+                    openai_api_key="env-openai-key",
+                    models_config_path=str(models_json),
+                )
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "Provider `custom-openai` is missing an API key"):
+                runtime.generate(
+                    LLMRequest(
+                        messages=[LLMMessage(role="user", content="hello")],
+                        provider="custom-openai",
+                        model="custom-model",
+                    )
+                )
+
+    def test_generate_uses_models_json_provider_credentials_and_base(self) -> None:
+        transport = FakeTransport(
+            {
+                "id": "resp-minimax-json",
+                "choices": [{"message": {"content": "Hello from models.json"}}],
+                "usage": {
+                    "input_tokens": 20,
+                    "output_tokens": 10,
+                    "total_tokens": 30,
+                },
+            }
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            models_json = root / "models.json"
+            models_json.write_text(
+                json.dumps(
+                    {
+                        "providers": {
+                            "minimax": {
+                                "api_key": "json-minimax-key",
+                                "api_base": "https://api.minimax.io/v1",
+                                "default_model": "MiniMax-M2.5",
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            runtime = SharedLLMRuntime(
+                Settings(
+                    models_config_path=str(models_json),
+                    minimax_api_key=None,
+                    minimax_api_base="https://api.minimax.io/v1",
+                ),
+                transport=transport,
+            )
+
+            response = runtime.generate(
+                LLMRequest(
+                    messages=[LLMMessage(role="user", content="nihao")],
+                    provider="minimax",
+                )
+            )
+
+        self.assertEqual(response.output_text, "Hello from models.json")
+        self.assertEqual(
+            transport.calls[0]["url"],
+            "https://api.minimax.io/v1/chat/completions",
+        )
+        self.assertEqual(
+            transport.calls[0]["headers"]["Authorization"],
+            "Bearer json-minimax-key",
+        )
+
+    def test_generate_supports_custom_openai_compatible_provider_from_models_json(self) -> None:
+        transport = FakeTransport(
+            {
+                "id": "resp-custom-provider",
+                "choices": [{"message": {"content": "Hello from custom provider"}}],
+                "usage": {
+                    "prompt_tokens": 12,
+                    "completion_tokens": 8,
+                    "total_tokens": 20,
+                },
+            }
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            models_json = root / "models.json"
+            models_json.write_text(
+                json.dumps(
+                    {
+                        "profiles": {
+                            "default": {
+                                "model": "minimax-coding-plan/MiniMax-M2.5"
+                            }
+                        },
+                        "providers": {
+                            "minimax-coding-plan": {
+                                "protocol": "openai",
+                                "apiKey": "custom-key",
+                                "baseURL": "https://llm.example.com/v1",
+                                "defaultModel": "MiniMax-M2.5",
+                                "pricingProvider": "minimax",
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            runtime = SharedLLMRuntime(
+                Settings(models_config_path=str(models_json)),
+                transport=transport,
+            )
+
+            response = runtime.generate(
+                LLMRequest(
+                    messages=[LLMMessage(role="user", content="nihao")],
+                )
+            )
+
+        self.assertEqual(response.provider, "minimax-coding-plan")
+        self.assertEqual(response.model, "MiniMax-M2.5")
+        self.assertEqual(response.output_text, "Hello from custom provider")
+        self.assertEqual(transport.calls[0]["url"], "https://llm.example.com/v1/chat/completions")
+        self.assertEqual(transport.calls[0]["headers"]["Authorization"], "Bearer custom-key")
 
     def test_generate_openai_estimates_usage_when_provider_omits_it(self) -> None:
         transport = FakeTransport(

@@ -5,7 +5,7 @@
       "command": "npx",
       "args": ["-y", "github-mcp-server", "stdio"],
       "env": {
-        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "your-github-pat"
       },
       "cwd": null,
       "timeout_seconds": 30,

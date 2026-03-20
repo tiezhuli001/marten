@@ -6,6 +6,7 @@ __pycache__/
 .sleep_coding/
 docs/internal/
 data/
+artifacts/
 *.egg-info/
 *.json
 *.env

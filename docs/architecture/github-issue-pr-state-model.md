@@ -51,10 +51,13 @@ GitHub 只承载协作事实：
 3. `awaiting_confirmation`
 4. `coding`
 5. `validating`
-6. `in_review`
-7. `approved`
-8. `failed`
-9. `cancelled`
+6. `pr_opened`
+7. `in_review`
+8. `changes_requested`
+9. `approved`
+10. `merged`
+11. `failed`
+12. `cancelled`
 
 不再把 GitHub 的 `open/closed` 直接当成业务真相。
 
@@ -64,7 +67,8 @@ GitHub 只承载协作事实：
 - sleep-coding 和 review 只写当前域事件：
   - `follow_up.*`
   - `child.follow_up.*`
-- 不再双写历史兼容事件名。
+- review handoff 只围绕 `handoff_to_ralph`、`handoff_to_code_review`、`review_returned`。
+- 不再保留 GitLab / 多来源 review 的历史事件枚举。
 
 ## 写回原则
 

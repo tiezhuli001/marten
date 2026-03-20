@@ -329,7 +329,11 @@ class ReviewServiceTests(unittest.TestCase):
             )
 
             result = skill.run(
-                ReviewSource(source_type="local_code", local_path=str(root)),
+                ReviewSource(
+                    source_type="sleep_coding_task",
+                    task_id="task-fallback",
+                    local_path=str(root),
+                ),
                 "dummy context",
             )
 
@@ -441,7 +445,7 @@ class ReviewServiceTests(unittest.TestCase):
             self.assertTrue(review.is_blocking)
             self.assertEqual(review_service.count_blocking_reviews(task.task_id), 1)
 
-    def test_start_review_rejects_non_sleep_coding_sources(self) -> None:
+    def test_start_review_requires_sleep_coding_task_id(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             settings = build_settings(root / "review.db", root / "review-runs")
@@ -457,7 +461,7 @@ class ReviewServiceTests(unittest.TestCase):
                 review_service.start_review(
                     ReviewRunRequest(
                         source=ReviewSource(
-                            source_type="local_code",
+                            source_type="sleep_coding_task",
                             local_path=str(root),
                         )
                     )

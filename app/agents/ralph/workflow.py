@@ -48,6 +48,12 @@ class RalphTaskWorkflow:
             if payload.parent_task_id
             else self.service.tasks.find_parent_for_issue(repo, payload.issue_number)
         )
+        inherited_request_id = None
+        if parent_task is not None:
+            candidate_request_id = parent_task.payload.get("request_id")
+            if isinstance(candidate_request_id, str) and candidate_request_id.strip():
+                inherited_request_id = candidate_request_id
+        kickoff_request_id = payload.request_id or inherited_request_id
         control_task = self.service.tasks.create_task(
             task_type="sleep_coding",
             agent_id="ralph",
@@ -82,7 +88,7 @@ class RalphTaskWorkflow:
                 task_id=task_id,
                 control_task_id=control_task.task_id,
                 parent_task_id=control_task.parent_task_id,
-                payload=payload,
+                payload=payload.model_copy(update={"request_id": kickoff_request_id}),
                 repo=repo,
                 head_branch=head_branch,
                 issue=issue,
@@ -99,8 +105,8 @@ class RalphTaskWorkflow:
             self.service.store.update_status(connection, task_id, "planning")
             self.service.tasks.update_task(control_task.task_id, status="planning", connection=connection)
             plan, plan_usage = self.service._build_plan(issue, run_session.session_id)
-            if payload.request_id:
-                pending_usage = (payload.request_id, "sleep_coding_plan", plan_usage)
+            if kickoff_request_id:
+                pending_usage = (kickoff_request_id, "sleep_coding_plan", plan_usage)
             comment_body = self.service._render_plan_comment(plan)
             comment = self.service._create_issue_comment(repo, payload.issue_number, comment_body)
             labels = sorted(set(issue.labels + self.service.sleep_coding_labels))

@@ -3,12 +3,11 @@ from __future__ import annotations
 import shutil
 import subprocess
 import os
-import json
 from pathlib import Path
 
 from app.core.config import Settings
 from app.models.schemas import GitExecutionResult, SleepCodingFileChange
-from app.runtime.mcp import MCPClient, MCPToolCall, build_default_mcp_client
+from app.runtime.mcp import MCPClient, MCPToolCall, build_default_mcp_client, get_mcp_server_definition
 
 
 class GitWorkspaceService:
@@ -25,6 +24,7 @@ class GitWorkspaceService:
         self.github_repo = settings.resolved_github_repository
         self.mcp_client = mcp_client
         self._pending_messages: dict[str, str] = {}
+        self._pending_files: dict[str, list[str]] = {}
 
     def prepare_worktree(self, branch: str) -> GitExecutionResult:
         worktree_path = self.worktree_root / self._sanitize_branch(branch)
@@ -105,6 +105,8 @@ class GitWorkspaceService:
         worktree_path = self.worktree_root / self._sanitize_branch(branch)
         artifact_path = worktree_path / ".sleep_coding" / f"issue-{issue_number}.md"
         generated_changes = file_changes or []
+        pending_files = [f".sleep_coding/issue-{issue_number}.md", *[change.path for change in generated_changes]]
+        self._pending_files[branch] = pending_files
         artifact_content = (
             f"# Ralph Task\n\n"
             f"- task_id: {task_id}\n"
@@ -218,7 +220,7 @@ class GitWorkspaceService:
         branch: str,
         worktree_path: Path,
     ) -> GitExecutionResult:
-        files = self._collect_changed_files(worktree_path)
+        files = self._collect_changed_files(worktree_path, branch=branch)
         if not files:
             return GitExecutionResult(
                 status="skipped",
@@ -253,12 +255,13 @@ class GitWorkspaceService:
             is_dry_run=False,
         )
 
-    def _collect_changed_files(self, worktree_path: Path) -> list[dict[str, str]]:
+    def _collect_changed_files(self, worktree_path: Path, *, branch: str) -> list[dict[str, str]]:
         status_output = self._run_git(
             ["status", "--short", "--untracked-files=all"],
             cwd=worktree_path,
         ).stdout.splitlines()
         changed_files: list[dict[str, str]] = []
+        seen_paths: set[str] = set()
         for raw_line in status_output:
             if not raw_line.strip():
                 continue
@@ -270,12 +273,21 @@ class GitWorkspaceService:
             file_path = worktree_path / path_text
             if not file_path.exists() or file_path.is_dir():
                 continue
+            changed_files.append({"path": path_text, "content": file_path.read_text(encoding="utf-8")})
+            seen_paths.add(path_text)
+        for pending_path in self._pending_files.get(branch, []):
+            if pending_path in seen_paths:
+                continue
+            file_path = worktree_path / pending_path
+            if not file_path.exists() or file_path.is_dir():
+                continue
             changed_files.append(
                 {
-                    "path": path_text,
+                    "path": pending_path,
                     "content": file_path.read_text(encoding="utf-8"),
                 }
             )
+            seen_paths.add(pending_path)
         return changed_files
 
     def _ensure_remote_branch(self, branch: str) -> None:
@@ -360,24 +372,10 @@ class GitWorkspaceService:
         return None
 
     def _github_pat_from_mcp_config(self) -> str | None:
-        config_path = Path(self.settings.mcp_config_path)
-        if not config_path.is_absolute():
-            config_path = self.repo_path / config_path
-        if not config_path.exists():
+        definition = get_mcp_server_definition(self.settings, self.github_server)
+        if definition is None:
             return None
-        try:
-            payload = json.loads(config_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return None
-        token = (
-            payload.get("servers", {})
-            .get("github", {})
-            .get("env", {})
-            .get("GITHUB_PERSONAL_ACCESS_TOKEN")
-        )
-        if not isinstance(token, str) or not token or token.startswith("${"):
-            return None
-        return token
+        return definition.env.get("GITHUB_PERSONAL_ACCESS_TOKEN") or definition.env.get("GITHUB_TOKEN")
 
     def _redact_sensitive_values(
         self,

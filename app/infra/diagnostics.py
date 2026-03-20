@@ -54,10 +54,8 @@ class IntegrationDiagnosticsService:
             if which(command) is None:
                 return {"status": "error", "detail": f"Command not found: {command}"}
             return {"status": "ok", "mode": "command", "command": self.settings.resolved_review_skill_command}
-        if self.settings.openai_api_key or self.settings.minimax_api_key:
+        if self.settings.has_runtime_llm_credentials:
             return {"status": "ok", "mode": "runtime_llm"}
-        if which("opencode") is not None:
-            return {"status": "ok", "mode": "opencode_fallback"}
         return {"status": "not_configured", "detail": "No review skill command or model credentials configured"}
 
     def _ralph_execution_status(self) -> dict[str, Any]:
@@ -71,11 +69,11 @@ class IntegrationDiagnosticsService:
                 "command": self.settings.resolved_sleep_coding_execution_command,
             }
         if self.settings.resolved_sleep_coding_execution_allow_llm_fallback:
-            if self.settings.openai_api_key or self.settings.minimax_api_key:
-                return {"status": "ok", "mode": "runtime_llm_fallback"}
+            if self.settings.has_runtime_llm_credentials:
+                return {"status": "ok", "mode": "runtime_llm"}
             return {
                 "status": "error",
-                "detail": "LLM fallback is enabled but no model credentials are configured",
+                "detail": "No coding runtime configured. Add model credentials or define `sleep_coding.execution.command`.",
             }
         return {
             "status": "error",

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 from pathlib import Path
@@ -9,6 +8,7 @@ from urllib.parse import urlparse
 from app.core.config import Settings
 from app.models.schemas import ReviewSource
 from app.agents.ralph import SleepCodingService
+from app.runtime.mcp import get_mcp_server_definition
 
 
 class ReviewMaterializationError(RuntimeError):
@@ -154,24 +154,10 @@ class ReviewSourceMaterializer:
         return f"https://{host}/{source.project_path}.git"
 
     def _github_pat_from_mcp_config(self) -> str | None:
-        config_path = Path(self.settings.mcp_config_path)
-        if not config_path.is_absolute():
-            config_path = self.settings.project_root / config_path
-        if not config_path.exists():
+        definition = get_mcp_server_definition(self.settings, self.settings.mcp_github_server_name)
+        if definition is None:
             return None
-        try:
-            payload = json.loads(config_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return None
-        token = (
-            payload.get("servers", {})
-            .get(self.settings.mcp_github_server_name, {})
-            .get("env", {})
-            .get("GITHUB_PERSONAL_ACCESS_TOKEN")
-        )
-        if not isinstance(token, str) or not token or token.startswith("${"):
-            return None
-        return token
+        return definition.env.get("GITHUB_PERSONAL_ACCESS_TOKEN") or definition.env.get("GITHUB_TOKEN")
 
     def _run_git(self, args: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
         environment = os.environ.copy()

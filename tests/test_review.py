@@ -243,14 +243,43 @@ class FailingAgentRuntime:
         raise RuntimeError("LLM provider is unreachable")
 
 
+class MalformedAgentRuntime:
+    def __init__(self) -> None:
+        from app.runtime.mcp import MCPClient
+
+        self.mcp = MCPClient()
+
+    def generate_structured_output(self, agent, **kwargs):
+        return type(
+            "LLMResponseStub",
+            (),
+            {
+                "output_text": '{"path":"","repo":"marten","branch":"codex/issue-63-sleep-coding"}',
+                "usage": TokenUsage(
+                    prompt_tokens=18,
+                    completion_tokens=6,
+                    total_tokens=24,
+                    provider="minimax",
+                    model_name="MiniMax-M2.5",
+                    cost_usd=0.0,
+                    step_name="code_review",
+                ),
+            },
+        )()
+
+
 def build_settings(database_path: Path, review_runs_dir: Path) -> Settings:
     platform_config_path = database_path.parent / "platform.json"
+    models_config_path = database_path.parent / "models.json"
     if not platform_config_path.exists():
         platform_config_path.write_text("{}", encoding="utf-8")
+    if not models_config_path.exists():
+        models_config_path.write_text("{}", encoding="utf-8")
     return Settings(
         app_env="test",
         database_url=f"sqlite:///{database_path}",
         platform_config_path=str(platform_config_path),
+        models_config_path=str(models_config_path),
         review_runs_dir=str(review_runs_dir),
         github_repository="tiezhuli001/youmeng-gateway",
         langsmith_tracing=False,
@@ -260,7 +289,7 @@ def build_settings(database_path: Path, review_runs_dir: Path) -> Settings:
 
 
 class ReviewServiceTests(unittest.TestCase):
-    def test_review_skill_raises_when_llm_call_fails(self) -> None:
+    def test_review_skill_falls_back_when_llm_call_fails(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             settings = Settings(
@@ -278,12 +307,14 @@ class ReviewServiceTests(unittest.TestCase):
                 mcp_client=MCPClient(),
             )
 
-            with patch("app.agents.code_review_agent.skill.which", return_value=None):
-                with self.assertRaisesRegex(RuntimeError, "LLM provider is unreachable"):
-                    skill.run(
-                        ReviewSource(source_type="local_code", local_path=str(root)),
-                        "dummy context",
-                    )
+            result = skill.run(
+                ReviewSource(source_type="local_code", local_path=str(root)),
+                "dummy context",
+            )
+
+            self.assertEqual(result.output.run_mode, "real_run")
+            self.assertFalse(result.output.blocking)
+            self.assertIn("LLM provider is unreachable", result.output.review_markdown)
 
     def test_review_skill_command_takes_precedence_over_llm_credentials(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -334,6 +365,34 @@ class ReviewServiceTests(unittest.TestCase):
             self.assertEqual(result.output.summary, "command review")
             run_with_command.assert_called_once()
 
+    def test_review_skill_without_command_uses_dry_run_when_no_model_credentials(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            models_json = root / "models.json"
+            models_json.write_text("{}", encoding="utf-8")
+            settings = Settings(
+                app_env="development",
+                database_url=f"sqlite:///{root / 'review.db'}",
+                review_runs_dir=str(root / "review-runs"),
+                github_repository="tiezhuli001/youmeng-gateway",
+                models_config_path=str(models_json),
+                minimax_api_key=None,
+                openai_api_key=None,
+                langsmith_tracing=False,
+            )
+            skill = ReviewSkillService(
+                settings=settings,
+                agent_runtime=FailingAgentRuntime(),
+                mcp_client=MCPClient(),
+            )
+
+            result = skill.run(
+                ReviewSource(source_type="local_code", local_path=str(root)),
+                "dummy context",
+            )
+
+            self.assertEqual(result.output.run_mode, "dry_run")
+
     def test_start_review_archives_local_code_run(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -342,11 +401,9 @@ class ReviewServiceTests(unittest.TestCase):
             mcp_client = build_github_mcp(github)
             review_service = ReviewService(
                 settings=settings,
-                github=github,
                 gitlab=FakeGitLabService(),
                 sleep_coding=SleepCodingService(
                     settings=settings,
-                    github=github,
                     channel=FakeChannelService(),
                     git_workspace=FakeGitWorkspaceService(),
                     validator=FakeValidationRunner(),
@@ -400,7 +457,6 @@ class ReviewServiceTests(unittest.TestCase):
             )
             sleep_coding = SleepCodingService(
                 settings=settings,
-                github=github,
                 channel=FakeChannelService(),
                 git_workspace=FakeGitWorkspaceService(),
                 validator=FakeValidationRunner(),
@@ -416,7 +472,6 @@ class ReviewServiceTests(unittest.TestCase):
             )
             review_service = ReviewService(
                 settings=settings,
-                github=github,
                 gitlab=FakeGitLabService(),
                 sleep_coding=sleep_coding,
                 skill=FakeReviewSkillService(),
@@ -450,11 +505,9 @@ class ReviewServiceTests(unittest.TestCase):
             mcp_client = build_github_mcp(github)
             review_service = ReviewService(
                 settings=settings,
-                github=github,
                 gitlab=gitlab,
                 sleep_coding=SleepCodingService(
                     settings=settings,
-                    github=github,
                     channel=FakeChannelService(),
                     git_workspace=FakeGitWorkspaceService(),
                     validator=FakeValidationRunner(),
@@ -486,7 +539,6 @@ class ReviewServiceTests(unittest.TestCase):
             github_mcp = build_github_mcp(github)
             sleep_coding = SleepCodingService(
                 settings=settings,
-                github=github,
                 channel=FakeChannelService(),
                 git_workspace=FakeGitWorkspaceService(),
                 validator=FakeValidationRunner(),
@@ -500,7 +552,6 @@ class ReviewServiceTests(unittest.TestCase):
             )
             review_service = ReviewService(
                 settings=settings,
-                github=github,
                 gitlab=FakeGitLabService(),
                 sleep_coding=sleep_coding,
                 skill=FakeReviewSkillService(),
@@ -533,11 +584,9 @@ class ReviewServiceTests(unittest.TestCase):
             mcp_client = build_github_mcp(github)
             review_service = ReviewService(
                 settings=settings,
-                github=github,
                 gitlab=FakeGitLabService(),
                 sleep_coding=SleepCodingService(
                     settings=settings,
-                    github=github,
                     channel=FakeChannelService(),
                     git_workspace=FakeGitWorkspaceService(),
                     validator=FakeValidationRunner(),
@@ -572,7 +621,6 @@ class ReviewServiceTests(unittest.TestCase):
             mcp_client = build_github_mcp(github)
             sleep_coding = SleepCodingService(
                 settings=settings,
-                github=github,
                 channel=FakeChannelService(),
                 git_workspace=FakeGitWorkspaceService(),
                 validator=FakeValidationRunner(),
@@ -586,7 +634,6 @@ class ReviewServiceTests(unittest.TestCase):
             )
             review_service = ReviewService(
                 settings=settings,
-                github=github,
                 gitlab=FakeGitLabService(),
                 sleep_coding=sleep_coding,
                 skill=FakeReviewSkillService(),
@@ -626,6 +673,27 @@ class ReviewServiceTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "strict JSON"):
                 skill._parse_command_output("### Summary\nthis is not json")
 
+    def test_agent_runtime_falls_back_when_structured_review_output_is_invalid(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = build_settings(root / "review.db", root / "review-runs").model_copy(
+                update={"openai_api_key": "test-key"}
+            )
+            skill = ReviewSkillService(
+                settings,
+                agent_runtime=MalformedAgentRuntime(),
+                mcp_client=MCPClient(),
+            )
+
+            result = skill.run(
+                ReviewSource(source_type="local_code", local_path=str(root)),
+                "diff context",
+            )
+
+            self.assertEqual(result.output.run_mode, "real_run")
+            self.assertFalse(result.output.blocking)
+            self.assertIn("non-contract output", result.output.summary)
+
     def test_local_code_context_reports_friendly_git_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -635,11 +703,9 @@ class ReviewServiceTests(unittest.TestCase):
             mcp_client = build_github_mcp(github)
             review_service = ReviewService(
                 settings=settings,
-                github=github,
                 gitlab=FakeGitLabService(),
                 sleep_coding=SleepCodingService(
                     settings=settings,
-                    github=github,
                     channel=FakeChannelService(),
                     git_workspace=FakeGitWorkspaceService(),
                     validator=FakeValidationRunner(),
@@ -650,7 +716,7 @@ class ReviewServiceTests(unittest.TestCase):
                 mcp_client=mcp_client,
             )
 
-            context = review_service._build_local_code_context(
+            context = review_service.source_support.build_local_code_context(
                 ReviewSource(
                     source_type="local_code",
                     local_path=str(root),

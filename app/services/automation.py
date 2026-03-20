@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+from contextlib import closing
 from time import sleep
 
 from app.agents.code_review_agent import ReviewService
@@ -40,6 +42,7 @@ class AutomationService:
         tasks: TaskRegistryService | None = None,
         background_jobs: BackgroundJobService | None = None,
         event_bus: ControlEventBus | None = None,
+        sleep_fn: Callable[[float], None] | None = None,
     ) -> None:
         self.settings = settings or get_settings()
         self.sleep_coding = sleep_coding or SleepCodingService(settings=self.settings)
@@ -63,6 +66,8 @@ class AutomationService:
             event_bus=self.event_bus,
         )
         self.delivery = DeliveryMessageBuilder(self.ledger)
+        default_sleep_fn = (lambda seconds: None) if self.settings.app_env == "test" else sleep
+        self.sleep_fn = sleep_fn or default_sleep_fn
         self.event_bus.register(ControlEventType.FOLLOW_UP_REQUESTED, self._handle_follow_up_requested)
 
     def handle_sleep_coding_action(
@@ -207,7 +212,7 @@ class AutomationService:
         try:
             delay_seconds = self.settings.resolved_review_follow_up_delay_seconds
             if delay_seconds > 0:
-                sleep(delay_seconds)
+                self.sleep_fn(delay_seconds)
             task = self.run_review_loop(task_id)
         except Exception as exc:
             self.follow_up.mark_state(
@@ -235,7 +240,8 @@ class AutomationService:
             review_round=review_round,
             max_repair_rounds=self.max_repair_rounds,
         )
-        self.channel.notify(title=title, lines=lines)
+        notification = self.channel.notify(title=title, lines=lines)
+        self._record_notification(task, stage=f"review_round_{review_round}", notification=notification)
 
     def _publish_manual_handoff(
         self,
@@ -249,7 +255,8 @@ class AutomationService:
             blocking_reviews=blocking_reviews,
             max_repair_rounds=self.max_repair_rounds,
         )
-        self.channel.notify(title=title, lines=lines)
+        notification = self.channel.notify(title=title, lines=lines)
+        self._record_notification(task, stage="manual_handoff", notification=notification)
         payload = {
             "review_id": review.review_id,
             "blocking_reviews": blocking_reviews,
@@ -264,7 +271,8 @@ class AutomationService:
         review: ReviewRun | None = None,
     ) -> None:
         title, lines = self.delivery.build_final_delivery(task, review)
-        self.channel.notify(title=title, lines=lines)
+        notification = self.channel.notify(title=title, lines=lines)
+        self._record_notification(task, stage="final_delivery", notification=notification)
         payload = {
             "task_status": task.status,
             "review_id": review.review_id if review else None,
@@ -297,4 +305,37 @@ class AutomationService:
                 control_task.parent_task_id,
                 event_type,
                 {"child_control_task_id": control_task.task_id, **payload},
+            )
+
+    def _record_notification(
+        self,
+        task: SleepCodingTask,
+        *,
+        stage: str,
+        notification,
+    ) -> None:
+        with closing(self.sleep_coding._connect()) as connection:
+            self.sleep_coding.store.append_event(
+                connection,
+                task.task_id,
+                "channel_notified",
+                {
+                    "provider": notification.provider,
+                    "delivered": notification.delivered,
+                    "is_dry_run": notification.is_dry_run,
+                    "stage": stage,
+                },
+            )
+            connection.commit()
+        if task.control_task_id:
+            self.tasks.append_event(
+                task.control_task_id,
+                "channel_notified",
+                {
+                    "provider": notification.provider,
+                    "delivered": notification.delivered,
+                    "is_dry_run": notification.is_dry_run,
+                    "stage": stage,
+                    "domain_task_id": task.task_id,
+                },
             )

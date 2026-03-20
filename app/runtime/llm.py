@@ -65,21 +65,30 @@ class SharedLLMRuntime:
 
     def generate(self, llm_request: LLMRequest) -> LLMResponse:
         provider = llm_request.provider or self.settings.resolved_llm_default_provider
+        protocol = self.settings.resolve_provider_protocol(provider)
         if llm_request.model:
             model = llm_request.model
         elif llm_request.provider is None:
-            model = self.settings.resolved_llm_default_model or self._default_model_for_provider(provider)
+            model = self.settings.resolved_llm_default_model or self._default_model_for_provider(provider, protocol)
         else:
-            model = self._default_model_for_provider(provider)
-        if provider == "openai":
-            return self._generate_openai(model, llm_request)
-        if provider == "minimax":
-            return self._generate_minimax(model, llm_request)
+            model = self._default_model_for_provider(provider, protocol)
+        if protocol == "openai":
+            return self._generate_openai(provider, model, llm_request)
         raise ValueError(f"Unsupported LLM provider: {provider}")
 
-    def _generate_openai(self, model: str, llm_request: LLMRequest) -> LLMResponse:
-        if not self.settings.openai_api_key:
-            raise RuntimeError("OPENAI_API_KEY is not configured")
+    def _generate_openai(
+        self,
+        provider: str,
+        model: str,
+        llm_request: LLMRequest,
+    ) -> LLMResponse:
+        api_key = self.settings.resolve_provider_api_key(provider)
+        api_base = self.settings.resolve_provider_api_base(provider)
+        pricing_provider = self.settings.resolve_provider_pricing_provider(provider)
+        if not api_key:
+            raise RuntimeError(f"Provider `{provider}` is missing an API key")
+        if not api_base:
+            raise RuntimeError(f"Provider `{provider}` is missing an API base URL")
         payload: dict[str, Any] = {
             "model": model,
             "messages": [message.model_dump() for message in llm_request.messages],
@@ -89,16 +98,16 @@ class SharedLLMRuntime:
             payload["max_completion_tokens"] = llm_request.max_output_tokens
         started_at = perf_counter()
         response = self._post_with_retry(
-            url=f"{self.settings.openai_api_base.rstrip('/')}/chat/completions",
+            url=f"{api_base.rstrip('/')}/chat/completions",
             headers={
-                "Authorization": f"Bearer {self.settings.openai_api_key}",
+                "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
             },
             payload=payload,
         )
         duration_seconds = perf_counter() - started_at
         content = self._extract_choice_text(response)
-        usage = self._build_usage("openai", model, response.get("usage", {}))
+        usage = self._build_usage("openai", model, response.get("usage", {}), pricing_provider)
         usage = self.token_counter.estimate_openai_usage(
             model=model,
             messages=llm_request.messages,
@@ -108,11 +117,11 @@ class SharedLLMRuntime:
         usage = usage.model_copy(
             update={
                 "model_name": model,
-                "provider": "openai",
+                "provider": provider,
                 "message_count": len(llm_request.messages),
                 "duration_seconds": duration_seconds,
                 "cost_usd": self.pricing.calculate_cost_usd(
-                    provider="openai",
+                    provider=pricing_provider,
                     model=model,
                     prompt_tokens=usage.prompt_tokens,
                     completion_tokens=usage.completion_tokens,
@@ -122,60 +131,7 @@ class SharedLLMRuntime:
             }
         )
         return LLMResponse(
-            provider="openai",
-            model=model,
-            output_text=content,
-            usage=usage,
-            response_id=response.get("id"),
-        )
-
-    def _generate_minimax(self, model: str, llm_request: LLMRequest) -> LLMResponse:
-        if not self.settings.minimax_api_key:
-            raise RuntimeError("MINIMAX_API_KEY is not configured")
-        payload: dict[str, Any] = {
-            "model": model,
-            "messages": [message.model_dump() for message in llm_request.messages],
-            "temperature": llm_request.temperature,
-        }
-        if llm_request.max_output_tokens is not None:
-            payload["max_tokens"] = llm_request.max_output_tokens
-        started_at = perf_counter()
-        response = self._post_with_retry(
-            url=f"{self.settings.minimax_api_base.rstrip('/')}/v1/text/chatcompletion_v2",
-            headers={
-                "Authorization": f"Bearer {self.settings.minimax_api_key}",
-                "Content-Type": "application/json",
-            },
-            payload=payload,
-        )
-        duration_seconds = perf_counter() - started_at
-        content = self._extract_choice_text(response)
-        usage = self._build_usage("minimax", model, response.get("usage", {}))
-        usage = self.token_counter.estimate_text_usage(
-            provider="minimax",
-            model=model,
-            input_text="\n".join(message.content for message in llm_request.messages),
-            output_text=content,
-            existing_usage=usage,
-        )
-        usage = usage.model_copy(
-            update={
-                "model_name": model,
-                "provider": "minimax",
-                "message_count": len(llm_request.messages),
-                "duration_seconds": duration_seconds,
-                "cost_usd": self.pricing.calculate_cost_usd(
-                    provider="minimax",
-                    model=model,
-                    prompt_tokens=usage.prompt_tokens,
-                    completion_tokens=usage.completion_tokens,
-                    cache_read_tokens=usage.cache_read_tokens,
-                    cache_write_tokens=usage.cache_write_tokens,
-                ),
-            }
-        )
-        return LLMResponse(
-            provider="minimax",
+            provider=provider,
             model=model,
             output_text=content,
             usage=usage,
@@ -187,6 +143,7 @@ class SharedLLMRuntime:
         provider: str,
         model: str,
         usage_payload: dict[str, Any],
+        pricing_provider: str | None = None,
     ) -> TokenUsage:
         raw_prompt_tokens = int(
             usage_payload.get("prompt_tokens")
@@ -230,7 +187,7 @@ class SharedLLMRuntime:
             or prompt_tokens + completion_tokens
         )
         cost_usd = self.pricing.calculate_cost_usd(
-            provider=provider,
+            provider=pricing_provider or provider,
             model=model,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
@@ -296,9 +253,10 @@ class SharedLLMRuntime:
         assert last_error is not None
         raise last_error
 
-    def _default_model_for_provider(self, provider: str) -> str:
-        if provider == "openai":
+    def _default_model_for_provider(self, provider: str, protocol: str) -> str:
+        configured = self.settings.resolve_provider_default_model(provider)
+        if configured:
+            return configured
+        if protocol == "openai":
             return self.settings.resolved_openai_model
-        if provider == "minimax":
-            return self.settings.resolved_minimax_model
         raise ValueError(f"Unsupported LLM provider: {provider}")

@@ -20,9 +20,13 @@
 - 主链路已经打通，并有测试覆盖到 `review -> final delivery`
 - 目录边界已经收口为 `app/channel`、`app/control`、`app/runtime`、`app/agents`、`app/infra`
 - `main-agent`、`ralph`、`code-review-agent` 已成为明确的 agent 边界
-- GitHub 主写路径已经收口为 `MCP + bridge`，不再保留历史 direct API service
+- GitHub 主写路径已经收口为 `MCP + bridge`，不再保留历史 direct API service，也不应回摆到 GitHub REST 旁路
+- `mcp.json` / `models.json` / `platform.json` 已成为主配置入口，代码不再鼓励 env-first
 - review skill 已改成 strict JSON-first，工程代码不再负责把半结构化文本“猜成结构化结果”
 - 一批历史兼容 facade 和历史文档已经从当前分支移除
+- `app/runtime/mcp.py` 已移除从 settings 注入 `GITHUB_TOKEN` / `OPENAI_API_KEY` 等 placeholder alias 的旧行为
+- `app/core/config.py` 的 provider 解析已收口为 provider 元数据驱动，自定义 provider 不再隐式继承 `openai` 默认 key/base
+- pricing 现在优先读取 provider 配置中的 pricing 规则，内建价格表只作为 fallback
 
 ## 当前阶段
 

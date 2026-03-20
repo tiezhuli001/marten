@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import sqlite3
-import tempfile
 import time
 from contextlib import closing
 from pathlib import Path
@@ -10,6 +9,7 @@ from typing import Any
 from app.control.task_events import TaskEventRecorder
 from app.control.task_store import TaskStore
 from app.core.config import Settings, get_settings
+from app.infra.sqlite_utils import connect_sqlite, ensure_writable_parent
 from app.models.schemas import ControlTask, ControlTaskEvent, ControlTaskType
 
 
@@ -184,19 +184,10 @@ class TaskRegistryService:
             return self.tasks.find_parent_for_issue(connection, repo, issue_number)
 
     def _ensure_parent_dir(self) -> None:
-        try:
-            self.database_path.parent.mkdir(parents=True, exist_ok=True)
-        except PermissionError:
-            fallback_dir = Path(tempfile.gettempdir()) / "marten"
-            fallback_dir.mkdir(parents=True, exist_ok=True)
-            self.database_path = fallback_dir / self.database_path.name
+        self.database_path = ensure_writable_parent(self.database_path)
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.database_path, timeout=30.0)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA journal_mode=WAL")
-        connection.execute("PRAGMA busy_timeout = 30000")
-        return connection
+        return connect_sqlite(self.database_path)
 
     def _initialize_schema(self) -> None:
         with closing(self._connect()) as connection:

@@ -19,6 +19,7 @@ from app.models.schemas import (
 from app.runtime.agent_runtime import AgentDescriptor, AgentRuntime
 from app.runtime.llm import SharedLLMRuntime
 from app.runtime.mcp import MCPClient, MCPToolCall, build_default_mcp_client
+from app.runtime.structured_output import parse_structured_object
 from app.runtime.token_counting import TokenCountingService
 from app.services.session_registry import SessionRegistryService
 from app.services.task_registry import TaskRegistryService
@@ -28,7 +29,6 @@ class MainAgentService:
     def __init__(
         self,
         settings: Settings,
-        github: object | None = None,
         channel: ChannelNotificationService | None = None,
         llm_runtime: SharedLLMRuntime | None = None,
         agent_runtime: AgentRuntime | None = None,
@@ -142,7 +142,7 @@ class MainAgentService:
             agent_session.session_id,
             f"Prepared {issue_ref} for Ralph sleep-coding workflow.",
         )
-        self.channel.notify(
+        notification = self.channel.notify(
             title=f"Ralph 任务开始：{self._display_issue_title(issue.title)}",
             lines=[
                 f"来源: Issue #{issue.issue_number or 'n/a'}",
@@ -154,6 +154,16 @@ class MainAgentService:
                 self._summarize_issue_body(issue.body),
                 "Ralph 正在处理中，完成后将自动提交 Pull Request...",
             ],
+        )
+        self.tasks.append_event(
+            control_task.task_id,
+            "channel_notified",
+            {
+                "provider": notification.provider,
+                "delivered": notification.delivered,
+                "is_dry_run": notification.is_dry_run,
+                "stage": "issue_created",
+            },
         )
         issue_ref = (
             f"#{issue.issue_number}"
@@ -173,7 +183,7 @@ class MainAgentService:
         user_session_id: str,
     ) -> tuple[GitHubIssueDraft, TokenUsage]:
         prompt = self.context.build_main_agent_input(user_session_id, payload.content)
-        if self.settings.openai_api_key or self.settings.minimax_api_key:
+        if self.settings.has_runtime_llm_credentials:
             try:
                 response = self.agent_runtime.generate_structured_output(
                     self._build_agent_descriptor(),
@@ -184,9 +194,10 @@ class MainAgentService:
                     )
                 )
                 try:
-                    parsed = json.loads(response.output_text)
-                except json.JSONDecodeError as exc:
-                    raise RuntimeError("Main agent returned invalid issue draft JSON.") from exc
+                    parsed = self._parse_issue_draft_output(response.output_text)
+                except json.JSONDecodeError:
+                    draft = self._build_heuristic_issue_draft(payload)
+                    return draft, response.usage
                 return GitHubIssueDraft.model_validate(parsed), response.usage
             except Exception:
                 if self.settings.app_env != "test":
@@ -200,6 +211,12 @@ class MainAgentService:
             existing_usage=TokenUsage(),
         )
         return draft, usage.model_copy(update={"message_count": 2})
+
+    def _parse_issue_draft_output(self, output_text: str) -> dict[str, Any]:
+        parsed = parse_structured_object(output_text)
+        if not isinstance(parsed, dict):
+            raise json.JSONDecodeError("Issue draft output must be an object", output_text, 0)
+        return parsed
 
     def _create_issue(self, repo: str, draft: GitHubIssueDraft) -> GitHubIssueResult:
         server = self._require_github_server("create_issue")
@@ -295,4 +312,6 @@ class MainAgentService:
                 **content,
             }
             return GitHubIssueResult.model_validate(payload)
+        if isinstance(content, str) and content.strip():
+            raise RuntimeError(f"GitHub MCP create_issue failed: {content.strip()}")
         raise ValueError("MCP create_issue result is not a supported payload")

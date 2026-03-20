@@ -43,7 +43,6 @@ class SleepCodingService:
     def __init__(
         self,
         settings: Settings | None = None,
-        github: object | None = None,
         channel: ChannelNotificationService | None = None,
         git_workspace: GitWorkspaceService | None = None,
         validator: ValidationRunner | None = None,
@@ -88,15 +87,8 @@ class SleepCodingService:
         self.drafting.agent_runtime = self.agent_runtime
         self.github.mcp_client = self.mcp_client
 
-    def _ensure_parent_dir(self) -> None:
-        self.store.ensure_parent_dir()
-        self.database_path = self.store.database_path
-
     def _connect(self) -> sqlite3.Connection:
         return self.store.connect()
-
-    def _initialize_schema(self) -> None:
-        self.store.initialize_schema()
 
     def start_task(self, payload: SleepCodingTaskRequest) -> SleepCodingTask:
         return self.workflow.start_task(payload)
@@ -164,10 +156,16 @@ class SleepCodingService:
                 "error": error,
                 **(payload or {}),
             }
+            event_type = {
+                "queued": "follow_up.queued",
+                "processing": "follow_up.processing",
+                "completed": "follow_up.completed",
+                "failed": "follow_up.failed",
+            }.get(status, f"follow_up.{status}")
             self.store.append_event(
                 current_connection,
                 task_id,
-                f"background_follow_up_{status}",
+                event_type,
                 event_payload,
             )
             if owned_connection:

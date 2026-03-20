@@ -62,7 +62,9 @@ class ValidationRunner:
             if not script_path.is_absolute():
                 cwd_script = cwd / script_path
                 project_script = self.project_root / script_path
-                if not cwd_script.exists() and project_script.exists():
+                if project_script.exists() and (
+                    not cwd_script.exists() or cwd.resolve() != self.project_root.resolve()
+                ):
                     resolved[1] = str(project_script)
         return resolved
 

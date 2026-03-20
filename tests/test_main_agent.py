@@ -49,6 +49,18 @@ def build_github_mcp(issue_number: int = 101) -> MCPClient:
     return client
 
 
+def build_failing_github_mcp(message: str) -> MCPClient:
+    client = MCPClient()
+    server = InMemoryMCPServer()
+    server.register_tool(
+        "create_issue",
+        lambda arguments: message,
+        server="github",
+    )
+    client.register_adapter("github", server)
+    return client
+
+
 class FakeChannelService:
     def __init__(self) -> None:
         self.notifications: list[tuple[str, list[str]]] = []
@@ -96,6 +108,10 @@ class FailingAgentRuntime(FakeAgentRuntime):
 def build_settings(database_path: Path, **kwargs) -> Settings:
     kwargs.setdefault("openai_api_key", None)
     kwargs.setdefault("minimax_api_key", None)
+    kwargs.setdefault("models_config_path", str(database_path.parent / "models.json"))
+    models_config_path = Path(str(kwargs["models_config_path"]))
+    if not models_config_path.exists():
+        models_config_path.write_text("{}", encoding="utf-8")
     return Settings(
         app_env="test",
         database_url=f"sqlite:///{database_path}",
@@ -206,6 +222,40 @@ class MainAgentServiceTests(unittest.TestCase):
             )
 
             self.assertEqual(response.issue.title, "Support Feishu requirement intake")
+
+    def test_intake_accepts_json_wrapped_in_think_text(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            mcp_client = build_github_mcp()
+            wrapped_output = (
+                "<think>\nNeed to turn the request into a GitHub issue.\n</think>\n\n"
+                + json.dumps(
+                    {
+                        "title": "Support MiniMax issue intake",
+                        "body": "Implement the issue intake path.",
+                        "labels": [
+                            "agent:main",
+                            "agent:ralph",
+                            "workflow:intake",
+                            "workflow:sleep-coding",
+                        ],
+                    }
+                )
+            )
+            service = MainAgentService(
+                build_settings(Path(temp_dir) / "main-agent.db", openai_api_key="test-key"),
+                channel=FakeChannelService(),
+                agent_runtime=FakeAgentRuntime(wrapped_output, mcp_client=mcp_client),
+                mcp_client=mcp_client,
+            )
+
+            response = service.intake(
+                MainAgentIntakeRequest(
+                    user_id="user-1",
+                    content="把 MiniMax 返回包装文本的 issue 草稿正常解析出来",
+                )
+            )
+
+            self.assertEqual(response.issue.title, "Support MiniMax issue intake")
             self.assertEqual(
                 response.issue.labels,
                 ["agent:main", "agent:ralph", "workflow:intake", "workflow:sleep-coding"],
@@ -213,13 +263,37 @@ class MainAgentServiceTests(unittest.TestCase):
             self.assertEqual(response.token_usage.total_tokens, 120)
             self.assertEqual(response.token_usage.step_name, "main_agent_issue_intake")
 
+    def test_intake_falls_back_to_heuristic_draft_when_provider_output_is_not_json(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            mcp_client = build_github_mcp()
+            service = MainAgentService(
+                build_settings(Path(temp_dir) / "main-agent.db", openai_api_key="test-key"),
+                channel=FakeChannelService(),
+                agent_runtime=FakeAgentRuntime(
+                    "I can help with that request. Here is a concise summary instead of strict JSON.",
+                    mcp_client=mcp_client,
+                ),
+                mcp_client=mcp_client,
+            )
+
+            response = service.intake(
+                MainAgentIntakeRequest(
+                    user_id="user-1",
+                    content="把飞书里的需求整理成 GitHub issue",
+                )
+            )
+
+            self.assertEqual(response.issue.issue_number, 101)
+            self.assertIn("[Main Agent]", response.issue.title)
+            self.assertIn("workflow:intake", response.issue.labels)
+            self.assertEqual(response.token_usage.total_tokens, 120)
+            self.assertEqual(response.token_usage.step_name, "main_agent_issue_intake")
+
     def test_intake_prefers_mcp_create_issue_when_available(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            github = FakeGitHubService()
             mcp_client = build_github_mcp(issue_number=202)
             service = MainAgentService(
                 build_settings(Path(temp_dir) / "main-agent.db", openai_api_key="test-key"),
-                github=github,
                 channel=FakeChannelService(),
                 agent_runtime=FakeAgentRuntime(
                     json.dumps(
@@ -239,7 +313,6 @@ class MainAgentServiceTests(unittest.TestCase):
             )
 
             self.assertEqual(response.issue.issue_number, 202)
-            self.assertEqual(len(github.drafts), 0)
 
     def test_intake_raises_when_llm_call_fails_with_provider_configured(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -262,6 +335,23 @@ class MainAgentServiceTests(unittest.TestCase):
                     MainAgentIntakeRequest(
                         user_id="user-1",
                         content="模型异常时必须显式失败",
+                    )
+                )
+
+    def test_intake_surfaces_github_mcp_error_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            mcp_client = build_failing_github_mcp("failed to create issue: 401 Bad credentials")
+            service = MainAgentService(
+                build_settings(Path(temp_dir) / "main-agent.db"),
+                channel=FakeChannelService(),
+                mcp_client=mcp_client,
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "401 Bad credentials"):
+                service.intake(
+                    MainAgentIntakeRequest(
+                        user_id="user-1",
+                        content="真实链路里需要暴露 GitHub MCP 错误",
                     )
                 )
 

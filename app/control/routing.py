@@ -2,7 +2,7 @@ from app.models.schemas import IntentType
 
 
 STATS_KEYWORDS = ("统计", "token", "消耗", "最近7天", "最近30天")
-SLEEP_CODING_KEYWORDS = ("写代码", "修 bug", "修bug", "issue", "pr", "review")
+SLEEP_CODING_KEYWORDS = ("写代码", "修 bug", "修bug")
 
 
 def classify_intent(content: str) -> IntentType:

@@ -52,6 +52,29 @@ Ralph 和 Review Agent 的目标不是“远程读一点上下文就生成文本
 6. 若有阻塞问题，Ralph 延时后自动修复，最多 3 轮
 7. 最终结果写回 GitHub / GitLab，并发送 Feishu 通知
 
+## Current Scope
+
+如果你只想快速理解当前仓库，不需要先看所有模块。
+
+当前已经稳定收口的是一条单任务主链路：
+
+- `Feishu / API -> Main Agent -> GitHub issue`
+- `worker poll -> Ralph coding -> local validation -> PR`
+- `Review Agent -> local-first review -> repair loop`
+- `Feishu final delivery -> token usage summary`
+
+当前这条链路已经在真实仓库上完成过多次 live 验证。
+
+详细 issue / PR / review 编号只保留在内部状态文档，避免公开入口被历史样本绑死。
+
+当前还没有展开的方向：
+
+- 多仓库并发调度
+- 多 reviewer 聚合
+- 长期记忆和上下文压缩平台化
+
+判断仓库目标是否偏移时，优先看这条主链路有没有被稀释成“功能拼盘”。如果某个改动不强化这条链路，基本就不该优先。
+
 ## Getting Started
 
 ### Requirements
@@ -74,19 +97,71 @@ pip install -e .
 
 ```bash
 cp .env.example .env
-cp agents.json.example agents.json
+cp mcp.json.example mcp.json
 cp models.json.example models.json
 cp platform.json.example platform.json
-cp mcp.json.example mcp.json
 ```
 
 配置职责建议如下：
 
-- `.env`: secrets、基础运行参数、JSON 配置入口
-- `agents.json`: agent workspace、skills、MCP servers、agent spec
-- `models.json`: provider profile、model profile
-- `platform.json`: worker 默认值、worktree 行为、review loop、repo/channel 默认值
-- `mcp.json`: MCP server 的 command、args、env、cwd、adapter
+- `mcp.json`: MCP server 的 command、args、env、cwd、adapter；JSON-first，可直接在这里放 token
+- `models.json`: provider 凭据、api base、default model、profile 绑定；JSON-first，可配置多个 provider
+- `platform.json`: repo 和少量运行行为覆盖；大部分 worker/review/execution 默认值内建在代码里
+- `agents.json`: agent workspace、skills、MCP servers、model profile、prompt spec
+- `.env`: 框架运行参数和可选 override；不是主 secrets 存储层
+
+默认情况下，`agents.json` 可以不存在，系统会使用内建 agent spec。`mcp.json`、`models.json`、`platform.json` 才是主要配置入口；`.env` 更适合作为部署环境 override，而不是唯一的 key 来源。
+
+最小可理解配置：
+
+- `mcp.json`：告诉 Marten 怎么连 MCP server，并可直接放 server token
+- `models.json`：告诉 Marten 用哪个 provider/model，以及 provider 的 key/base
+- `platform.json`：告诉 Marten 默认 repo、worker、review、git 行为
+- `.env`：只在你需要 runtime override 时再补
+
+`models.json` 也支持直接把默认 profile 指到 MiniMax：
+
+```json
+{
+  "profiles": {
+    "default": {
+      "model": "minimax/MiniMax-M2.5"
+    }
+  },
+  "providers": {
+    "minimax": {
+      "protocol": "openai",
+      "apiKey": "your-api-key",
+      "baseURL": "https://api.minimax.io/v1",
+      "defaultModel": "MiniMax-M2.5",
+      "pricingProvider": "minimax"
+    }
+  }
+}
+```
+
+如果你有自己的 OpenAI-compatible gateway，也可以直接定义一个自定义 provider id。例如把一个 gateway 暴露成 `cpcpa`：
+
+```json
+{
+  "profiles": {
+    "default": {
+      "model": "cpcpa/gpt-5.4-mini"
+    }
+  },
+  "providers": {
+    "cpcpa": {
+      "protocol": "openai",
+      "apiKey": "your-api-key",
+      "baseURL": "https://your-gateway.example.com/v1",
+      "defaultModel": "gpt-5.4-mini",
+      "pricingProvider": "openai"
+    }
+  }
+}
+```
+
+`profile.model` 可以直接写成 `provider/model`，这样默认 profile 和 provider 绑定关系会更清晰。
 
 ### Run
 
@@ -109,18 +184,54 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 - agent 再在本地目录中读文件、运行命令、生成修改
 - 只有平台写回才走 MCP / API bridge
 
-关键配置：
-
-- `platform.json -> sleep_coding.execution.command`
-- `platform.json -> sleep_coding.execution.allow_llm_fallback`
-- `platform.json -> review.writeback_final_only`
-- `platform.json -> review.follow_up_delay_seconds`
-
 默认行为：
 
-- Ralph 要求显式配置本地 execution command
-- 未显式开启 `allow_llm_fallback` 时，不允许退回到 LLM 直接产出 patch
+- Ralph 默认使用内建 LLM + agent runtime 生成 coding draft
+- `sleep_coding.execution.command` 只是可选覆盖，用于把 coding 委托给外部本地执行器
 - review 默认每轮本地执行，只在最终结果时统一写回远程平台
+- review 默认在 `30s` 后触发 follow-up repair loop
+
+常用覆盖项：
+
+- `mcp.json -> servers.github.env.GITHUB_PERSONAL_ACCESS_TOKEN`
+- `models.json -> providers.<provider>.api_key`
+- `models.json -> providers.<provider>.api_base`
+- `platform.json -> github.repository`
+- `models.json -> profiles.default`
+
+只有在你需要偏离默认行为时，再考虑 `agents.json` 或 `platform.json` 中的高级覆盖项；默认情况下不需要先理解这些细节。
+
+一个真实可运行的最小配置组合通常是：
+
+- `mcp.json`：至少一个 GitHub MCP server，带可用 token
+- `models.json`：至少一个可用 provider，带可用 key/base
+- `platform.json`：至少 `github.repository`
+- `.env`：只放 webhook、framework runtime 或你明确想通过环境注入的覆盖项
+
+如果你要跑真实全链路测试，而不是 mock e2e，还需要在 `platform.json` 显式打开：
+
+```json
+{
+  "live_test": {
+    "enabled": true,
+    "timeout_seconds": 900,
+    "poll_interval_seconds": 5
+  }
+}
+```
+
+然后执行：
+
+```bash
+python -m unittest tests.test_live_chain -v
+```
+
+这条 live test 不会使用 fake GitHub、fake review、fake channel。它会直接使用当前工作区里的真实 `models.json`、`mcp.json`、`platform.json` 和 `.env`，并要求 GitHub MCP、Ralph execution、Review skill、Feishu inbound/outbound 都已配置完成。
+
+如果你第一次接触这个仓库，只要记住两件事：
+
+1. `MCP` 负责平台操作，不负责替代本地代码执行。
+2. Ralph 和 Review 都默认在本地代码副本上工作，远程平台只做 issue/PR/comment 写回。
 
 ## API Surface
 
@@ -167,7 +278,3 @@ python -m unittest discover -s tests -v
 - 继续强化 GitHub / GitLab source materialize 的健壮性
 - 继续压缩 Python fallback，让 LLM + skill + 本地仓库成为真正主路径
 - 在保证可调试性的前提下继续做仓库瘦身
-
-## README Notes
-
-这个 README 结构参考了开源社区常见模板组织方式，特别借鉴了 [othneildrew/Best-README-Template](https://github.com/othneildrew/Best-README-Template) 和 [Louis3797/awesome-readme-template](https://github.com/Louis3797/awesome-readme-template) 的章节组织思路，并按当前仓库的实际状态做了收敛。

@@ -80,7 +80,24 @@ class RalphTaskWorkflow:
         )
         control_task = self.service.tasks.update_task(
             control_task.task_id,
-            payload_patch={"run_session_id": run_session.session_id},
+            payload_patch={
+                "run_session_id": run_session.session_id,
+                "owner_agent": "ralph",
+                "source_agent": parent_task.agent_id if parent_task else "gateway",
+                "handoff": {
+                    "task_id": task_id,
+                    "session_id": run_session.session_id,
+                    "owner_agent": "ralph",
+                    "source": parent_task.agent_id if parent_task else "gateway",
+                    "repo": repo,
+                    "issue_number": payload.issue_number,
+                    "issue_title": issue.title,
+                    "issue_url": issue.html_url,
+                    "requirement": issue.body,
+                    "acceptance": issue.body,
+                    "status": "claimed",
+                },
+            },
         )
         with closing(self.service._connect()) as connection:
             self.service.store.insert_task(
@@ -102,6 +119,20 @@ class RalphTaskWorkflow:
                 {"domain_task_id": task_id, "issue_number": payload.issue_number},
                 connection=connection,
             )
+            if parent_task is not None:
+                self.service.tasks.append_event(
+                    parent_task.task_id,
+                    "handoff_to_ralph",
+                    {
+                        "child_task_id": control_task.task_id,
+                        "domain_task_id": task_id,
+                        "owner_agent": "ralph",
+                        "run_session_id": run_session.session_id,
+                        "repo": repo,
+                        "issue_number": payload.issue_number,
+                    },
+                    connection=connection,
+                )
             self.service.store.update_status(connection, task_id, "planning")
             self.service.tasks.update_task(control_task.task_id, status="planning", connection=connection)
             plan, plan_usage = self.service._build_plan(issue, run_session.session_id)

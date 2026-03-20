@@ -13,7 +13,7 @@ from app.models.schemas import ReviewFinding, ReviewRun, ReviewSource, TokenUsag
 if TYPE_CHECKING:
     from app.control.context import ContextAssemblyService
     from app.core.config import Settings
-    from app.services.session_registry import SessionRegistryService
+    from app.control.session_registry import SessionRegistryService
 
 
 class ReviewRunStore:
@@ -135,10 +135,6 @@ class ReviewRunStore:
         return artifact_path
 
     def artifact_name(self, review_id: str, source: ReviewSource) -> str:
-        if source.source_type == "github_pr" and source.pr_number:
-            return f"github-pr-{source.pr_number}-review.md"
-        if source.source_type == "gitlab_mr" and source.mr_number:
-            return f"gitlab-mr-{source.mr_number}-review.md"
         if source.source_type == "sleep_coding_task" and source.task_id:
             return f"task-{source.task_id}-review.md"
         return f"local-review-{review_id}.md"
@@ -222,38 +218,6 @@ class ReviewSourceSupport:
     def __init__(self, settings: Settings, context: ContextAssemblyService) -> None:
         self.settings = settings
         self.context = context
-
-    def normalize_source(self, source: ReviewSource) -> ReviewSource:
-        import re
-
-        if source.source_type == "sleep_coding_task":
-            return source
-        if source.url:
-            github_match = re.match(
-                r"https://github.com/(?P<repo>[^/]+/[^/]+)/pull/(?P<number>\d+)",
-                source.url,
-            )
-            if github_match:
-                return source.model_copy(
-                    update={
-                        "source_type": "github_pr",
-                        "repo": github_match.group("repo"),
-                        "pr_number": int(github_match.group("number")),
-                    }
-                )
-            gitlab_match = re.match(
-                r"https://gitlab.com/(?P<project>.+)/-/merge_requests/(?P<number>\d+)",
-                source.url,
-            )
-            if gitlab_match:
-                return source.model_copy(
-                    update={
-                        "source_type": "gitlab_mr",
-                        "project_path": gitlab_match.group("project"),
-                        "mr_number": int(gitlab_match.group("number")),
-                    }
-                )
-        return source
 
     def build_local_code_context(self, source: ReviewSource) -> str:
         local_path = Path(source.local_path or self.settings.project_root).expanduser()

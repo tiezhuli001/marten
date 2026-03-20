@@ -87,8 +87,6 @@ class Settings(BaseSettings):
     review_force_blocking_first_pass: bool = False
     review_writeback_final_only: bool = True
     review_follow_up_delay_seconds: int = 30
-    gitlab_api_base: str = "https://gitlab.com/api/v4"
-    gitlab_token: str | None = None
 
     model_config = SettingsConfigDict(
         env_file=".env",

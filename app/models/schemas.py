@@ -39,7 +39,7 @@ TaskAction = Literal[
 ]
 ValidationStatus = Literal["pending", "passed", "failed", "skipped"]
 ExecutionStatus = Literal["pending", "prepared", "skipped", "completed", "failed"]
-ReviewSourceType = Literal["github_pr", "gitlab_mr", "local_code", "sleep_coding_task"]
+ReviewSourceType = Literal["sleep_coding_task"]
 ControlTaskType = Literal["main_agent_intake", "sleep_coding", "code_review"]
 ControlSessionType = Literal["user_session", "agent_session", "run_session"]
 
@@ -348,8 +348,6 @@ class ReviewSource(BaseModel):
     source_type: ReviewSourceType
     repo: str | None = None
     pr_number: int | None = None
-    mr_number: int | None = None
-    project_path: str | None = None
     url: str | None = None
     local_path: str | None = None
     base_branch: str | None = None

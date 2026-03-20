@@ -4,7 +4,7 @@ from pathlib import Path
 
 from app.control.context import ContextAssemblyService
 from app.core.config import Settings
-from app.services.session_registry import SessionRegistryService
+from app.control.session_registry import SessionRegistryService
 
 
 class ContextAssemblyServiceTests(unittest.TestCase):
@@ -31,6 +31,14 @@ class ContextAssemblyServiceTests(unittest.TestCase):
             )
             context.record_short_memory(run_session.session_id, "Plan ready for Issue #33.")
             context.record_short_memory(run_session.session_id, "Validation should cover webhook signature handling.")
+            artifact_path = (
+                settings.project_root
+                / "artifacts"
+                / "memory"
+                / "agents"
+                / "ralph"
+                / f"{run_session.session_id}.md"
+            )
 
             prompt = context.build_agent_input(
                 session_id=run_session.session_id,
@@ -43,6 +51,8 @@ class ContextAssemblyServiceTests(unittest.TestCase):
             self.assertIn("Plan ready for Issue #33.", prompt)
             self.assertIn("Validation should cover webhook signature handling.", prompt)
             self.assertIn("Current Ralph Planning Task:", prompt)
+            self.assertTrue(artifact_path.exists())
+            self.assertIn("Agent ID: ralph", artifact_path.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

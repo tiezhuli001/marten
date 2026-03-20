@@ -21,8 +21,8 @@ from app.runtime.llm import SharedLLMRuntime
 from app.runtime.mcp import MCPClient, MCPToolCall, build_default_mcp_client
 from app.runtime.structured_output import parse_structured_object
 from app.runtime.token_counting import TokenCountingService
-from app.services.session_registry import SessionRegistryService
-from app.services.task_registry import TaskRegistryService
+from app.control.session_registry import SessionRegistryService
+from app.control.task_registry import TaskRegistryService
 
 
 class MainAgentService:
@@ -62,6 +62,7 @@ class MainAgentService:
             user_id=payload.user_id,
             source=payload.source,
         )
+        self.sessions.set_active_agent(user_session.session_id, "main-agent")
         agent_session = self.sessions.get_or_create_session(
             session_type="agent_session",
             external_ref=f"main-agent:{payload.source}:{payload.user_id}",
@@ -105,6 +106,8 @@ class MainAgentService:
                 "content": payload.content,
                 "issue_url": issue.html_url,
                 "labels": issue.labels,
+                "entry_agent": "main-agent",
+                "next_owner_agent": "ralph",
                 "user_session_id": user_session.session_id,
                 "agent_session_id": agent_session.session_id,
                 "request_id": request_id,

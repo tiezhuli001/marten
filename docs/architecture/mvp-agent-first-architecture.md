@@ -1,223 +1,81 @@
 # MVP Agent-First Architecture
 
-> 更新时间：2026-03-16
-> 目标：参考 OpenClaw 的控制平面与 agent runtime 思路，为 `Marten` 定义更适合当前 MVP 的 agent-first 架构。
+> 更新时间：2026-03-20
+> 目标：记录当前 `Marten` 的真实 MVP 架构边界，避免继续沿用旧阶段的大而全表述。
 
-## 一、设计目标
+## 一、当前 MVP 只保留一条主链
 
-MVP 目标不是先做“大而全的平台”，而是做一个足够优雅的最小多 agent 系统：
+当前稳定主链为：
 
-1. 用户从 Feishu 发起需求
-2. Gateway 统一接收并标准化消息
-3. Main Agent 负责需求理解与 GitHub issue 创建
-4. Ralph 负责异步编码与提 PR
-5. Code Review Agent 负责 review 与 repair loop
-6. Shared Infra 负责 token/cost、调度、状态机、通知
+`Feishu/Webhook -> Gateway -> main-agent -> Ralph -> code-review-agent -> final delivery`
 
-## 二、核心架构方向
+这条链路之外的多来源 review、多平台 channel、多 SCM 平台不是当前 MVP 真相。
 
-### 1. Gateway 作为控制平面
+## 二、控制面职责
 
-参考 OpenClaw，MVP 应把 Gateway 视为：
+Gateway / control 只做四件事：
 
-- 唯一入口
-- 消息标准化中心
-- binding / routing 中心
-- session / task 的控制平面
+- 标准化入站消息
+- 路由到目标 agent
+- 管理 `user_session / agent_session / run_session`
+- 管理控制任务、handoff 事件和自动 follow-up
 
-Gateway 不直接承担所有 agent 智能，只负责：
+控制面不承载 agent 智能本身，也不再把 webhook 直接绑死到某个 agent service。
 
-- 接入 Channel
-- 识别消息来源
-- 路由到目标 Agent
-- 管理会话和任务状态
+## 三、运行时职责
 
-第一版就应明确两层抽象：
+当前共享 agent runtime 只保留 MVP 必需能力：
 
-- `normalized message`
-- `binding -> agent route`
-
-也就是说，Feishu 入站消息先标准化，再由 Gateway 根据 binding 决定进入哪个 Agent，而不是直接把 webhook 绑死到某个 service。
-
-### 2. Agent Runtime 共享，不为每个 Agent 重写框架
-
-MVP 应采用一个共享 runtime：
-
-- 统一 provider 调用
+- 统一 LLM provider 调用
 - 统一 skill 加载
-- 统一 MCP 调用
-- 统一工具权限和超时控制
+- 统一 MCP 工具发现与注入
+- 读取 agent workspace 下的 `AGENTS.md` 与 `TOOLS.md`
 - 统一 token/cost 记账
 
-各个 Agent 只定义：
+当前不再保留 `SOUL.md` 兼容层。
 
-- 角色
-- 可用 skills
-- 可用 MCP / tools
-- 状态边界
-- workspace / 指令文件
+## 四、三个内置 agent
 
-Agent 的差异应优先通过工作区和指令表达，而不是优先写成 Python 分支逻辑。
+### `main-agent`
 
-### 3. 每个 Agent 有独立职责，不追求“万物都是 Agent”
+- 总入口
+- 负责意图识别、点名路由、issue intake
+- 用户会话的活跃 owner 默认保持在这里
 
-MVP 只保留 3 个核心 Agent：
+### `ralph`
 
-- `main-agent`
-- `ralph`
-- `code-review-agent`
+- 负责 sleep-coding 主执行链
+- 生成计划、编码、验证、提 PR
+- 完成后默认进入 review
 
-避免过早扩展更多 agent。
+### `code-review-agent`
 
-### 4. Channel Adapter 与 Agent 解耦
+- 只 review `sleep_coding_task`
+- review 上下文来自 Ralph 任务和对应 worktree
+- 输出结构化 findings，并把结论回写给 Ralph 控制任务
 
-参考 OpenClaw 的 channel adapter 思路：
+## 五、会话与记忆边界
 
-- Feishu 只负责入站 / 出站通信
-- Agent 不直接耦合 Feishu 协议细节
-- 所有 channel 消息先转换为统一内部消息格式
+MVP 当前按物理边界拆成三类：
 
-这样后续再扩 Telegram / Slack / WebChat 时，不需要重写 Agent。
+- `user_session`：用户对总入口的短上下文
+- `agent_session`：agent 级上下文
+- `run_session`：一次具体执行链
 
-## 三、OpenClaw 风格下的关键补充
+轻量记忆采用数据库 + markdown 镜像：
 
-### 1. Binding / Session 是 MVP 必需概念
+- `artifacts/memory/sessions/*.md`
+- `artifacts/memory/agents/<agent_id>/*.md`
 
-MVP 不应只停留在“有一个 FastAPI 接口”，而应明确具备：
+当前还没有引入复杂向量记忆或 task memory。
 
-- `binding`: 哪类消息路由到哪个 agent
-- `session`: 同一用户 / 同一线程 / 同一任务的上下文边界
+## 六、MVP 原则
 
-第一版可以简化，但不能缺失这两个概念。
-
-建议的最小 binding：
-
-- Feishu 普通对话 -> `main-agent`
-- Sleep Coding 任务事件 -> `ralph`
-- Review 任务事件 -> `code-review-agent`
-
-### 2. Per-Agent Workspace / Instruction Files
-
-参考 OpenClaw，MVP 应尽量把 agent 的差异写在工作区和指令文件里，而不是埋在业务代码里。
-
-第一版建议每个核心 agent 至少有：
-
-- `AGENTS.md`
-- `TOOLS.md`
-- `skills/`
-
-可选：
-
-- `SOUL.md`
-- `IDENTITY.md`
-
-这样后续调整 agent 行为时，优先改指令和 skill，而不是优先改代码。
-
-## 四、MVP 的最小模块划分
-
-### A. Channel Layer
-
-职责：
-
-- Feishu 入站事件接入
-- Feishu 出站消息发送
-- 消息标准化
-- 用户与会话标识提取
-
-建议：
-
-- MVP 只做 Feishu
-- 不提前设计多平台复杂抽象
-- 但内部消息结构要统一，避免后面返工
-
-### B. Gateway / Control Plane
-
-职责：
-
-- 接收标准化消息
-- 根据 binding 路由到 Agent
-- 统一 session / task / run 管理
-- 统一事件流与状态写回
-
-建议：
-
-- 继续保留 FastAPI 作为 HTTP 网关
-- 不为 MVP 额外引入复杂消息总线
-- 以数据库 + scheduler + service 编排为主
-- 明确引入最小 binding 和 session manager
-
-### C. Shared Agent Runtime
-
-职责：
-
-- 调用 LLM provider
-- 加载 skills
-- 调用 MCP / tools
-- 统一采集 usage / cost
-- 管理超时、重试、权限
-- 解析 agent workspace 指令
-
-建议：
-
-- 不为每个 agent 写单独的 provider / skill / MCP 代码
-- 使用统一 runtime，agent 只注入配置和上下文
-
-### D. Main Agent
-
-职责：
-
-- 理解用户需求
-- 生成 issue 草案
-- 调用 GitHub 创建 issue
-- 给用户确认或直接回传 issue 结果
-
-### E. Ralph
-
-职责：
-
-- 轮询或定时发现可处理 issue
-- 生成 plan
-- 调用 coding skill / MCP 在 worktree 中编码
-- 验证、commit、push、创建 PR
-
-### F. Code Review Agent
-
-职责：
-
-- review local / GitHub / GitLab
-- 生成 review 结果
-- 评论回写
-- 输出结构化 findings
-- 驱动 repair loop
-
-### G. Shared Infra
-
-职责：
-
-- token ledger
-- pricing registry
-- scheduler / polling
-- 状态存储
-- 通知发送
-
-## 五、Agent-First 的实现原则
-
-### 应优先交给 LLM + skill + MCP 的工作
-
-- 需求理解
-- issue 生成
-- plan 生成
-- 编码实现
-- code review
-- repair strategy
-- 最终结果总结
-
-### 应优先交给工程代码的工作
-
-- Feishu 鉴权与会话映射
-- GitHub / GitLab / MCP 连接配置
-- token/cost 精确记账
-- worker 调度
+- `agent first`：先稳住 agent contract，再扩具体垂直 agent
+- `skill first`：优先通过 skill 和 workspace 指令表达差异
+- `MCP as resource layer`：MCP 是底层资源接入，不是调度层
+- `json first`：agent 间 handoff 和结构化输出必须显式可解析
+- `GitHub only for now`：当前主链只面向 GitHub issue / PR 协作事实
 - 轮次限制
 - 状态机
 - 幂等与失败恢复

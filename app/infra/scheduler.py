@@ -3,9 +3,9 @@ from __future__ import annotations
 import threading
 from time import sleep
 
+from app.control.automation import AutomationService
 from app.core.config import Settings, get_settings
 from app.models.schemas import SleepCodingWorkerPollRequest
-from app.services.automation import AutomationService
 
 
 class WorkerSchedulerService:

@@ -51,6 +51,28 @@ class FakeAutomationService:
         self.task_actions.append((task_id, action))
         return type("TaskStub", (), {"task_id": task_id, "status": "in_review"})()
 
+    def continue_gateway_workflow(self, *, intent: str, task_id: str | None):
+        if intent == "general":
+            payload = type("PollRequestStub", (), {"auto_approve_plan": True})()
+            poll = self.process_worker_poll_async(payload)
+            return {
+                "triggered": True,
+                "mode": "worker_poll",
+                "auto_approve_plan": poll.auto_approve_plan,
+                "claimed_count": poll.claimed_count,
+                "task_ids": [task.task_id for task in poll.tasks],
+            }
+        if intent == "sleep_coding" and task_id:
+            task = self.handle_sleep_coding_action_async(task_id, "approve_plan")
+            return {
+                "triggered": True,
+                "mode": "task_action",
+                "action": "approve_plan",
+                "task_id": task.task_id,
+                "status": task.status,
+            }
+        return {"triggered": False, "mode": "noop", "reason": "no_follow_up_required"}
+
 
 class FeishuWebhookServiceTests(unittest.TestCase):
     def test_handle_url_verification_returns_challenge(self) -> None:

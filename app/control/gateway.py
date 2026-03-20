@@ -15,9 +15,9 @@ from app.models.schemas import (
     SleepCodingTaskRequest,
     TokenUsage,
 )
-from app.services.session_registry import SessionRegistryService
-from app.services.task_registry import TaskRegistryService
-from app.control.routing import classify_intent
+from app.control.routing import GatewayRoute, resolve_route
+from app.control.session_registry import SessionRegistryService
+from app.control.task_registry import TaskRegistryService
 
 
 @dataclass(frozen=True)
@@ -47,37 +47,47 @@ class GatewayControlPlaneService:
     def run(self, payload: GatewayMessageRequest) -> GatewayMessageResponse:
         request_id = payload.request_id or str(uuid4())
         run_id = str(uuid4())
-        intent = classify_intent(payload.content)
-        chain_context = self._resolve_chain_context(payload=payload, request_id=request_id, intent=intent)
+        route = resolve_route(payload.content)
+        chain_context = self._resolve_chain_context(
+            payload=payload,
+            request_id=request_id,
+            route=route,
+        )
         run_session = self._ensure_sessions(
             request_id=request_id,
             chain_request_id=chain_context.chain_request_id,
             user_id=payload.user_id,
             source=payload.source,
-            intent=intent,
+            intent=route.intent,
             content=payload.content,
+            target_agent=route.target_agent,
+            direct_mention=route.direct_mention,
             linked_user_session_id=chain_context.linked_user_session_id,
             parent_task_id=chain_context.parent_task_id,
         )
-        if intent == "general":
-            usage, message, task_id = self._handle_general(payload, request_id, run_id)
-        elif intent == "stats_query":
+        if route.intent == "stats_query":
             usage, message, task_id = self._handle_stats_query(payload)
         else:
-            usage, message, task_id = self._handle_sleep_coding(payload, chain_context.chain_request_id)
+            usage, message, task_id = self._handle_route(
+                route=route,
+                payload=payload,
+                request_id=request_id,
+                run_id=run_id,
+                chain_request_id=chain_context.chain_request_id,
+            )
         recorded = self.ledger.record_request(
             request_id=request_id,
             run_id=run_id,
             user_id=payload.user_id,
             source=payload.source,
-            intent=intent,
+            intent=route.intent,
             content=payload.content,
             usage=usage,
         )
         return GatewayMessageResponse(
             request_id=request_id,
             chain_request_id=chain_context.chain_request_id,
-            intent=intent,
+            intent=route.intent,
             message=message,
             token_usage=recorded,
             task_id=task_id,
@@ -93,6 +103,8 @@ class GatewayControlPlaneService:
         source: str,
         intent: str,
         content: str,
+        target_agent: str,
+        direct_mention: bool,
         linked_user_session_id: str | None = None,
         parent_task_id: str | None = None,
     ):
@@ -102,6 +114,7 @@ class GatewayControlPlaneService:
             user_id=user_id,
             source=source,
         )
+        self.sessions.set_active_agent(user_session.session_id, target_agent)
         return self.sessions.get_or_create_session(
             session_type="run_session",
             external_ref=f"gateway:{request_id}",
@@ -111,6 +124,8 @@ class GatewayControlPlaneService:
             payload={
                 "intent": intent,
                 "content": content,
+                "target_agent": target_agent,
+                "direct_mention": direct_mention,
                 "chain_request_id": chain_request_id,
                 "linked_user_session_id": linked_user_session_id,
                 "parent_task_id": parent_task_id,
@@ -122,11 +137,11 @@ class GatewayControlPlaneService:
         *,
         payload: GatewayMessageRequest,
         request_id: str,
-        intent: str,
+        route: GatewayRoute,
     ) -> _GatewayChainContext:
         if payload.chain_request_id:
             return _GatewayChainContext(chain_request_id=payload.chain_request_id)
-        if intent != "sleep_coding":
+        if route.intent != "sleep_coding":
             return _GatewayChainContext(chain_request_id=request_id)
         issue_number = self._extract_issue_number(payload.content)
         if issue_number is None:
@@ -153,6 +168,19 @@ class GatewayControlPlaneService:
             ),
             parent_task_id=parent_task.task_id,
         )
+
+    def _handle_route(
+        self,
+        *,
+        route: GatewayRoute,
+        payload: GatewayMessageRequest,
+        request_id: str,
+        run_id: str,
+        chain_request_id: str,
+    ) -> tuple[TokenUsage, str, str | None]:
+        if route.target_agent == "ralph":
+            return self._handle_sleep_coding(payload, chain_request_id)
+        return self._handle_general(payload, request_id, run_id)
 
     def _handle_general(
         self,

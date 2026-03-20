@@ -2,9 +2,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from app.control.session_memory import SessionMemoryStore
+from app.control.context import SessionMemoryStore
 from app.core.config import Settings
-from app.services.session_registry import SessionRegistryService
+from app.control.session_registry import SessionRegistryService
 
 
 class SessionRegistryServiceTests(unittest.TestCase):
@@ -85,10 +85,29 @@ class SessionRegistryServiceTests(unittest.TestCase):
             memory.append(session.session_id, "First note")
             memory.append(session.session_id, "Second note")
             updated = service.get_session(session.session_id)
+            artifact_path = settings.project_root / "artifacts" / "memory" / "sessions" / f"{session.session_id}.md"
 
             self.assertEqual(updated.payload["short_memory_summary"], "Second note")
             self.assertEqual(updated.payload["short_memory_entries"], ["First note", "Second note"])
             self.assertEqual(memory.list(session.session_id), ["First note", "Second note"])
+            self.assertTrue(artifact_path.exists())
+            self.assertIn("Second note", artifact_path.read_text(encoding="utf-8"))
+
+    def test_set_active_agent_updates_user_facing_owner_without_creating_new_session(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings(database_url=f"sqlite:///{Path(temp_dir) / 'sessions.db'}")
+            service = SessionRegistryService(settings)
+
+            session = service.get_or_create_session(
+                session_type="user_session",
+                external_ref="manual:user-4",
+                user_id="user-4",
+                source="manual",
+            )
+            updated = service.set_active_agent(session.session_id, "ralph")
+
+            self.assertEqual(updated.session_id, session.session_id)
+            self.assertEqual(updated.payload["active_agent"], "ralph")
 
 
 if __name__ == "__main__":

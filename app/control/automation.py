@@ -2,15 +2,16 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from contextlib import closing
+from dataclasses import dataclass
 from time import sleep
 
 from app.agents.code_review_agent import ReviewService
 from app.agents.ralph import SleepCodingService
 from app.channel.delivery import DeliveryMessageBuilder
 from app.channel.notifications import ChannelNotificationService
-from app.control.review_loop import decide_review_loop_step
 from app.control.events import ControlEvent, ControlEventBus, ControlEventType
-from app.control.follow_up import FollowUpControlService
+from app.control.sleep_coding_worker import SleepCodingWorkerService
+from app.control.task_registry import TaskRegistryService
 from app.core.config import Settings, get_settings
 from app.infra.background_jobs import (
     BackgroundJobService,
@@ -26,8 +27,12 @@ from app.models.schemas import (
     SleepCodingWorkerPollResponse,
     TokenUsage,
 )
-from app.control.sleep_coding_worker import SleepCodingWorkerService
-from app.services.task_registry import TaskRegistryService
+
+
+@dataclass(frozen=True)
+class ReviewLoopDecision:
+    action: str
+    blocking_reviews: int = 0
 
 
 class AutomationService:
@@ -60,11 +65,6 @@ class AutomationService:
         self.background_jobs = background_jobs or get_background_job_service()
         self.event_bus = event_bus or ControlEventBus(self.background_jobs)
         self.max_repair_rounds = self.settings.resolved_review_max_repair_rounds
-        self.follow_up = FollowUpControlService(
-            sleep_coding=self.sleep_coding,
-            tasks=self.tasks,
-            event_bus=self.event_bus,
-        )
         self.delivery = DeliveryMessageBuilder(self.ledger)
         default_sleep_fn = (lambda seconds: None) if self.settings.app_env == "test" else sleep
         self.sleep_fn = sleep_fn or default_sleep_fn
@@ -133,11 +133,10 @@ class AutomationService:
         last_review: ReviewRun | None = None
         while True:
             blocking_reviews = self.review.count_blocking_reviews(current_task.task_id)
-            decision = decide_review_loop_step(
+            decision = self._decide_review_loop_step(
                 task_status=current_task.status,
                 review_blocking=last_review.is_blocking if last_review is not None else None,
                 blocking_reviews=blocking_reviews,
-                max_repair_rounds=self.max_repair_rounds,
             )
             if decision.action == "rerun_coding":
                 current_task = self._rerun_coding(current_task.task_id)
@@ -199,7 +198,19 @@ class AutomationService:
         )
 
     def _schedule_follow_up(self, task: SleepCodingTask) -> None:
-        self.follow_up.schedule(task)
+        if task.status not in {"changes_requested", "in_review"}:
+            return
+        scheduled = self.event_bus.publish_follow_up_requested(task.task_id)
+        if not scheduled:
+            return
+        current_task = self.sleep_coding.get_task(task.task_id)
+        if current_task.background_follow_up_status != "idle":
+            return
+        self._mark_follow_up_state(
+            task.task_id,
+            "queued",
+            payload={"task_status": task.status},
+        )
 
     def _handle_follow_up_requested(self, event: ControlEvent) -> SleepCodingTask:
         task_id = event.payload.get("task_id")
@@ -208,24 +219,142 @@ class AutomationService:
         return self._run_scheduled_follow_up(task_id)
 
     def _run_scheduled_follow_up(self, task_id: str) -> SleepCodingTask:
-        self.follow_up.mark_state(task_id, "processing")
+        self._mark_follow_up_state(task_id, "processing")
         try:
             delay_seconds = self.settings.resolved_review_follow_up_delay_seconds
             if delay_seconds > 0:
                 self.sleep_fn(delay_seconds)
             task = self.run_review_loop(task_id)
         except Exception as exc:
-            self.follow_up.mark_state(
+            self._mark_follow_up_state(
                 task_id,
                 "failed",
                 error=str(exc),
             )
             raise
-        self.follow_up.mark_state(
+        self._mark_follow_up_state(
             task_id,
             "completed",
             payload={"task_status": task.status},
         )
+        return task
+
+    def continue_gateway_workflow(
+        self,
+        *,
+        intent: str,
+        task_id: str | None,
+    ) -> dict[str, object]:
+        auto_approve_plan = self.settings.resolved_sleep_coding_worker_auto_approve_plan
+        if intent == "general":
+            poll = self.process_worker_poll_async(
+                SleepCodingWorkerPollRequest(auto_approve_plan=auto_approve_plan)
+            )
+            return {
+                "triggered": True,
+                "mode": "worker_poll",
+                "auto_approve_plan": poll.auto_approve_plan,
+                "claimed_count": poll.claimed_count,
+                "task_ids": [task.task_id for task in poll.tasks],
+            }
+        if intent == "sleep_coding" and task_id:
+            if not auto_approve_plan:
+                return {
+                    "triggered": False,
+                    "mode": "task_action",
+                    "reason": "awaiting_confirmation",
+                    "task_id": task_id,
+                }
+            task = self.handle_sleep_coding_action_async(task_id, "approve_plan")
+            return {
+                "triggered": True,
+                "mode": "task_action",
+                "action": "approve_plan",
+                "task_id": task.task_id,
+                "status": task.status,
+            }
+        return {
+            "triggered": False,
+            "mode": "noop",
+            "reason": "no_follow_up_required",
+        }
+
+    def _decide_review_loop_step(
+        self,
+        *,
+        task_status: str,
+        review_blocking: bool | None = None,
+        blocking_reviews: int = 0,
+    ) -> ReviewLoopDecision:
+        if task_status == "changes_requested":
+            if blocking_reviews >= self.max_repair_rounds:
+                return ReviewLoopDecision("stop", blocking_reviews=blocking_reviews)
+            return ReviewLoopDecision("rerun_coding", blocking_reviews=blocking_reviews)
+        if task_status == "in_review":
+            if review_blocking is None:
+                return ReviewLoopDecision("run_review", blocking_reviews=blocking_reviews)
+            if review_blocking and blocking_reviews >= self.max_repair_rounds:
+                return ReviewLoopDecision("handoff", blocking_reviews=blocking_reviews)
+            if review_blocking:
+                return ReviewLoopDecision("request_changes", blocking_reviews=blocking_reviews)
+            return ReviewLoopDecision("approve_review", blocking_reviews=blocking_reviews)
+        if task_status in {"approved", "failed", "cancelled"}:
+            return ReviewLoopDecision("deliver", blocking_reviews=blocking_reviews)
+        return ReviewLoopDecision("stop", blocking_reviews=blocking_reviews)
+
+    def _mark_follow_up_state(
+        self,
+        task_id: str,
+        state: str,
+        *,
+        error: str | None = None,
+        payload: dict[str, object] | None = None,
+    ) -> SleepCodingTask:
+        task = self.sleep_coding.set_background_follow_up_state(
+            task_id,
+            state,
+            error=error,
+            payload=payload,
+        )
+        if not task.control_task_id:
+            return task
+
+        control_payload = {
+            "background_follow_up_status": state,
+            "background_follow_up_error": error,
+            **(payload or {}),
+        }
+        domain_event_type = {
+            "queued": ControlEventType.FOLLOW_UP_QUEUED,
+            "processing": ControlEventType.FOLLOW_UP_PROCESSING,
+            "completed": ControlEventType.FOLLOW_UP_COMPLETED,
+            "failed": ControlEventType.FOLLOW_UP_FAILED,
+        }.get(state, f"follow_up.{state}")
+        self.tasks.update_task(
+            task.control_task_id,
+            payload_patch=control_payload,
+        )
+        self.tasks.append_domain_event(
+            task.control_task_id,
+            domain_event_type,
+            {"domain_task_id": task_id, **control_payload},
+        )
+        control_task = self.tasks.get_task(task.control_task_id)
+        if control_task.parent_task_id:
+            self.tasks.append_domain_event(
+                control_task.parent_task_id,
+                {
+                    "queued": f"child.{ControlEventType.FOLLOW_UP_QUEUED}",
+                    "processing": f"child.{ControlEventType.FOLLOW_UP_PROCESSING}",
+                    "completed": f"child.{ControlEventType.FOLLOW_UP_COMPLETED}",
+                    "failed": f"child.{ControlEventType.FOLLOW_UP_FAILED}",
+                }.get(state, f"child.follow_up.{state}"),
+                {
+                    "child_control_task_id": task.control_task_id,
+                    "domain_task_id": task_id,
+                    **control_payload,
+                },
+            )
         return task
 
     def _publish_review_feedback(

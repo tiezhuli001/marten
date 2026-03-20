@@ -36,8 +36,8 @@ from app.models.schemas import (
 )
 from app.runtime.agent_runtime import AgentDescriptor, AgentRuntime
 from app.runtime.mcp import MCPClient, build_default_mcp_client
-from app.services.session_registry import SessionRegistryService
-from app.services.task_registry import TaskRegistryService
+from app.control.session_registry import SessionRegistryService
+from app.control.task_registry import TaskRegistryService
 
 class SleepCodingService:
     def __init__(

@@ -395,7 +395,6 @@ class RuntimeComponentTests(unittest.TestCase):
             (workspace / "skills" / "issue-writer").mkdir(parents=True)
             (workspace / "AGENTS.md").write_text("Main agent rules.", encoding="utf-8")
             (workspace / "TOOLS.md").write_text("Use MCP first.", encoding="utf-8")
-            (workspace / "SOUL.md").write_text("Stay sharp.", encoding="utf-8")
             (workspace / "skills" / "issue-writer" / "SKILL.md").write_text(
                 "---\nname: issue-writer\ndescription: Write issues\n---\n# Instructions\nUse this skill.\n",
                 encoding="utf-8",
@@ -435,7 +434,6 @@ class RuntimeComponentTests(unittest.TestCase):
             self.assertIn("Use this skill.", system_prompt)
             self.assertIn("github.create_issue", system_prompt)
             self.assertIn("Main agent rules.", system_prompt)
-            self.assertIn("Stay sharp.", system_prompt)
             self.assertIn("Memory Policy", system_prompt)
             self.assertIn("Execution Policy", system_prompt)
 

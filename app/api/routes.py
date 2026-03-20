@@ -9,7 +9,11 @@ from app.agents.code_review_agent import ReviewService
 from app.agents.main_agent import MainAgentService
 from app.agents.ralph import SleepCodingService
 from app.channel.feishu import FeishuWebhookService
+from app.control.automation import AutomationService
 from app.control.gateway import GatewayControlPlaneService
+from app.control.session_registry import SessionRegistryService
+from app.control.task_registry import TaskRegistryService
+from app.control.sleep_coding_worker import SleepCodingWorkerService
 from app.core.config import get_settings
 from app.infra.diagnostics import IntegrationDiagnosticsService
 from app.ledger.service import TokenLedgerService
@@ -30,9 +34,6 @@ from app.models.schemas import (
     SleepCodingWorkerPollRequest,
     SleepCodingWorkerPollResponse,
 )
-from app.services.automation import AutomationService
-from app.control.sleep_coding_worker import SleepCodingWorkerService
-from app.services.task_registry import TaskRegistryService
 
 router = APIRouter()
 
@@ -104,8 +105,6 @@ def get_task_registry_service() -> TaskRegistryService:
 
 @lru_cache(maxsize=1)
 def get_session_registry_service():
-    from app.services.session_registry import SessionRegistryService
-
     return SessionRegistryService(get_settings())
 
 

@@ -50,7 +50,7 @@ class DeliveryMessageBuilder:
             f"来源: Issue #{task.issue_number}",
             f"仓库: {task.repo}",
             f"分支: {task.head_branch}",
-            f"{self._pull_request_label(task.pull_request.html_url if task.pull_request else None)}: {task.pull_request.html_url if task.pull_request else 'n/a'}",
+            f"Pull Request: {task.pull_request.html_url if task.pull_request else 'n/a'}",
             f"Code Review: {'approved' if review and not review.is_blocking else 'changes_requested' if review else 'n/a'}",
             f"Issue: {task.issue.html_url or 'n/a'}",
             f"Review: {review.comment_url or review.artifact_path or 'n/a'}" if review else "Review: n/a",
@@ -213,8 +213,3 @@ class DeliveryMessageBuilder:
         if any(keyword in normalized for keyword in ("删除", "remove", "delete")):
             return "删除"
         return "修改"
-
-    def _pull_request_label(self, url: str | None) -> str:
-        if isinstance(url, str) and "/-/merge_requests/" in url:
-            return "Merge Request"
-        return "Pull Request"

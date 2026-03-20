@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 
 from app.agents.ralph import SleepCodingService
 from app.control.events import ControlEventType
+from app.control.task_registry import TaskRegistryService
 from app.core.config import Settings, get_settings
 from app.control.sleep_coding_worker_store import SleepCodingWorkerStore
 from app.models.schemas import (
@@ -18,7 +19,6 @@ from app.models.schemas import (
     WorkerDiscoveredIssue,
 )
 from app.runtime.mcp import MCPClient, MCPToolCall, build_default_mcp_client
-from app.services.task_registry import TaskRegistryService
 
 
 class SleepCodingWorkerService:

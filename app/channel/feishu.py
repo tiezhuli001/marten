@@ -6,11 +6,10 @@ import json
 from dataclasses import dataclass
 from typing import Mapping
 
+from app.control.automation import AutomationService
 from app.control.gateway import GatewayControlPlaneService
 from app.core.config import Settings
-from app.models.schemas import SleepCodingWorkerPollRequest
 from app.models.schemas import GatewayMessageRequest, GatewayMessageResponse
-from app.services.automation import AutomationService
 
 
 @dataclass(frozen=True)
@@ -58,7 +57,10 @@ class FeishuWebhookService:
                 source="feishu",
             )
         )
-        follow_up = self._continue_workflow(workflow_response)
+        follow_up = self.automation.continue_gateway_workflow(
+            intent=workflow_response.intent,
+            task_id=workflow_response.task_id,
+        )
         return self._build_ack_response(event_type, message, workflow_response, follow_up)
 
     def _validate_request(
@@ -176,47 +178,4 @@ class FeishuWebhookService:
                 "task_id": workflow_response.task_id,
             },
             "automation_follow_up": follow_up,
-        }
-
-    def _continue_workflow(
-        self,
-        workflow_response: GatewayMessageResponse,
-    ) -> dict[str, object]:
-        auto_approve_plan = self.settings.resolved_sleep_coding_worker_auto_approve_plan
-        if workflow_response.intent == "general":
-            poll = self.automation.process_worker_poll_async(
-                SleepCodingWorkerPollRequest(
-                    auto_approve_plan=auto_approve_plan,
-                )
-            )
-            return {
-                "triggered": True,
-                "mode": "worker_poll",
-                "auto_approve_plan": poll.auto_approve_plan,
-                "claimed_count": poll.claimed_count,
-                "task_ids": [task.task_id for task in poll.tasks],
-            }
-        if workflow_response.intent == "sleep_coding" and workflow_response.task_id:
-            if not auto_approve_plan:
-                return {
-                    "triggered": False,
-                    "mode": "task_action",
-                    "reason": "awaiting_confirmation",
-                    "task_id": workflow_response.task_id,
-                }
-            task = self.automation.handle_sleep_coding_action_async(
-                workflow_response.task_id,
-                "approve_plan",
-            )
-            return {
-                "triggered": True,
-                "mode": "task_action",
-                "action": "approve_plan",
-                "task_id": task.task_id,
-                "status": task.status,
-            }
-        return {
-            "triggered": False,
-            "mode": "noop",
-            "reason": "no_follow_up_required",
         }

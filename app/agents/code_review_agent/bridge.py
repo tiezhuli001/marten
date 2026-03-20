@@ -3,7 +3,6 @@ from __future__ import annotations
 from app.models.github_results import GitHubCommentResult
 from app.models.schemas import ReviewRun, ReviewSource
 from app.runtime.mcp import MCPClient, MCPToolCall
-from app.agents.code_review_agent.gitlab import GitLabService
 
 
 class ReviewCommentBridge:
@@ -11,25 +10,15 @@ class ReviewCommentBridge:
         self,
         github_server: str,
         mcp_client: MCPClient,
-        gitlab: GitLabService,
         mcp_config_name: str,
     ) -> None:
         self.github_server = github_server
         self.mcp_client = mcp_client
-        self.gitlab = gitlab
         self.mcp_config_name = mcp_config_name
 
     def write_comment(self, source: ReviewSource, content: str) -> GitHubCommentResult:
-        if source.source_type == "github_pr" and source.repo and source.pr_number:
-            return self.write_pr_review(source, event="COMMENT", body=content)
         if source.source_type == "sleep_coding_task" and source.repo and source.pr_number:
             return self.write_pr_review(source, event="COMMENT", body=content)
-        if source.source_type == "gitlab_mr" and source.project_path and source.mr_number:
-            return self.gitlab.create_merge_request_comment(
-                project_path=source.project_path,
-                mr_number=source.mr_number,
-                body=content,
-            )
         return GitHubCommentResult(html_url=source.url, is_dry_run=True)
 
     def write_pr_review(

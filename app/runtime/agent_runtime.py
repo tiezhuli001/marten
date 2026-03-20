@@ -118,7 +118,7 @@ class AgentRuntime:
 
     def _load_workspace_instructions(self, workspace: Path) -> str:
         sections: list[str] = []
-        for filename in ("AGENTS.md", "TOOLS.md", "SOUL.md"):
+        for filename in ("AGENTS.md", "TOOLS.md"):
             path = workspace / filename
             if path.exists():
                 sections.append(f"## {filename}\n{path.read_text(encoding='utf-8').strip()}")

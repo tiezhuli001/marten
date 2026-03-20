@@ -355,8 +355,8 @@ class ReviewSource(BaseModel):
     task_id: str | None = None
 
 
-class ReviewRunRequest(BaseModel):
-    source: ReviewSource
+class ReviewStartRequest(BaseModel):
+    task_id: str
 
 
 class ReviewActionRequest(BaseModel):

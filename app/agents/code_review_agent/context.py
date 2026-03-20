@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from app.control.context import ContextAssemblyService
-from app.models.schemas import ReviewSource
 from app.agents.ralph import SleepCodingService
+from app.agents.code_review_agent.target import ReviewTarget
 
 
 class ReviewContextBuilder:
@@ -10,27 +10,27 @@ class ReviewContextBuilder:
         self,
         context: ContextAssemblyService,
         sleep_coding: SleepCodingService,
-        source_support: object,
+        workspace_support: object,
     ) -> None:
         self.context = context
         self.sleep_coding = sleep_coding
-        self.source_support = source_support
+        self.workspace_support = workspace_support
 
     def build_context(
         self,
-        source: ReviewSource,
+        target: ReviewTarget,
         run_session_id: str | None = None,
     ) -> str:
-        if source.source_type != "sleep_coding_task" or not source.task_id:
+        if not target.task_id:
             raise ValueError("MVP review only supports sleep_coding_task sources")
-        if source.local_path:
-            base_context = self.source_support.build_local_code_context(source)
+        if target.workspace_path:
+            base_context = self.workspace_support.build_workspace_context(target)
             return self.context.build_agent_input(
                 session_id=run_session_id,
                 current_input=base_context,
                 heading="Current Review Context",
             )
-        task = self.sleep_coding.get_task(source.task_id)
+        task = self.sleep_coding.get_task(target.task_id)
         latest_commit_message = "n/a"
         file_changes: list[str] = []
         for event in reversed(task.events):

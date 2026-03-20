@@ -21,7 +21,6 @@ from app.models.schemas import (
     GitHubIssueResult,
     MainAgentIntakeRequest,
     ReviewFinding,
-    ReviewRunRequest,
     ReviewSkillOutput,
     ReviewSource,
     SleepCodingIssue,
@@ -333,10 +332,10 @@ class FakeValidationRunner:
 
 
 class FakeReviewSkillService:
-    def run(self, source: ReviewSource, context: str) -> ReviewSkillRunResult:
+    def run(self, source, context: str) -> ReviewSkillRunResult:  # noqa: ANN001
         return ReviewSkillRunResult(
             output=ReviewSkillOutput(
-                summary=f"Review for {source.source_type}",
+                summary="Review for sleep_coding_task",
                 findings=[
                     ReviewFinding(
                         severity="P2",
@@ -349,7 +348,7 @@ class FakeReviewSkillService:
                 repair_strategy=["No repair loop required."],
                 blocking=False,
                 run_mode="dry_run",
-                review_markdown=f"## Review\n\nSource: {source.source_type}\n\n{context}",
+                review_markdown=f"## Review\n\nSource: sleep_coding_task\n\n{context}",
             ),
             token_usage=TokenUsage(
                 prompt_tokens=12,
@@ -740,6 +739,20 @@ class MVPE2ETests(unittest.TestCase):
             self.assertIn("## Ralph Review Decision", github.pr_comments[-1][1])
             self.assertIn("- Decision: Approved", github.pr_comments[-1][1])
             self.assertIn("### Token Usage", github.pr_comments[-1][1])
+
+    def test_direct_write_endpoints_are_removed_from_public_api(self) -> None:
+        with TestClient(app) as client:
+            self.assertEqual(client.post("/tasks/sleep-coding", json={"issue_number": 1}).status_code, 404)
+            self.assertEqual(
+                client.post("/tasks/sleep-coding/task-1/actions", json={"action": "approve_plan"}).status_code,
+                404,
+            )
+            self.assertEqual(client.post("/reviews", json={"task_id": "task-1"}).status_code, 404)
+            self.assertEqual(
+                client.post("/reviews/review-1/actions", json={"action": "approve_review"}).status_code,
+                404,
+            )
+            self.assertEqual(client.post("/tasks/sleep-coding/task-1/review").status_code, 404)
 
     def test_feishu_inbound_to_final_delivery_runs_full_mvp_chain(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

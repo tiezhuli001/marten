@@ -242,11 +242,10 @@ python -m unittest tests.test_live_chain -v
 - `POST /main-agent/intake`
 - `POST /workers/sleep-coding/poll`
 - `GET /workers/sleep-coding/claims`
-- `POST /tasks/sleep-coding`
-- `POST /tasks/sleep-coding/{task_id}/actions`
-- `POST /tasks/sleep-coding/{task_id}/review`
 - `GET /control/tasks/{task_id}`
 - `GET /control/tasks/{task_id}/events`
+- `GET /tasks/sleep-coding/{task_id}`
+- `GET /reviews/{review_id}`
 
 ## Testing
 

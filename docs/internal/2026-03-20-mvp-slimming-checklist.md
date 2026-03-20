@@ -190,14 +190,17 @@ app/
 - `sleep_coding_tasks` 只保留 Ralph 执行 artifact。
 - `review_runs` 只保留 review artifact 和轮次记录。
 
-### 3. API 旁路必须继续减少
+### 3. API 旁路继续禁止回流
 
-需要评估并逐步降级这些 direct-task 入口：
+以下 direct-task / direct-review 写入口已经下线，不要重新引入：
 
-- [POST /tasks/sleep-coding](/Users/litiezhu/workspace/github/marten/app/api/routes.py#L188)
-- [POST /tasks/sleep-coding/{task_id}/actions](/Users/litiezhu/workspace/github/marten/app/api/routes.py#L236)
+- `POST /tasks/sleep-coding`
+- `POST /tasks/sleep-coding/{task_id}/actions`
+- `POST /reviews`
+- `POST /reviews/{review_id}/actions`
+- `POST /tasks/sleep-coding/{task_id}/review`
 
-这些接口虽然便于调试，但会稀释 handoff 已明确的单入口主链。
+当前公开 API 只保留读接口、`gateway` 入口和 worker poll 入口，避免稀释 handoff 已明确的单入口主链。
 
 ## 五、每批改动后的最低验证
 

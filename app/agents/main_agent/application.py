@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import json
 import re
+from typing import Any
+from time import sleep
+from collections.abc import Callable
 from uuid import uuid4
+
+from pydantic import ValidationError
 
 from app.control.context import ContextAssemblyService
 from app.control.events import ControlEventType
@@ -36,6 +41,7 @@ class MainAgentService:
         tasks: TaskRegistryService | None = None,
         sessions: SessionRegistryService | None = None,
         ledger: TokenLedgerService | None = None,
+        sleep_fn: Callable[[float], None] | None = None,
     ) -> None:
         self.settings = settings
         self.channel = channel or ChannelNotificationService(settings)
@@ -51,6 +57,7 @@ class MainAgentService:
         self.sessions = sessions or SessionRegistryService(settings)
         self.context = ContextAssemblyService(self.sessions)
         self.ledger = ledger or TokenLedgerService(settings)
+        self.sleep_fn = sleep_fn or ((lambda seconds: None) if settings.app_env == "test" else sleep)
 
     def intake(self, payload: MainAgentIntakeRequest) -> MainAgentIntakeResponse:
         repo = payload.repo or self.settings.resolved_github_repository
@@ -188,20 +195,15 @@ class MainAgentService:
         prompt = self.context.build_main_agent_input(user_session_id, payload.content)
         if self.settings.has_runtime_llm_credentials:
             try:
-                response = self.agent_runtime.generate_structured_output(
-                    self._build_agent_descriptor(),
-                    user_prompt=prompt,
-                    output_contract=(
-                        "Return strict JSON with keys `title`, `body`, and `labels`. "
-                        "The labels array must include `agent:ralph` and `workflow:sleep-coding`."
-                    )
+                response = self._generate_issue_draft_with_retry(
+                    prompt,
                 )
                 try:
                     parsed = self._parse_issue_draft_output(response.output_text)
-                except json.JSONDecodeError:
+                    return GitHubIssueDraft.model_validate(parsed), response.usage
+                except (json.JSONDecodeError, ValidationError):
                     draft = self._build_heuristic_issue_draft(payload)
                     return draft, response.usage
-                return GitHubIssueDraft.model_validate(parsed), response.usage
             except Exception:
                 if self.settings.app_env != "test":
                     raise
@@ -214,6 +216,30 @@ class MainAgentService:
             existing_usage=TokenUsage(),
         )
         return draft, usage.model_copy(update={"message_count": 2})
+
+    def _generate_issue_draft_with_retry(self, prompt: str):
+        max_attempts = self.settings.resolved_llm_request_max_attempts
+        base_delay = self.settings.resolved_llm_request_retry_base_delay_seconds
+        last_error: Exception | None = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                return self.agent_runtime.generate_structured_output(
+                    self._build_agent_descriptor(),
+                    user_prompt=prompt,
+                    output_contract=(
+                        "Return strict JSON with keys `title`, `body`, and `labels`. "
+                        "The labels array must include `agent:ralph` and `workflow:sleep-coding`."
+                    ),
+                )
+            except Exception as exc:
+                last_error = exc
+                if attempt >= max_attempts:
+                    break
+                delay_seconds = base_delay * (2 ** (attempt - 1))
+                if delay_seconds > 0:
+                    self.sleep_fn(delay_seconds)
+        assert last_error is not None
+        raise last_error
 
     def _parse_issue_draft_output(self, output_text: str) -> dict[str, Any]:
         parsed = parse_structured_object(output_text)

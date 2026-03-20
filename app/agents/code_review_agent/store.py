@@ -7,6 +7,7 @@ from contextlib import closing
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from app.agents.code_review_agent.target import ReviewTarget
 from app.infra.sqlite_utils import connect_sqlite, ensure_writable_dir, ensure_writable_parent
 from app.models.schemas import ReviewFinding, ReviewRun, ReviewSource, TokenUsage
 
@@ -128,16 +129,16 @@ class ReviewRunStore:
                 )
             connection.commit()
 
-    def write_artifact(self, review_id: str, source: ReviewSource, content: str) -> Path:
-        filename = self.artifact_name(review_id, source)
+    def write_artifact(self, review_id: str, target: ReviewTarget, content: str) -> Path:
+        filename = self.artifact_name(review_id, target)
         artifact_path = self.review_runs_dir / filename
         artifact_path.write_text(content, encoding="utf-8")
         return artifact_path
 
-    def artifact_name(self, review_id: str, source: ReviewSource) -> str:
-        if source.source_type == "sleep_coding_task" and source.task_id:
-            return f"task-{source.task_id}-review.md"
-        return f"local-review-{review_id}.md"
+    def artifact_name(self, review_id: str, target: ReviewTarget) -> str:
+        if target.task_id:
+            return f"task-{target.task_id}-review.md"
+        return f"review-{review_id}.md"
 
     def get_review(self, review_id: str) -> ReviewRun:
         with closing(self.connect()) as connection:
@@ -214,15 +215,15 @@ class ReviewRunStore:
         )
 
 
-class ReviewSourceSupport:
+class ReviewWorkspaceSupport:
     def __init__(self, settings: Settings, context: ContextAssemblyService) -> None:
         self.settings = settings
         self.context = context
 
-    def build_local_code_context(self, source: ReviewSource) -> str:
-        local_path = Path(source.local_path or self.settings.project_root).expanduser()
-        base_branch = source.base_branch or "main"
-        head_branch = source.head_branch
+    def build_workspace_context(self, target: ReviewTarget) -> str:
+        local_path = Path(target.workspace_path or self.settings.project_root).expanduser()
+        base_branch = target.base_branch or "main"
+        head_branch = target.head_branch
         if not (local_path / ".git").exists():
             return (
                 f"Local Path: {local_path}\n"

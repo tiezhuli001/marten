@@ -6,9 +6,12 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from time import sleep
+from collections.abc import Callable
 
 from app.core.config import Settings
-from app.models.schemas import ReviewFinding, ReviewSkillOutput, ReviewSource, TokenUsage
+from app.models.schemas import ReviewFinding, ReviewSkillOutput, TokenUsage
+from app.agents.code_review_agent.target import ReviewTarget
 from app.runtime.agent_runtime import AgentDescriptor, AgentRuntime
 from app.runtime.mcp import MCPClient, build_default_mcp_client
 from app.runtime.pricing import PricingRegistry
@@ -35,6 +38,7 @@ class ReviewSkillService:
         settings: Settings,
         agent_runtime: AgentRuntime | None = None,
         mcp_client: MCPClient | None = None,
+        sleep_fn: Callable[[float], None] | None = None,
     ) -> None:
         self.settings = settings
         self.skill_name = settings.resolved_review_skill_name
@@ -47,18 +51,19 @@ class ReviewSkillService:
         )
         self.token_counter = TokenCountingService()
         self.pricing = PricingRegistry(settings)
+        self.sleep_fn = sleep_fn or ((lambda seconds: None) if settings.app_env == "test" else sleep)
 
-    def run(self, source: ReviewSource, context: str) -> ReviewSkillRunResult:
-        command = self._resolve_command(source)
+    def run(self, target: ReviewTarget, context: str) -> ReviewSkillRunResult:
+        command = self._resolve_command(target)
         if command is not None:
-            return self._run_with_command(command, source, context)
+            return self._run_with_command(command, target, context)
         if self.settings.has_runtime_llm_credentials:
             try:
-                return self._run_with_agent_runtime(source, context)
+                return self._run_with_agent_runtime(target, context)
             except Exception as exc:
                 return ReviewSkillRunResult(
                     output=self._build_agent_runtime_fallback_output(
-                        source,
+                        target,
                         context,
                         raw_output="",
                         error=str(exc),
@@ -68,14 +73,13 @@ class ReviewSkillService:
                         output_text=str(exc),
                     ),
                 )
-        return self._build_dry_run_output(source, context)
+        return self._build_dry_run_output(target, context)
 
-    def _run_with_agent_runtime(self, source: ReviewSource, context: str) -> ReviewSkillRunResult:
-        response = self.agent_runtime.generate_structured_output(
-            self._build_agent_descriptor(),
+    def _run_with_agent_runtime(self, target: ReviewTarget, context: str) -> ReviewSkillRunResult:
+        response = self._generate_with_retry(
             user_prompt=(
                 "Review the following code change context and return structured findings.\n\n"
-                f"Source type: {source.source_type}\n\n"
+                "Source type: sleep_coding_task\n\n"
                 f"{context}"
             ),
             output_contract=(
@@ -90,7 +94,7 @@ class ReviewSkillService:
             output = ReviewSkillOutput.model_validate(parse_structured_object(response.output_text))
         except Exception as exc:
             output = self._build_agent_runtime_fallback_output(
-                source,
+                target,
                 context,
                 raw_output=response.output_text,
                 error=str(exc),
@@ -108,11 +112,11 @@ class ReviewSkillService:
     def _run_with_command(
         self,
         command: list[str],
-        source: ReviewSource,
+        target: ReviewTarget,
         context: str,
     ) -> ReviewSkillRunResult:
-        prompt = self._build_prompt(source)
-        review_dir = self._resolve_dir(source)
+        prompt = self._build_prompt(target)
+        review_dir = self._resolve_dir(target)
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".md", delete=False) as handle:
             handle.write(context)
             context_path = Path(handle.name)
@@ -143,7 +147,7 @@ class ReviewSkillService:
 
     def _build_agent_runtime_fallback_output(
         self,
-        source: ReviewSource,
+        target: ReviewTarget,
         context: str,
         *,
         raw_output: str,
@@ -154,7 +158,7 @@ class ReviewSkillService:
         review_markdown = (
             "## Code Review Agent\n\n"
             "The configured review runtime returned output that did not match the review contract.\n\n"
-            f"Source Type: `{source.source_type}`\n\n"
+            "Source Type: `sleep_coding_task`\n\n"
             f"Parse Error: `{error}`\n\n"
             "Raw Output Excerpt:\n"
             f"```text\n{excerpt}\n```\n\n"
@@ -186,12 +190,12 @@ class ReviewSkillService:
             }
         )
 
-    def _build_dry_run_output(self, source: ReviewSource, context: str) -> ReviewSkillRunResult:
-        summary = f"Dry-run review generated for {source.source_type}."
+    def _build_dry_run_output(self, target: ReviewTarget, context: str) -> ReviewSkillRunResult:
+        summary = "Dry-run review generated for sleep_coding_task."
         review_markdown = (
             "## Code Review Agent\n\n"
             "Dry-run review executed because no review skill runtime is configured.\n\n"
-            f"Source Type: `{source.source_type}`\n\n"
+            "Source Type: `sleep_coding_task`\n\n"
             f"{context}\n"
         )
         output = ReviewSkillOutput(
@@ -213,22 +217,48 @@ class ReviewSkillService:
     def _build_agent_descriptor(self) -> AgentDescriptor:
         return AgentDescriptor.from_spec(self.settings.resolve_agent_spec("code-review-agent"))
 
-    def _resolve_command(self, source: ReviewSource) -> list[str] | None:
+    def _resolve_command(self, target: ReviewTarget) -> list[str] | None:
         if self.command:
             return shlex.split(self.command)
         return None
 
-    def _resolve_dir(self, source: ReviewSource) -> Path:
-        if source.local_path:
-            return Path(source.local_path).expanduser()
+    def _resolve_dir(self, target: ReviewTarget) -> Path:
+        if target.workspace_path:
+            return Path(target.workspace_path).expanduser()
         return self.project_root
 
-    def _build_prompt(self, source: ReviewSource) -> str:
+    def _build_prompt(self, target: ReviewTarget) -> str:
         return (
             f"Use the {self.skill_name} skill to review this source. "
-            f"Source type: {source.source_type}. "
+            "Source type: sleep_coding_task. "
             "Return strict JSON with summary, findings, repair_strategy, blocking, and review_markdown."
         )
+
+    def _generate_with_retry(
+        self,
+        *,
+        user_prompt: str,
+        output_contract: str,
+    ):
+        max_attempts = self.settings.resolved_llm_request_max_attempts
+        base_delay = self.settings.resolved_llm_request_retry_base_delay_seconds
+        last_error: Exception | None = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                return self.agent_runtime.generate_structured_output(
+                    self._build_agent_descriptor(),
+                    user_prompt=user_prompt,
+                    output_contract=output_contract,
+                )
+            except Exception as exc:
+                last_error = exc
+                if attempt >= max_attempts:
+                    break
+                delay_seconds = base_delay * (2 ** (attempt - 1))
+                if delay_seconds > 0:
+                    self.sleep_fn(delay_seconds)
+        assert last_error is not None
+        raise last_error
 
     def _estimate_usage(
         self,

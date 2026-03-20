@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from app.models.github_results import GitHubCommentResult
-from app.models.schemas import ReviewRun, ReviewSource
+from app.models.schemas import ReviewRun
+from app.agents.code_review_agent.target import ReviewTarget
 from app.runtime.mcp import MCPClient, MCPToolCall
 
 
@@ -16,14 +17,14 @@ class ReviewCommentBridge:
         self.mcp_client = mcp_client
         self.mcp_config_name = mcp_config_name
 
-    def write_comment(self, source: ReviewSource, content: str) -> GitHubCommentResult:
-        if source.source_type == "sleep_coding_task" and source.repo and source.pr_number:
-            return self.write_pr_review(source, event="COMMENT", body=content)
-        return GitHubCommentResult(html_url=source.url, is_dry_run=True)
+    def write_comment(self, target: ReviewTarget, content: str) -> GitHubCommentResult:
+        if target.repo and target.pr_number:
+            return self.write_pr_review(target, event="COMMENT", body=content)
+        return GitHubCommentResult(html_url=target.url, is_dry_run=True)
 
     def write_pr_review(
         self,
-        source: ReviewSource,
+        target: ReviewTarget,
         *,
         event: str,
         body: str,
@@ -34,8 +35,8 @@ class ReviewCommentBridge:
                 server=server,
                 tool="pull_request_review_write",
                 arguments={
-                    "repo": source.repo,
-                    "pr_number": source.pr_number,
+                    "repo": target.repo,
+                    "pr_number": target.pr_number,
                     "method": "create",
                     "event": event,
                     "body": body,
@@ -44,7 +45,7 @@ class ReviewCommentBridge:
         )
         payload = self.coerce_mapping(result.content)
         return GitHubCommentResult(
-            html_url=self.coerce_html_url(payload) or source.url,
+            html_url=self.coerce_html_url(payload) or target.url,
             is_dry_run=False,
         )
 

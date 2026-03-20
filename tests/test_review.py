@@ -11,7 +11,7 @@ from app.models.github_results import GitHubCommentResult
 from app.models.schemas import (
     ReviewActionRequest,
     ReviewFinding,
-    ReviewRunRequest,
+    ReviewStartRequest,
     ReviewSkillOutput,
     ReviewSource,
     SleepCodingIssue,
@@ -187,7 +187,7 @@ class FakeValidationRunner:
 
 
 class FakeReviewSkillService:
-    def run(self, source: ReviewSource, context: str) -> ReviewSkillRunResult:
+    def run(self, source, context: str) -> ReviewSkillRunResult:  # noqa: ANN001
         return ReviewSkillRunResult(
             output=ReviewSkillOutput(
                 summary="Review for sleep coding task",
@@ -203,7 +203,7 @@ class FakeReviewSkillService:
                 repair_strategy=["Add targeted regression coverage."],
                 blocking=False,
                 run_mode="dry_run",
-                review_markdown=f"## Code Review Agent\n\nSource: {source.source_type}\n\nContext:\n{context}",
+                review_markdown="## Code Review Agent\n\nSource: sleep_coding_task\n\nContext:\n" + context,
             ),
             token_usage=TokenUsage(
                 prompt_tokens=21,
@@ -216,7 +216,7 @@ class FakeReviewSkillService:
 
 
 class FakeBlockingReviewSkillService:
-    def run(self, source: ReviewSource, context: str) -> ReviewSkillRunResult:
+    def run(self, source, context: str) -> ReviewSkillRunResult:  # noqa: ANN001
         return ReviewSkillRunResult(
             output=ReviewSkillOutput(
                 summary="Blocking review",
@@ -250,6 +250,36 @@ class FailingAgentRuntime:
 
     def generate_structured_output(self, agent, **kwargs):
         raise RuntimeError("LLM provider is unreachable")
+
+
+class FlakyAgentRuntime:
+    def __init__(self, failures: int, output_text: str) -> None:
+        self.remaining_failures = failures
+        self.output_text = output_text
+        self.mcp = MCPClient()
+        self.calls = 0
+
+    def generate_structured_output(self, agent, **kwargs):
+        self.calls += 1
+        if self.remaining_failures > 0:
+            self.remaining_failures -= 1
+            raise RuntimeError("temporary review runtime failure")
+        return type(
+            "LLMResponseStub",
+            (),
+            {
+                "output_text": self.output_text,
+                "usage": TokenUsage(
+                    prompt_tokens=22,
+                    completion_tokens=8,
+                    total_tokens=30,
+                    provider="openai",
+                    model_name="gpt-4.1-mini",
+                    cost_usd=0.001,
+                    step_name="code_review",
+                ),
+            },
+        )()
 
 
 class MalformedAgentRuntime:
@@ -457,15 +487,8 @@ class ReviewServiceTests(unittest.TestCase):
                 mcp_client=mcp_client,
             )
 
-            with self.assertRaisesRegex(ValueError, "sleep_coding_task"):
-                review_service.start_review(
-                    ReviewRunRequest(
-                        source=ReviewSource(
-                            source_type="sleep_coding_task",
-                            local_path=str(root),
-                        )
-                    )
-                )
+            with self.assertRaisesRegex(ValueError, "task_id"):
+                review_service.start_review(ReviewStartRequest(task_id=""))
 
     def test_command_output_json_is_parsed_into_structured_findings(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -510,6 +533,35 @@ class ReviewServiceTests(unittest.TestCase):
             self.assertEqual(result.output.run_mode, "real_run")
             self.assertFalse(result.output.blocking)
             self.assertIn("non-contract output", result.output.summary)
+
+    def test_review_skill_retries_runtime_failures_before_succeeding(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = build_settings(root / "review.db", root / "review-runs").model_copy(
+                update={"openai_api_key": "test-key", "llm_request_max_attempts": 3}
+            )
+            runtime = FlakyAgentRuntime(
+                failures=2,
+                output_text='{"summary":"Recovered review","findings":[],"repair_strategy":[],"blocking":false,"review_markdown":"## Review"}',
+            )
+            skill = ReviewSkillService(
+                settings,
+                agent_runtime=runtime,
+                mcp_client=MCPClient(),
+            )
+
+            result = skill.run(
+                type(
+                    "ReviewTargetStub",
+                    (),
+                    {"task_id": "task-1", "workspace_path": None},
+                )(),
+                "diff context",
+            )
+
+            self.assertEqual(runtime.calls, 3)
+            self.assertEqual(result.output.summary, "Recovered review")
+            self.assertEqual(result.output.run_mode, "real_run")
 
 
 if __name__ == "__main__":

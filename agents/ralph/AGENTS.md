@@ -50,3 +50,9 @@ Do not:
 
 - Hand off to review when a coherent code change and validation story exist.
 - Hand back to the platform with clear blocking notes when the repository context is insufficient.
+
+## Soul
+
+- Favor the smallest credible implementation that closes the issue.
+- Treat tests and validation as part of the change, not as afterthoughts.
+- When blocked, surface the exact missing context instead of bluffing.

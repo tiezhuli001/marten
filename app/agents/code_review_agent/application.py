@@ -3,15 +3,11 @@ from __future__ import annotations
 import json
 import sqlite3
 from contextlib import closing
+from pathlib import Path
 from uuid import uuid4
 
 from app.agents.code_review_agent.bridge import ReviewCommentBridge
 from app.agents.code_review_agent.context import ReviewContextBuilder
-from app.agents.code_review_agent.gitlab import GitLabService
-from app.agents.code_review_agent.materializer import (
-    ReviewMaterializationError,
-    ReviewSourceMaterializer,
-)
 from app.agents.code_review_agent.skill import (
     ReviewSkillRunResult,
     ReviewSkillService,
@@ -20,18 +16,17 @@ from app.agents.code_review_agent.skill import (
 from app.agents.code_review_agent.store import ReviewRunStore, ReviewSourceSupport
 from app.control.context import ContextAssemblyService
 from app.control.events import ControlEventType
+from app.control.session_registry import SessionRegistryService
+from app.control.task_registry import TaskRegistryService
 from app.core.config import Settings, get_settings
 from app.models.schemas import ReviewActionRequest, ReviewFinding, ReviewRun, ReviewRunRequest, ReviewSkillOutput, ReviewSource, SleepCodingTaskActionRequest, TokenUsage
 from app.runtime.mcp import MCPClient, build_default_mcp_client
-from app.services.session_registry import SessionRegistryService
 from app.agents.ralph import SleepCodingService
-from app.services.task_registry import TaskRegistryService
 
 class ReviewService:
     def __init__(
         self,
         settings: Settings | None = None,
-        gitlab: GitLabService | None = None,
         sleep_coding: SleepCodingService | None = None,
         skill: ReviewSkillService | None = None,
         mcp_client: MCPClient | None = None,
@@ -39,7 +34,6 @@ class ReviewService:
         sessions: SessionRegistryService | None = None,
     ) -> None:
         self.settings = settings or get_settings()
-        self.gitlab = gitlab or GitLabService(self.settings)
         self.sleep_coding = sleep_coding or SleepCodingService(settings=self.settings)
         self.skill = skill or ReviewSkillService(self.settings)
         self.tasks = tasks or TaskRegistryService(self.settings)
@@ -52,7 +46,6 @@ class ReviewService:
         self.bridge = ReviewCommentBridge(
             github_server=self.github_server,
             mcp_client=self.mcp_client,
-            gitlab=self.gitlab,
             mcp_config_name=self.settings.resolved_mcp_config_path.name,
         )
         self.store = ReviewRunStore(self.settings)
@@ -61,7 +54,6 @@ class ReviewService:
             sleep_coding=self.sleep_coding,
             source_support=self.source_support,
         )
-        self.materializer = ReviewSourceMaterializer(self.settings, self.sleep_coding)
         self.database_path = self.store.database_path
         self.review_runs_dir = self.store.review_runs_dir
 
@@ -72,8 +64,9 @@ class ReviewService:
     def start_review(self, payload: ReviewRunRequest, *, write_comment: bool = True) -> ReviewRun:
         self._sync_helpers()
         review_id = str(uuid4())
-        source = self._materialize_source(self._normalize_source(payload.source))
+        source = self._materialize_task_source(payload.source)
         parent_control_task = self._resolve_parent_control_task(source)
+        sleep_task = self.sleep_coding.get_task(source.task_id) if source.task_id else None
         parent_run_session_id = (
             parent_control_task.payload.get("run_session_id")
             if parent_control_task
@@ -121,8 +114,46 @@ class ReviewService:
                 "artifact_path": str(artifact_path),
                 "comment_url": comment.html_url if comment is not None else None,
                 "run_session_id": run_session.session_id,
+                "owner_agent": "code-review-agent",
+                "source_agent": "ralph" if source.task_id else "unknown",
+                "handoff": {
+                    "task_id": source.task_id,
+                    "session_id": run_session.session_id,
+                    "owner_agent": "code-review-agent",
+                    "source": "ralph" if source.task_id else "unknown",
+                    "workspace_ref": source.local_path or source.head_branch,
+                    "validation_result": (
+                        sleep_task.validation.status
+                        if sleep_task is not None
+                        else None
+                    ),
+                    "review_scope": {
+                        "repo": source.repo,
+                        "pr_number": source.pr_number,
+                        "url": source.url,
+                        "base_branch": source.base_branch,
+                        "head_branch": source.head_branch,
+                    },
+                    "status": "in_review",
+                },
             },
         )
+        if parent_control_task is not None:
+            self.tasks.append_event(
+                parent_control_task.task_id,
+                "handoff_to_code_review",
+                {
+                    "child_task_id": control_task.task_id,
+                    "review_id": review_id,
+                    "owner_agent": "code-review-agent",
+                    "run_session_id": run_session.session_id,
+                    "review_scope": {
+                        "repo": source.repo,
+                        "pr_number": source.pr_number,
+                        "head_branch": source.head_branch,
+                    },
+                },
+            )
 
         with closing(self._connect()) as connection:
             connection.execute(
@@ -294,7 +325,15 @@ class ReviewService:
 
         review = self.get_review(review_id)
         if review.control_task_id:
-            self.tasks.update_task(review.control_task_id, status=new_status)
+            next_owner_agent = "ralph" if new_status == "changes_requested" else None
+            self.tasks.update_task(
+                review.control_task_id,
+                status=new_status,
+                payload_patch={
+                    "review_decision": new_status,
+                    "next_owner_agent": next_owner_agent,
+                },
+            )
             self.tasks.append_event(
                 review.control_task_id,
                 f"review_{new_status}",
@@ -312,6 +351,18 @@ class ReviewService:
                 {"review_id": review_id, "task_id": review.task_id},
             )
         if review.task_id:
+            parent_control_task = self._resolve_parent_control_task(review.source)
+            if parent_control_task is not None:
+                self.tasks.append_event(
+                    parent_control_task.task_id,
+                    "review_returned",
+                    {
+                        "review_id": review_id,
+                        "task_id": review.task_id,
+                        "decision": new_status,
+                        "next_owner_agent": next_owner_agent,
+                    },
+                )
             if write_remote and review.source.repo and review.source.pr_number:
                 if payload.action == "request_changes":
                     self.bridge.write_pr_review(
@@ -377,17 +428,6 @@ class ReviewService:
     def _connect(self) -> sqlite3.Connection:
         return self.store.connect()
 
-    def _normalize_source(self, source: ReviewSource) -> ReviewSource:
-        return self.source_support.normalize_source(source)
-
-    def _materialize_source(self, source: ReviewSource) -> ReviewSource:
-        try:
-            return self.materializer.materialize(source)
-        except ReviewMaterializationError:
-            if source.source_type in {"github_pr", "gitlab_mr"}:
-                raise
-            return source
-
     def _write_artifact(self, review_id: str, source: ReviewSource, content: str) -> Path:
         return self.store.write_artifact(review_id, source, content)
 
@@ -396,11 +436,33 @@ class ReviewService:
             sleep_task = self.sleep_coding.get_task(source.task_id)
             if sleep_task.control_task_id:
                 return self.tasks.get_task(sleep_task.control_task_id)
-        if source.repo and source.pr_number:
-            return self.tasks.find_task_by_external_ref(
-                f"github_pr:{source.repo}#{source.pr_number}",
-            )
         return None
+
+    def _materialize_task_source(self, source: ReviewSource) -> ReviewSource:
+        if source.source_type != "sleep_coding_task" or not source.task_id:
+            raise ValueError("MVP review only supports sleep_coding_task sources")
+        task = self.sleep_coding.get_task(source.task_id)
+        worktree_path = task.git_execution.worktree_path
+        if not worktree_path or task.git_execution.is_dry_run:
+            return source.model_copy(
+                update={
+                    "repo": task.repo,
+                    "pr_number": task.pull_request.pr_number if task.pull_request else None,
+                    "url": task.pull_request.html_url if task.pull_request else source.url,
+                    "base_branch": task.base_branch,
+                    "head_branch": task.head_branch,
+                }
+            )
+        return source.model_copy(
+            update={
+                "repo": task.repo,
+                "pr_number": task.pull_request.pr_number if task.pull_request else None,
+                "url": task.pull_request.html_url if task.pull_request else source.url,
+                "local_path": worktree_path,
+                "base_branch": task.base_branch,
+                "head_branch": task.head_branch,
+            }
+        )
 
     def _record_review_usage(self, source: ReviewSource, usage: TokenUsage) -> None:
         if not source.task_id:

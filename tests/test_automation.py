@@ -18,7 +18,7 @@ from app.models.schemas import (
 )
 from app.runtime.mcp import InMemoryMCPServer, MCPClient
 from app.agents.code_review_agent import ReviewService
-from app.services.automation import AutomationService
+from app.control.automation import AutomationService
 from app.channel.notifications import ChannelNotificationResult
 from app.agents.ralph import SleepCodingService
 

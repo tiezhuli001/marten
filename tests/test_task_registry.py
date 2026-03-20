@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 
 from app.core.config import Settings
-from app.services.task_registry import TaskRegistryService
+from app.control.task_registry import TaskRegistryService
 
 
 class TaskRegistryServiceTests(unittest.TestCase):

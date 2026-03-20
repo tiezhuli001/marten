@@ -17,9 +17,9 @@ from app.core.config import Settings
 from app.infra.diagnostics import IntegrationDiagnosticsService
 from app.ledger.service import TokenLedgerService
 from app.models.schemas import MainAgentIntakeRequest, SleepCodingTask
-from app.services.automation import AutomationService
-from app.services.session_registry import SessionRegistryService
-from app.services.task_registry import TaskRegistryService
+from app.control.automation import AutomationService
+from app.control.session_registry import SessionRegistryService
+from app.control.task_registry import TaskRegistryService
 
 
 def _load_live_test_config(settings: Settings) -> dict[str, Any]:

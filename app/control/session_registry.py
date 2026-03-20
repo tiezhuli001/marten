@@ -87,6 +87,18 @@ class SessionRegistryService:
             connection.commit()
             return updated
 
+    def set_active_agent(
+        self,
+        session_id: str,
+        agent_id: str,
+    ) -> ControlSession:
+        return self.update_session_payload(
+            session_id,
+            {
+                "active_agent": agent_id,
+            },
+        )
+
     def list_session_chain(self, session_id: str) -> list[ControlSession]:
         with closing(self._connect()) as connection:
             return self.store.list_session_chain(connection, session_id)

@@ -974,6 +974,40 @@ class SleepCodingServiceTests(unittest.TestCase):
                 )
 
     def test_uses_configured_validation_command(self) -> None:
+        class ValidationPlanAgentRuntime(FakeAgentRuntime):
+            def generate_structured_output(self, agent, *, user_prompt, output_contract, **kwargs):
+                self.calls.append(output_contract)
+                return type(
+                    "FakeLLMResponse",
+                    (),
+                    {
+                        "output_text": (
+                            '{"summary":"LLM generated plan","scope":["Update service code","Add tests"],'
+                            '"validation":["Run python -m unittest tests.test_main_agent"],'
+                            '"risks":["Issue details may still need clarification."]}'
+                        ),
+                        "usage": type(
+                            "FakeUsage",
+                            (),
+                            {
+                                "prompt_tokens": 11,
+                                "completion_tokens": 13,
+                                "total_tokens": 24,
+                                "cache_read_tokens": 0,
+                                "cache_write_tokens": 0,
+                                "reasoning_tokens": 0,
+                                "message_count": 2,
+                                "duration_seconds": 0.0,
+                                "model_name": "test-model",
+                                "provider": "openai",
+                                "cost_usd": 0.0,
+                                "step_name": None,
+                                "model_copy": lambda self, update=None: self,
+                            },
+                        )(),
+                    },
+                )()
+
         with tempfile.TemporaryDirectory() as temp_dir:
             database_path = Path(temp_dir) / "sleep_coding.db"
             settings = Settings(
@@ -994,6 +1028,7 @@ class SleepCodingServiceTests(unittest.TestCase):
                 git_workspace=FakeGitWorkspaceService(),
                 validator=None,
                 ledger=TokenLedgerService(settings),
+                agent_runtime=ValidationPlanAgentRuntime(),
                 mcp_client=build_github_mcp(github),
             )
 
@@ -1002,7 +1037,10 @@ class SleepCodingServiceTests(unittest.TestCase):
                 "python -m unittest tests.test_main_agent",
             )
             task = service.start_task(SleepCodingTaskRequest(issue_number=21))
-            self.assertIn("python -m unittest tests.test_main_agent", task.plan.validation[0])
+            self.assertEqual(
+                task.plan.validation[0],
+                "Run python -m unittest tests.test_main_agent",
+            )
 
     def test_validation_runner_prefers_project_venv_python_for_worktree_runs(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

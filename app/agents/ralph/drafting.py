@@ -26,7 +26,7 @@ if TYPE_CHECKING:
     from app.control.context import ContextAssemblyService
     from app.core.config import Settings
     from app.runtime.agent_runtime import AgentRuntime
-    from app.services.task_registry import TaskRegistryService
+    from app.control.task_registry import TaskRegistryService
 
 
 class RalphDraftingService:

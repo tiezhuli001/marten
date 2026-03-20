@@ -33,7 +33,7 @@ from app.models.schemas import (
 )
 from app.runtime.mcp import InMemoryMCPServer, MCPClient
 from app.agents.code_review_agent import ReviewService, ReviewSkillRunResult
-from app.services.automation import AutomationService
+from app.control.automation import AutomationService
 from app.channel.feishu import FeishuWebhookService
 from app.channel.notifications import ChannelNotificationResult
 from app.agents.main_agent import MainAgentService
@@ -464,12 +464,26 @@ class MVPE2ETests(unittest.TestCase):
             parent_events = main_agent.tasks.list_events(parent_task.task_id)
             child_task = main_agent.tasks.get_task(task.control_task_id)
             child_events = main_agent.tasks.list_events(child_task.task_id)
+            review_task = main_agent.tasks.get_task(reviews[0].control_task_id)
+            review_events = main_agent.tasks.list_events(review_task.task_id)
+            user_session = main_agent.sessions.get_session(parent_task.payload["user_session_id"])
 
             self.assertEqual(task.status, "approved")
             self.assertEqual(task.background_follow_up_status, "completed")
             self.assertEqual(task.kickoff_request_id, parent_task.payload["request_id"])
             self.assertEqual(len(reviews), 1)
             self.assertEqual(reviews[0].status, "approved")
+            self.assertEqual(child_task.payload["owner_agent"], "ralph")
+            self.assertEqual(child_task.payload["source_agent"], "main-agent")
+            self.assertEqual(child_task.payload["handoff"]["owner_agent"], "ralph")
+            self.assertEqual(child_task.payload["handoff"]["status"], "claimed")
+            self.assertEqual(review_task.payload["owner_agent"], "code-review-agent")
+            self.assertEqual(review_task.payload["source_agent"], "ralph")
+            self.assertEqual(review_task.payload["handoff"]["owner_agent"], "code-review-agent")
+            self.assertEqual(review_task.payload["handoff"]["status"], "in_review")
+            self.assertEqual(review_task.payload["review_decision"], "approved")
+            self.assertIsNone(review_task.payload["next_owner_agent"])
+            self.assertEqual(user_session.payload["active_agent"], "main-agent")
             self.assertGreater(task.token_usage.total_tokens, 0)
             self.assertTrue(any("Review round 1" in title for title, _ in channel.notifications))
             issue_notifications = [lines for title, lines in channel.notifications if "Ralph 任务开始" in title]
@@ -483,9 +497,13 @@ class MVPE2ETests(unittest.TestCase):
             self.assertTrue(
                 any(event.event_type == "child.follow_up.completed" for event in parent_events)
             )
+            self.assertTrue(any(event.event_type == "handoff_to_ralph" for event in parent_events))
             self.assertTrue(
                 any(event.event_type == "follow_up.completed" for event in child_events)
             )
+            self.assertTrue(any(event.event_type == "handoff_to_code_review" for event in child_events))
+            self.assertTrue(any(event.event_type == "review_returned" for event in child_events))
+            self.assertTrue(any(event.event_type == "review_approved" for event in review_events))
 
     def test_existing_issue_to_worker_to_review_to_final_delivery_without_duplicate_issue_creation(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -631,7 +649,7 @@ class MVPE2ETests(unittest.TestCase):
                     "/gateway/message",
                     json={
                         "user_id": "user-1",
-                        "content": "请把这个需求整理清楚，交给 Ralph 跟进开发",
+                        "content": "请把这个需求整理清楚，并进入开发流程",
                         "source": "manual",
                     },
                 )
@@ -805,7 +823,7 @@ class MVPE2ETests(unittest.TestCase):
                         "message_id": "om_123",
                         "chat_id": "oc_123",
                         "message_type": "text",
-                        "content": '{"text":"请把这个需求整理清楚，交给 Ralph 跟进开发"}',
+                        "content": '{"text":"请把这个需求整理清楚，并进入开发流程"}',
                     },
                 },
                 "token": "token-1",

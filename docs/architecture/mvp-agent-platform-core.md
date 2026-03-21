@@ -1,6 +1,8 @@
 # MVP Agent Platform Core
 
-> 更新时间：2026-03-20
+> 文档角色：`docs/architecture` 下的 canonical 架构文档
+
+> 更新时间：2026-03-21
 > 目标：把 `Marten` 收口成一个小而硬的 agent platform core，用统一 contract 承载当前 MVP 主链：`main-agent -> ralph -> code-review-agent`。
 
 ## 一、北极星

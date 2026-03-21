@@ -13,6 +13,7 @@ from app.agents.ralph import SleepCodingService
 from app.channel.feishu import FeishuWebhookService
 from app.control.gateway import GatewayControlPlaneService
 from app.control.sleep_coding_worker import SleepCodingWorkerService
+from app.control.workflow import GatewayWorkflowService
 from app.core.config import Settings
 from app.infra.diagnostics import IntegrationDiagnosticsService
 from app.ledger.service import TokenLedgerService
@@ -100,8 +101,11 @@ class LiveChainIntegrationTests(unittest.TestCase):
         )
         feishu = FeishuWebhookService(
             self.settings,
-            control_plane=control_plane,
-            automation=automation,
+            workflow=GatewayWorkflowService(
+                self.settings,
+                control_plane=control_plane,
+                automation=automation,
+            ),
         )
         task_registry = TaskRegistryService(self.settings)
         ledger = TokenLedgerService(self.settings)

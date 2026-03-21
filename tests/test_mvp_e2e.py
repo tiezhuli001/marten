@@ -13,6 +13,7 @@ from app.api.routes import (
     get_sleep_coding_service,
 )
 from app.control.gateway import GatewayControlPlaneService
+from app.control.workflow import GatewayWorkflowService
 from app.main import app
 from app.core.config import Settings
 from app.ledger.service import TokenLedgerService
@@ -22,7 +23,6 @@ from app.models.schemas import (
     MainAgentIntakeRequest,
     ReviewFinding,
     ReviewSkillOutput,
-    ReviewSource,
     SleepCodingIssue,
     SleepCodingPullRequest,
     SleepCodingWorkerPollRequest,
@@ -817,8 +817,11 @@ class MVPE2ETests(unittest.TestCase):
             )
             feishu = FeishuWebhookService(
                 settings,
-                control_plane=control_plane,
-                automation=automation,
+                workflow=GatewayWorkflowService(
+                    settings,
+                    control_plane=control_plane,
+                    automation=automation,
+                ),
             )
 
             app.dependency_overrides[get_gateway_control_plane_service] = lambda: control_plane

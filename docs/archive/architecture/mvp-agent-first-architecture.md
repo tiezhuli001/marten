@@ -1,6 +1,8 @@
 # MVP Agent-First Architecture
 
-> 更新时间：2026-03-20
+> 文档角色：历史/过渡说明文档。当前以 [mvp-agent-platform-core.md](/Users/litiezhu/workspace/github/marten/docs/architecture/mvp-agent-platform-core.md) 作为 canonical 架构文档。
+
+> 更新时间：2026-03-21
 > 目标：记录当前 `Marten` 的真实 MVP 架构边界，避免继续沿用旧阶段的大而全表述。
 
 ## 一、当前 MVP 只保留一条主链

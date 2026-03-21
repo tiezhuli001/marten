@@ -13,7 +13,7 @@ from app.models.schemas import (
     ReviewFinding,
     ReviewStartRequest,
     ReviewSkillOutput,
-    ReviewSource,
+    ReviewTarget,
     SleepCodingIssue,
     SleepCodingPullRequest,
     SleepCodingTaskActionRequest,
@@ -359,10 +359,9 @@ class ReviewServiceTests(unittest.TestCase):
             )
 
             result = skill.run(
-                ReviewSource(
-                    source_type="sleep_coding_task",
+                ReviewTarget(
                     task_id="task-fallback",
-                    local_path=str(root),
+                    workspace_path=str(root),
                 ),
                 "dummy context",
             )
@@ -408,7 +407,7 @@ class ReviewServiceTests(unittest.TestCase):
 
             review = review_service.trigger_for_task(task.task_id)
 
-            self.assertEqual(review.source.source_type, "sleep_coding_task")
+            self.assertEqual(review.target.task_id, task.task_id)
             self.assertEqual(review.status, "completed")
             self.assertEqual(review.task_id, task.task_id)
             self.assertEqual(review.findings[0].title, "Missing regression coverage")
@@ -526,7 +525,7 @@ class ReviewServiceTests(unittest.TestCase):
             )
 
             result = skill.run(
-                ReviewSource(source_type="sleep_coding_task", task_id="task-agent-runtime"),
+                ReviewTarget(task_id="task-agent-runtime"),
                 "diff context",
             )
 

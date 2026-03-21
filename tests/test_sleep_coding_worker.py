@@ -368,6 +368,32 @@ class SleepCodingWorkerServiceTests(unittest.TestCase):
             active_claim = next(claim for claim in result.claims if claim.issue_number == 55)
             self.assertEqual(active_claim.status, "awaiting_confirmation")
 
+    def test_poll_once_skips_issue_when_active_control_task_exists_without_domain_row(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = build_settings(Path(temp_dir) / "worker.db")
+            github = FakeGitHubService()
+            mcp_client = build_github_mcp(github)
+            worker = SleepCodingWorkerService(
+                settings=settings,
+                mcp_client=mcp_client,
+            )
+            worker.tasks.create_task(
+                task_type="sleep_coding",
+                agent_id="ralph",
+                status="coding",
+                repo="tiezhuli001/youmeng-gateway",
+                issue_number=55,
+                title="Implement worker takeover",
+                external_ref="sleep_coding_task:control-only-55",
+                payload={"head_branch": "codex/issue-55-sleep-coding"},
+            )
+
+            result = worker.poll_once()
+
+            self.assertEqual(result.claimed_count, 0)
+            active_claim = next(claim for claim in result.claims if claim.issue_number == 55)
+            self.assertEqual(active_claim.status, "coding")
+
     def test_poll_once_records_retry_state_on_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             settings = build_settings(Path(temp_dir) / "worker.db")

@@ -132,14 +132,19 @@ class AutomationService:
         current_task = task
         last_review: ReviewRun | None = None
         while True:
-            blocking_reviews = self.review.count_blocking_reviews(current_task.task_id)
+            blocking_reviews = self._get_blocking_review_count(current_task)
             decision = self._decide_review_loop_step(
                 task_status=current_task.status,
-                review_blocking=last_review.is_blocking if last_review is not None else None,
+                review_blocking=(
+                    last_review.is_blocking
+                    if last_review is not None
+                    else self._get_latest_review_blocking(current_task)
+                ),
                 blocking_reviews=blocking_reviews,
             )
             if decision.action == "rerun_coding":
                 current_task = self._rerun_coding(current_task.task_id)
+                self._clear_latest_review_projection(current_task)
                 last_review = None
                 continue
             if decision.action == "run_review":
@@ -147,19 +152,22 @@ class AutomationService:
                     current_task.task_id,
                     write_comment=not self.settings.resolved_review_writeback_final_only,
                 )
-                review_round = len(self.review.list_task_reviews(current_task.task_id))
+                review_round = self._get_review_round(current_task, fallback_review=last_review)
                 self._publish_review_feedback(current_task, last_review, review_round)
                 continue
             if decision.action == "request_changes":
+                last_review = self._require_latest_review(current_task, last_review)
                 self.review.apply_action(
                     last_review.review_id,
                     ReviewActionRequest(action="request_changes"),
                     write_remote=not self.settings.resolved_review_writeback_final_only,
                 )
                 current_task = self._rerun_coding(current_task.task_id)
+                self._clear_latest_review_projection(current_task)
                 last_review = None
                 continue
             if decision.action == "handoff":
+                last_review = self._require_latest_review(current_task, last_review)
                 self.review.apply_action(
                     last_review.review_id,
                     ReviewActionRequest(action="request_changes"),
@@ -174,6 +182,7 @@ class AutomationService:
                 self._publish_manual_handoff(current_task, last_review, decision.blocking_reviews)
                 return current_task
             if decision.action == "approve_review":
+                last_review = self._require_latest_review(current_task, last_review)
                 self.review.apply_action(
                     last_review.review_id,
                     ReviewActionRequest(action="approve_review"),
@@ -190,6 +199,68 @@ class AutomationService:
             if decision.action == "deliver":
                 self._publish_final_delivery(current_task)
             return current_task
+
+    def _get_blocking_review_count(self, task: SleepCodingTask) -> int:
+        control_task = self._get_control_task(task)
+        if control_task is not None:
+            count = control_task.payload.get("blocking_review_count")
+            if isinstance(count, int) and count >= 0:
+                return count
+        return self.review.count_blocking_reviews(task.task_id)
+
+    def _get_latest_review_blocking(self, task: SleepCodingTask) -> bool | None:
+        control_task = self._get_control_task(task)
+        if control_task is not None and "latest_review_blocking" in control_task.payload:
+            value = control_task.payload.get("latest_review_blocking")
+            if isinstance(value, bool):
+                return value
+        return None
+
+    def _get_review_round(
+        self,
+        task: SleepCodingTask,
+        *,
+        fallback_review: ReviewRun | None = None,
+    ) -> int:
+        control_task = self._get_control_task(task)
+        if control_task is not None:
+            review_round = control_task.payload.get("review_round")
+            if isinstance(review_round, int) and review_round >= 1:
+                return review_round
+        if fallback_review is not None:
+            return len(self.review.list_task_reviews(task.task_id))
+        return 0
+
+    def _get_control_task(self, task: SleepCodingTask):
+        if not task.control_task_id:
+            return None
+        return self.tasks.get_task(task.control_task_id)
+
+    def _require_latest_review(
+        self,
+        task: SleepCodingTask,
+        review: ReviewRun | None,
+    ) -> ReviewRun:
+        if review is not None:
+            return review
+        reviews = self.review.list_task_reviews(task.task_id)
+        if not reviews:
+            raise ValueError(f"Review loop expected an existing review for task {task.task_id}")
+        return reviews[-1]
+
+    def _clear_latest_review_projection(self, task: SleepCodingTask) -> None:
+        control_task = self._get_control_task(task)
+        if control_task is None:
+            return
+        self.tasks.update_task(
+            control_task.task_id,
+            payload_patch={
+                "latest_review_id": None,
+                "latest_review_blocking": None,
+                "latest_review_status": None,
+                "latest_review_summary": None,
+            },
+        )
 
     def _rerun_coding(self, task_id: str) -> SleepCodingTask:
         return self.sleep_coding.apply_action(

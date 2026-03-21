@@ -6,8 +6,7 @@ import json
 from dataclasses import dataclass
 from typing import Mapping
 
-from app.control.automation import AutomationService
-from app.control.gateway import GatewayControlPlaneService
+from app.control.workflow import GatewayWorkflowService
 from app.core.config import Settings
 from app.models.schemas import GatewayMessageRequest, GatewayMessageResponse
 
@@ -24,12 +23,10 @@ class FeishuWebhookService:
     def __init__(
         self,
         settings: Settings,
-        control_plane: GatewayControlPlaneService | None = None,
-        automation: AutomationService | None = None,
+        workflow: GatewayWorkflowService | None = None,
     ) -> None:
         self.settings = settings
-        self.control_plane = control_plane or GatewayControlPlaneService(settings)
-        self.automation = automation or AutomationService(settings)
+        self.workflow = workflow or GatewayWorkflowService(settings)
 
     def handle_event(
         self,
@@ -50,18 +47,19 @@ class FeishuWebhookService:
             return {"code": 0, "msg": "ignored", "event_type": event_type}
 
         message = self._normalize_message_event(payload)
-        workflow_response = self.control_plane.run(
+        workflow_result = self.workflow.run(
             GatewayMessageRequest(
                 user_id=message.user_id,
                 content=message.content,
                 source="feishu",
             )
         )
-        follow_up = self.automation.continue_gateway_workflow(
-            intent=workflow_response.intent,
-            task_id=workflow_response.task_id,
+        return self._build_ack_response(
+            event_type,
+            message,
+            workflow_result.gateway_response,
+            workflow_result.follow_up,
         )
-        return self._build_ack_response(event_type, message, workflow_response, follow_up)
 
     def _validate_request(
         self,

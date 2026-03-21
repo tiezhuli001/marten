@@ -14,6 +14,7 @@ from app.control.gateway import GatewayControlPlaneService
 from app.control.session_registry import SessionRegistryService
 from app.control.task_registry import TaskRegistryService
 from app.control.sleep_coding_worker import SleepCodingWorkerService
+from app.control.workflow import GatewayWorkflowService
 from app.core.config import get_settings
 from app.infra.diagnostics import IntegrationDiagnosticsService
 from app.ledger.service import TokenLedgerService
@@ -51,8 +52,17 @@ def get_gateway_control_plane_service() -> GatewayControlPlaneService:
 def get_feishu_webhook_service() -> FeishuWebhookService:
     return FeishuWebhookService(
         get_settings(),
-        get_gateway_control_plane_service(),
-        get_automation_service(),
+        get_gateway_workflow_service(),
+    )
+
+
+@lru_cache(maxsize=1)
+def get_gateway_workflow_service() -> GatewayWorkflowService:
+    settings = get_settings()
+    return GatewayWorkflowService(
+        settings=settings,
+        control_plane=get_gateway_control_plane_service(),
+        automation=get_automation_service(),
     )
 
 
@@ -225,4 +235,3 @@ def get_review_run(
         return service.get_review(review_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-

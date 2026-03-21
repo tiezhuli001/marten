@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import time
 from contextlib import closing
 from datetime import date, timedelta
 from pathlib import Path
@@ -18,6 +19,8 @@ from app.models.schemas import (
 
 
 class TokenLedgerService:
+    _LOCK_RETRY_ATTEMPTS = 5
+    _LOCK_RETRY_DELAY_SECONDS = 0.2
     _MIGRATION_COLUMNS: dict[str, set[str]] = {
         "token_usage_records": {
             "model_name",
@@ -284,10 +287,10 @@ class TokenLedgerService:
                 usage.cost_usd,
                 usage.step_name or step_name,
             )
-            connection.execute(request_query, request_params)
-            connection.execute(workflow_query, workflow_params)
-            connection.execute(token_query, token_params)
-            connection.commit()
+            self._with_locked_retry(connection, lambda: connection.execute(request_query, request_params))
+            self._with_locked_retry(connection, lambda: connection.execute(workflow_query, workflow_params))
+            self._with_locked_retry(connection, lambda: connection.execute(token_query, token_params))
+            self._with_locked_retry(connection, connection.commit)
         return usage
 
     def append_usage(
@@ -402,9 +405,9 @@ class TokenLedgerService:
                 usage.cost_usd,
                 usage.step_name or step_name,
             )
-            connection.execute(workflow_query, workflow_params)
-            connection.execute(token_query, token_params)
-            connection.commit()
+            self._with_locked_retry(connection, lambda: connection.execute(workflow_query, workflow_params))
+            self._with_locked_retry(connection, lambda: connection.execute(token_query, token_params))
+            self._with_locked_retry(connection, connection.commit)
         return usage
 
     def get_usage_summary(self, query: str) -> str:
@@ -487,50 +490,65 @@ class TokenLedgerService:
         daily_summary = self._build_daily_summary(target_date)
 
         with closing(self._connect()) as connection:
-            connection.execute(
-                """
-                INSERT INTO daily_token_summaries (
-                    summary_date,
-                    request_count,
-                    workflow_run_count,
-                    prompt_tokens,
-                    completion_tokens,
-                    total_tokens,
-                    estimated_cost_usd,
-                    top_intent,
-                    top_step_name,
-                    summary_text,
-                    created_at,
-                    updated_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                ON CONFLICT(summary_date) DO UPDATE SET
-                    request_count = excluded.request_count,
-                    workflow_run_count = excluded.workflow_run_count,
-                    prompt_tokens = excluded.prompt_tokens,
-                    completion_tokens = excluded.completion_tokens,
-                    total_tokens = excluded.total_tokens,
-                    estimated_cost_usd = excluded.estimated_cost_usd,
-                    top_intent = excluded.top_intent,
-                    top_step_name = excluded.top_step_name,
-                    summary_text = excluded.summary_text,
-                    updated_at = CURRENT_TIMESTAMP
-                """,
-                (
-                    daily_summary.summary_date,
-                    daily_summary.request_count,
-                    daily_summary.workflow_run_count,
-                    daily_summary.prompt_tokens,
-                    daily_summary.completion_tokens,
-                    daily_summary.total_tokens,
-                    daily_summary.estimated_cost_usd,
-                    daily_summary.top_intent,
-                    daily_summary.top_step_name,
-                    daily_summary.summary_text,
+            self._with_locked_retry(
+                connection,
+                lambda: connection.execute(
+                    """
+                    INSERT INTO daily_token_summaries (
+                        summary_date,
+                        request_count,
+                        workflow_run_count,
+                        prompt_tokens,
+                        completion_tokens,
+                        total_tokens,
+                        estimated_cost_usd,
+                        top_intent,
+                        top_step_name,
+                        summary_text,
+                        created_at,
+                        updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    ON CONFLICT(summary_date) DO UPDATE SET
+                        request_count = excluded.request_count,
+                        workflow_run_count = excluded.workflow_run_count,
+                        prompt_tokens = excluded.prompt_tokens,
+                        completion_tokens = excluded.completion_tokens,
+                        total_tokens = excluded.total_tokens,
+                        estimated_cost_usd = excluded.estimated_cost_usd,
+                        top_intent = excluded.top_intent,
+                        top_step_name = excluded.top_step_name,
+                        summary_text = excluded.summary_text,
+                        updated_at = CURRENT_TIMESTAMP
+                    """,
+                    (
+                        daily_summary.summary_date,
+                        daily_summary.request_count,
+                        daily_summary.workflow_run_count,
+                        daily_summary.prompt_tokens,
+                        daily_summary.completion_tokens,
+                        daily_summary.total_tokens,
+                        daily_summary.estimated_cost_usd,
+                        daily_summary.top_intent,
+                        daily_summary.top_step_name,
+                        daily_summary.summary_text,
+                    ),
                 ),
             )
-            connection.commit()
+            self._with_locked_retry(connection, connection.commit)
         return self.get_daily_summary(daily_summary.summary_date)
+
+    def _with_locked_retry(self, connection: sqlite3.Connection, operation):
+        for attempt in range(self._LOCK_RETRY_ATTEMPTS):
+            try:
+                return operation()
+            except sqlite3.OperationalError as exc:
+                if "database is locked" not in str(exc).lower():
+                    raise
+                connection.rollback()
+                if attempt == self._LOCK_RETRY_ATTEMPTS - 1:
+                    raise
+                time.sleep(self._LOCK_RETRY_DELAY_SECONDS)
 
     def generate_yesterday_summary(
         self,

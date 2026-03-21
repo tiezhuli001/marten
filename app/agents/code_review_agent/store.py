@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 
 from app.agents.code_review_agent.target import ReviewTarget
 from app.infra.sqlite_utils import connect_sqlite, ensure_writable_dir, ensure_writable_parent
-from app.models.schemas import ReviewFinding, ReviewRun, ReviewSource, TokenUsage
+from app.models.schemas import ReviewFinding, ReviewRun, TokenUsage
 
 if TYPE_CHECKING:
     from app.control.context import ContextAssemblyService
@@ -41,6 +41,7 @@ class ReviewRunStore:
                     control_task_id TEXT,
                     parent_task_id TEXT,
                     source_payload TEXT NOT NULL,
+                    target_payload TEXT,
                     status TEXT NOT NULL,
                     artifact_path TEXT,
                     comment_url TEXT,
@@ -106,6 +107,13 @@ class ReviewRunStore:
                     """
                     ALTER TABLE review_runs
                     ADD COLUMN is_blocking INTEGER NOT NULL DEFAULT 0
+                    """
+                )
+            if "target_payload" not in columns:
+                connection.execute(
+                    """
+                    ALTER TABLE review_runs
+                    ADD COLUMN target_payload TEXT
                     """
                 )
             for column_name, definition in {
@@ -180,11 +188,16 @@ class ReviewRunStore:
             ReviewFinding.model_validate(item)
             for item in json.loads(row["findings_payload"] or "[]")
         ]
+        target_payload = row["target_payload"] or row["source_payload"]
+        target_data = json.loads(target_payload or "{}")
+        if "workspace_path" not in target_data and "local_path" in target_data:
+            target_data["workspace_path"] = target_data.pop("local_path")
+        target_data.pop("source_type", None)
         return ReviewRun(
             review_id=row["review_id"],
             control_task_id=row["control_task_id"],
             parent_task_id=row["parent_task_id"],
-            source=ReviewSource.model_validate_json(row["source_payload"]),
+            target=ReviewTarget.model_validate(target_data),
             status=row["status"],
             artifact_path=row["artifact_path"],
             comment_url=row["comment_url"],

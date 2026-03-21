@@ -120,9 +120,9 @@ class PricingRegistryTests(unittest.TestCase):
                         "providers": {
                             "custom-openai": {
                                 "protocol": "openai",
-                                "apiKey": "custom-key",
-                                "apiBase": "https://llm.example.com/v1",
-                                "defaultModel": "custom-model",
+                                "api_key": "custom-key",
+                                "api_base": "https://llm.example.com/v1",
+                                "default_model": "custom-model",
                                 "pricing": {
                                     "custom-model": {
                                         "inputPerMillion": 1.5,
@@ -289,8 +289,8 @@ class SharedLLMRuntimeTests(unittest.TestCase):
                         "providers": {
                             "custom-openai": {
                                 "protocol": "openai",
-                                "apiBase": "https://llm.example.com/v1",
-                                "defaultModel": "custom-model",
+                                "api_base": "https://llm.example.com/v1",
+                                "default_model": "custom-model",
                             }
                         }
                     }
@@ -394,10 +394,10 @@ class SharedLLMRuntimeTests(unittest.TestCase):
                         "providers": {
                             "minimax-coding-plan": {
                                 "protocol": "openai",
-                                "apiKey": "custom-key",
-                                "baseURL": "https://llm.example.com/v1",
-                                "defaultModel": "MiniMax-M2.5",
-                                "pricingProvider": "minimax",
+                                "api_key": "custom-key",
+                                "api_base": "https://llm.example.com/v1",
+                                "default_model": "MiniMax-M2.5",
+                                "pricing_provider": "minimax",
                             }
                         },
                     }

@@ -2,8 +2,10 @@
 
 > 文档角色：`docs/architecture` 下的 canonical 架构文档
 
-> 更新时间：2026-03-21
+> 更新时间：2026-03-22
 > 目标：把 `Marten` 收口成一个小而硬的 agent platform core，用统一 contract 承载当前 MVP 主链：`main-agent -> ralph -> code-review-agent`。
+
+> 边界说明：本文件描述当前平台核心的长期有效骨架。关于 `Marten` 作为框架、官方内置 agent 可复用边界、多 endpoint 和 RAG MVP 的新增实现规格，以 `framework-*`、`multi-endpoint-*`、`rag-*` 文档为准。
 
 ## 一、北极星
 
@@ -33,6 +35,11 @@ MVP 的北极星只有一条：
 - 不做完整长期记忆 / RAG 基建。
 - 不把 reviewer 角色、垂直领域 agent、插件市场上升成平台一级对象。
 - 不为了未来可能性，把 MVP schema 设计得过度完整。
+
+这意味着：
+
+- 本文件继续成立，但它不再单独承担“下一阶段怎么实现框架复用”的说明职责。
+- 上层私有项目的复用边界，必须以新增的分层设计文档为准，而不是从本文件逐段推断。
 
 ## 三、平台分层
 
@@ -190,7 +197,7 @@ MVP 采用 `mixed-entry` 模型，但保持实现很薄。
 
 ### 文本点名
 
-MVP 只支持文本点名，不做 bot 绑定和复杂别名系统。
+当前已验证 MVP 只支持文本点名，不做 bot 绑定和复杂别名系统。
 
 例如：
 
@@ -203,6 +210,8 @@ MVP 只支持文本点名，不做 bot 绑定和复杂别名系统。
 - `ralph`
 
 `code-review-agent` 属于主链后置阶段，不作为默认用户直达入口。
+
+未来若支持多机器人入口，应以 [multi-endpoint-channel-routing.md](multi-endpoint-channel-routing.md) 的对象模型和回退规则为准；本节仅描述当前单入口 MVP 的既有事实。
 
 ### 路由对象
 

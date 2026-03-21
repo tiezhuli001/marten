@@ -7,6 +7,9 @@
 
 `Marten` 当前不在功能扩张期，而在 `post-MVP cleanup / 收口` 阶段。
 
+同时，到 `2026-03-22` 为止，框架分层设计已经完成，项目已具备进入最后编码阶段的文档基础。
+这份文档只负责描述当前代码已经成立的事实，不再承担未来框架分层设计本身。
+
 判断标准不是“又加了多少能力”，而是：
 
 - 是否继续收紧到单条 MVP 主链
@@ -260,5 +263,9 @@ GitHub 的 open/closed 不再直接充当业务状态真相。
 
 1. [mvp-agent-platform-core.md](mvp-agent-platform-core.md)
 2. [github-issue-pr-state-model.md](github-issue-pr-state-model.md)
-3. [mvp-evolution.md](../evolution/mvp-evolution.md)
-4. [docs/README.md](../README.md)
+3. [framework-positioning-and-private-agent-layering.md](framework-positioning-and-private-agent-layering.md)
+4. [framework-public-surface.md](framework-public-surface.md)
+5. [multi-endpoint-channel-routing.md](multi-endpoint-channel-routing.md)
+6. [rag-capability-mvp.md](rag-capability-mvp.md)
+7. [framework-implementation-plan.md](../evolution/framework-implementation-plan.md)
+8. [docs/README.md](../README.md)

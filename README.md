@@ -267,10 +267,11 @@ python -m unittest discover -s tests -v
 
 优先阅读：
 
-1. [docs/evolution/mvp-evolution.md](docs/evolution/mvp-evolution.md)
+1. [docs/architecture/current-mvp-status-summary.md](docs/architecture/current-mvp-status-summary.md)
 2. [docs/architecture/mvp-agent-platform-core.md](docs/architecture/mvp-agent-platform-core.md)
 3. [docs/architecture/github-issue-pr-state-model.md](docs/architecture/github-issue-pr-state-model.md)
-4. [docs/archive/architecture/mvp-agent-first-architecture.md](docs/archive/architecture/mvp-agent-first-architecture.md)（历史/过渡文档）
+4. [docs/evolution/mvp-evolution.md](docs/evolution/mvp-evolution.md)
+5. [docs/archive/architecture/mvp-agent-first-architecture.md](docs/archive/architecture/mvp-agent-first-architecture.md)（历史/过渡文档）
 
 ## Roadmap
 

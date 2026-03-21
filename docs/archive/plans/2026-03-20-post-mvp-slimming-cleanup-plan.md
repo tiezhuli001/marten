@@ -1,7 +1,8 @@
 # Post MVP Slimming Cleanup Plan
 
 > 更新时间：2026-03-20
-> 目标：在当前 MVP 主链稳定后，继续删除历史代码、历史文档和冗余抽象。
+> 文档状态：归档
+> 说明：这是一次具体 cleanup 批次的执行计划，已不再属于公开 `docs/evolution/` 应长期保留的内容。
 
 ## Batch 1: 收缩 review contract
 

@@ -122,13 +122,33 @@ class ReviewSkillService:
             context_path = Path(handle.name)
 
         try:
-            completed = subprocess.run(
-                [*command, prompt, "-f", str(context_path)],
-                cwd=review_dir,
-                text=True,
-                capture_output=True,
-                check=False,
-            )
+            try:
+                completed = subprocess.run(
+                    [*command, prompt, "-f", str(context_path)],
+                    cwd=review_dir,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                    timeout=self.settings.resolved_review_command_timeout_seconds,
+                )
+            except subprocess.TimeoutExpired as exc:
+                output = "\n".join(
+                    part
+                    for part in (
+                        exc.stdout.decode("utf-8", errors="ignore")
+                        if isinstance(exc.stdout, bytes)
+                        else exc.stdout,
+                        exc.stderr.decode("utf-8", errors="ignore")
+                        if isinstance(exc.stderr, bytes)
+                        else exc.stderr,
+                    )
+                    if part
+                ).strip()
+                raise RuntimeError(
+                    "Review skill command timed out after "
+                    f"{self.settings.resolved_review_command_timeout_seconds}s."
+                    + (f" Partial output: {output}" if output else "")
+                ) from exc
         finally:
             context_path.unlink(missing_ok=True)
         output = "\n".join(part for part in (completed.stdout, completed.stderr) if part).strip()

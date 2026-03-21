@@ -112,14 +112,16 @@ class RuntimeComponentTests(unittest.TestCase):
                                 "max_retries": 9,
                                 "retry_backoff_seconds": 7,
                                 "scheduler_enabled": True,
-                            }
+                            },
+                            "execution": {"timeout_seconds": 210},
+                            "validation": {"timeout_seconds": 150},
                         },
                         "llm": {
                             "request_timeout_seconds": 12.5,
                             "request_max_attempts": 4,
                             "request_retry_base_delay_seconds": 1.5,
                         },
-                        "review": {"max_repair_rounds": 5},
+                        "review": {"max_repair_rounds": 5, "command_timeout_seconds": 95},
                         "github": {"repository": "demo/repo"},
                         "channel": {"provider": "feishu"},
                     }
@@ -140,7 +142,10 @@ class RuntimeComponentTests(unittest.TestCase):
             self.assertEqual(settings.resolved_llm_request_timeout_seconds, 12.5)
             self.assertEqual(settings.resolved_llm_request_max_attempts, 4)
             self.assertEqual(settings.resolved_llm_request_retry_base_delay_seconds, 1.5)
+            self.assertEqual(settings.resolved_sleep_coding_execution_timeout_seconds, 210)
+            self.assertEqual(settings.resolved_sleep_coding_validation_timeout_seconds, 150)
             self.assertEqual(settings.resolved_review_max_repair_rounds, 5)
+            self.assertEqual(settings.resolved_review_command_timeout_seconds, 95)
             self.assertEqual(
                 settings.resolved_sleep_coding_worktree_root,
                 settings.project_root / ".custom-worktrees",
@@ -161,7 +166,10 @@ class RuntimeComponentTests(unittest.TestCase):
 
             self.assertIsNone(settings.resolved_sleep_coding_execution_command)
             self.assertTrue(settings.resolved_sleep_coding_execution_allow_llm_fallback)
+            self.assertEqual(settings.resolved_sleep_coding_execution_timeout_seconds, 600.0)
+            self.assertEqual(settings.resolved_sleep_coding_validation_timeout_seconds, 600.0)
             self.assertTrue(settings.resolved_review_writeback_final_only)
+            self.assertEqual(settings.resolved_review_command_timeout_seconds, 600.0)
             self.assertEqual(settings.resolved_review_follow_up_delay_seconds, 30)
 
     def test_settings_allow_platform_json_to_override_review_writeback_mode(self) -> None:

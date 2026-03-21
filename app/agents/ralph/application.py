@@ -60,6 +60,7 @@ class SleepCodingService:
         self.validator = validator or ValidationRunner(
             self.settings.resolved_sleep_coding_validation_command,
             project_root=self.repo_path,
+            timeout_seconds=self.settings.resolved_sleep_coding_validation_timeout_seconds,
         )
         self.ledger = ledger or TokenLedgerService(self.settings)
         self.mcp_client = mcp_client or build_default_mcp_client(self.settings)

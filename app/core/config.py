@@ -78,12 +78,15 @@ class Settings(BaseSettings):
     sleep_coding_validation_command: str = "python scripts/run_sleep_coding_validation.py"
     sleep_coding_execution_command: str | None = None
     sleep_coding_execution_allow_llm_fallback: bool = True
+    sleep_coding_execution_timeout_seconds: float = 600.0
+    sleep_coding_validation_timeout_seconds: float = 600.0
     review_runs_dir: str = "data/review-runs"
     review_workspace: str = "agents/code-review-agent"
     review_skills: str = "code-review"
     review_mcp_servers: str = "github"
     review_skill_name: str = "code-review"
     review_skill_command: str | None = None
+    review_command_timeout_seconds: float = 600.0
     review_force_blocking_first_pass: bool = False
     review_writeback_final_only: bool = True
     review_follow_up_delay_seconds: int = 30
@@ -164,11 +167,27 @@ class Settings(BaseSettings):
         )
 
     @property
+    def resolved_sleep_coding_execution_timeout_seconds(self) -> float:
+        value = self._get_platform_setting(
+            ("sleep_coding", "execution", "timeout_seconds"),
+            self.sleep_coding_execution_timeout_seconds,
+        )
+        return max(float(value), 1.0)
+
+    @property
     def resolved_review_force_blocking_first_pass(self) -> bool:
         return self._resolve_platform_bool(
             ("review", "force_blocking_first_pass"),
             self.review_force_blocking_first_pass,
         )
+
+    @property
+    def resolved_review_command_timeout_seconds(self) -> float:
+        value = self._get_platform_setting(
+            ("review", "command_timeout_seconds"),
+            self.review_command_timeout_seconds,
+        )
+        return max(float(value), 1.0)
 
     @property
     def resolved_review_writeback_final_only(self) -> bool:
@@ -638,6 +657,14 @@ class Settings(BaseSettings):
                 self.sleep_coding_validation_command,
             )
         ).strip()
+
+    @property
+    def resolved_sleep_coding_validation_timeout_seconds(self) -> float:
+        value = self._get_platform_setting(
+            ("sleep_coding", "validation", "timeout_seconds"),
+            self.sleep_coding_validation_timeout_seconds,
+        )
+        return max(float(value), 1.0)
 
     @property
     def resolved_review_max_repair_rounds(self) -> int:

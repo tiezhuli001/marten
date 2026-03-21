@@ -8,9 +8,15 @@ from app.models.schemas import ValidationResult
 
 
 class ValidationRunner:
-    def __init__(self, command: str | None = None, project_root: Path | None = None) -> None:
+    def __init__(
+        self,
+        command: str | None = None,
+        project_root: Path | None = None,
+        timeout_seconds: float = 600.0,
+    ) -> None:
         self.command = command or "python -m unittest discover -s tests"
         self.project_root = project_root
+        self.timeout_seconds = max(float(timeout_seconds), 1.0)
 
     def run(self, repo_path: Path) -> ValidationResult:
         command = self.command.strip()
@@ -73,10 +79,34 @@ class ValidationRunner:
         command_args: list[str],
         cwd: Path,
     ) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
-            command_args,
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        try:
+            return subprocess.run(
+                command_args,
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=self.timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as exc:
+            output = "\n".join(
+                part
+                for part in (
+                    exc.stdout.decode("utf-8", errors="ignore")
+                    if isinstance(exc.stdout, bytes)
+                    else exc.stdout,
+                    exc.stderr.decode("utf-8", errors="ignore")
+                    if isinstance(exc.stderr, bytes)
+                    else exc.stderr,
+                )
+                if part
+            ).strip()
+            return subprocess.CompletedProcess(
+                args=command_args,
+                returncode=124,
+                stdout="",
+                stderr=(
+                    f"Validation command timed out after {self.timeout_seconds}s."
+                    + (f"\n{output}" if output else "")
+                ),
+            )

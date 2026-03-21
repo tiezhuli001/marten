@@ -2,6 +2,7 @@ import tempfile
 import subprocess
 import unittest
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 from app.core.config import Settings
 from app.ledger.service import TokenLedgerService
@@ -21,6 +22,7 @@ from app.channel.notifications import ChannelNotificationResult
 from app.infra.git_workspace import GitWorkspaceService
 from app.agents.ralph.github_bridge import RalphGitHubBridge
 from app.agents.ralph import SleepCodingService, ValidationRunner
+from app.agents.ralph.drafting import RalphDraftingService
 
 
 class FakeGitHubService:
@@ -1066,6 +1068,54 @@ class SleepCodingServiceTests(unittest.TestCase):
 
             self.assertEqual(resolved[0], str(project_python))
             self.assertEqual(resolved[1], str(script_path))
+
+    def test_validation_runner_marks_timeout_as_failed_result(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo_path = Path(temp_dir)
+            runner = ValidationRunner(
+                command="python -m unittest",
+                project_root=repo_path,
+                timeout_seconds=12,
+            )
+
+            with patch(
+                "app.agents.ralph.validation.subprocess.run",
+                side_effect=subprocess.TimeoutExpired(cmd=["python"], timeout=12),
+            ):
+                result = runner.run(repo_path)
+
+            self.assertEqual(result.status, "failed")
+            self.assertEqual(result.exit_code, 124)
+            self.assertIn("timed out after 12.0s", result.output)
+
+    def test_local_execution_command_timeout_raises_clear_error(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo_path = Path(temp_dir)
+            settings = Settings(
+                app_env="test",
+                sleep_coding_execution_timeout_seconds=9,
+            )
+            service = RalphDraftingService(
+                settings=settings,
+                repo_path=repo_path,
+                context=Mock(),
+                tasks=Mock(),
+                agent_runtime=Mock(),
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "timed out after 9.0s"):
+                with patch(
+                    "app.agents.ralph.drafting.subprocess.run",
+                    side_effect=subprocess.TimeoutExpired(cmd=["runner"], timeout=9),
+                ):
+                    service._run_local_execution_command(
+                        command=["runner"],
+                        prompt="do work",
+                        worktree_path=repo_path,
+                        issue=SleepCodingIssue(issue_number=1, title="Timeout", body="Test"),
+                        plan=SleepCodingPlan(summary="s", scope=[], validation=[], risks=[]),
+                        head_branch="codex/test-timeout",
+                    )
 
     def test_github_bridge_coerces_string_url_payload(self) -> None:
         settings = Settings(app_env="test", github_repository="tiezhuli001/youmeng-gateway")

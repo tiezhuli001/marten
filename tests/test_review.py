@@ -1,6 +1,8 @@
 import tempfile
 import unittest
 from pathlib import Path
+import subprocess
+from unittest.mock import patch
 
 from app.agents.code_review_agent import ReviewService, ReviewSkillRunResult, ReviewSkillService
 from app.agents.ralph import SleepCodingService
@@ -561,6 +563,25 @@ class ReviewServiceTests(unittest.TestCase):
             self.assertEqual(runtime.calls, 3)
             self.assertEqual(result.output.summary, "Recovered review")
             self.assertEqual(result.output.run_mode, "real_run")
+
+    def test_review_skill_command_timeout_raises_clear_error(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = build_settings(root / "review.db", root / "review-runs").model_copy(
+                update={"review_command_timeout_seconds": 11}
+            )
+            skill = ReviewSkillService(settings)
+
+            with self.assertRaisesRegex(RuntimeError, "timed out after 11.0s"):
+                with patch(
+                    "app.agents.code_review_agent.skill.subprocess.run",
+                    side_effect=subprocess.TimeoutExpired(cmd=["reviewer"], timeout=11),
+                ):
+                    skill._run_with_command(
+                        ["reviewer"],
+                        ReviewTarget(task_id="task-timeout", workspace_path=str(root)),
+                        "review context",
+                    )
 
 
 if __name__ == "__main__":

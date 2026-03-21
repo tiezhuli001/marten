@@ -64,12 +64,17 @@
 
 建议按下面顺序推进：
 
-1. 多机器人入口和通知分流模型
-2. 框架 public API / internal API 边界
-3. 官方内置 agent 的复用方式
+1. 框架 public API / internal API 边界
+2. 官方内置 agent 的复用方式
+3. 多机器人入口和通知分流模型
 4. RAG capability 的框架接口
 5. 私有项目最小验证
 6. package 化与版本治理
+
+这样与最终实现计划保持一致：
+
+- 先定义稳定 public surface
+- 再在稳定边界上挂多 endpoint、RAG 和上层复用
 
 ## 四、短期不建议做的事
 

@@ -13,7 +13,9 @@
 1. [architecture/current-mvp-status-summary.md](architecture/current-mvp-status-summary.md)
 2. [architecture/mvp-agent-platform-core.md](architecture/mvp-agent-platform-core.md)
 3. [architecture/github-issue-pr-state-model.md](architecture/github-issue-pr-state-model.md)
-4. [evolution/mvp-evolution.md](evolution/mvp-evolution.md)
+4. [architecture/framework-positioning-and-private-agent-layering.md](architecture/framework-positioning-and-private-agent-layering.md)
+5. [evolution/mvp-evolution.md](evolution/mvp-evolution.md)
+6. [evolution/framework-package-and-private-agent-rollout-plan.md](evolution/framework-package-and-private-agent-rollout-plan.md)
 
 历史/过渡文档统一放在 `archive/`：
 

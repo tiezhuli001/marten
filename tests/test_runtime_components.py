@@ -277,12 +277,10 @@ class RuntimeComponentTests(unittest.TestCase):
                         "providers": {
                             "minimax-coding-plan": {
                                 "protocol": "openai",
-                                "apiKey": "custom-key",
-                                "options": {
-                                    "baseURL": "https://llm.example.com/v1"
-                                },
-                                "defaultModel": "MiniMax-M2.5",
-                                "pricingProvider": "minimax",
+                                "api_key": "custom-key",
+                                "api_base": "https://llm.example.com/v1",
+                                "default_model": "MiniMax-M2.5",
+                                "pricing_provider": "minimax",
                             }
                         },
                     }

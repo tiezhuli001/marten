@@ -39,7 +39,6 @@ TaskAction = Literal[
 ]
 ValidationStatus = Literal["pending", "passed", "failed", "skipped"]
 ExecutionStatus = Literal["pending", "prepared", "skipped", "completed", "failed"]
-ReviewSourceType = Literal["sleep_coding_task"]
 ControlTaskType = Literal["main_agent_intake", "sleep_coding", "code_review"]
 ControlSessionType = Literal["user_session", "agent_session", "run_session"]
 
@@ -344,15 +343,14 @@ class SleepCodingTask(BaseModel):
     updated_at: str
 
 
-class ReviewSource(BaseModel):
-    source_type: ReviewSourceType
+class ReviewTarget(BaseModel):
+    task_id: str
     repo: str | None = None
     pr_number: int | None = None
     url: str | None = None
-    local_path: str | None = None
+    workspace_path: str | None = None
     base_branch: str | None = None
     head_branch: str | None = None
-    task_id: str | None = None
 
 
 class ReviewStartRequest(BaseModel):
@@ -367,7 +365,7 @@ class ReviewRun(BaseModel):
     review_id: str
     control_task_id: str | None = None
     parent_task_id: str | None = None
-    source: ReviewSource
+    target: ReviewTarget
     status: ReviewStatus
     artifact_path: str | None = None
     comment_url: str | None = None

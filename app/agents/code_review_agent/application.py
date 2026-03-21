@@ -66,7 +66,6 @@ class ReviewService:
         self._sync_helpers()
         review_id = str(uuid4())
         target = self._build_review_target(payload.task_id)
-        source = target.to_source()
         parent_control_task = self._resolve_parent_control_task(target.task_id)
         sleep_task = self.sleep_coding.get_task(target.task_id)
         parent_run_session_id = (
@@ -94,30 +93,31 @@ class ReviewService:
             user_id=parent_control_task.user_id if parent_control_task else None,
             source=parent_control_task.source if parent_control_task else None,
             external_ref=f"review-run:{review_id}",
-            payload={"source_type": "sleep_coding_task", "blocking": is_blocking},
+            payload={"task_id": target.task_id, "blocking": is_blocking},
         )
         self.context.record_short_memory(
             run_session.session_id,
-            f"Review completed for sleep_coding_task; blocking={is_blocking}; summary={structured.summary}",
+            f"Review completed for task {target.task_id}; blocking={is_blocking}; summary={structured.summary}",
         )
         control_task = self.tasks.create_task(
             task_type="code_review",
             agent_id="code-review-agent",
             status="completed",
             parent_task_id=parent_control_task.task_id if parent_control_task else None,
-            repo=source.repo,
+            repo=target.repo,
             issue_number=None,
             title=structured.summary,
             external_ref=f"review_run:{review_id}",
             payload={
                 "review_id": review_id,
-                "source_type": "sleep_coding_task",
+                "task_id": target.task_id,
                 "blocking": is_blocking,
                 "artifact_path": str(artifact_path),
                 "comment_url": comment.html_url if comment is not None else None,
                 "run_session_id": run_session.session_id,
                 "owner_agent": "code-review-agent",
                 "source_agent": "ralph",
+                "review_target": target.model_dump(mode="json"),
                 "handoff": {
                     "task_id": target.task_id,
                     "session_id": run_session.session_id,
@@ -165,6 +165,7 @@ class ReviewService:
                     control_task_id,
                     parent_task_id,
                     source_payload,
+                    target_payload,
                     status,
                     artifact_path,
                     comment_url,
@@ -189,13 +190,14 @@ class ReviewService:
                     step_name,
                     reviewed_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 """,
                 (
                     review_id,
                     control_task.task_id,
                     control_task.parent_task_id,
-                    source.model_dump_json(),
+                    target.model_dump_json(),
+                    target.model_dump_json(),
                     "completed",
                     str(artifact_path),
                     comment.html_url if comment is not None else None,
@@ -205,7 +207,7 @@ class ReviewService:
                     json.dumps(severity_counts, ensure_ascii=True),
                     1 if is_blocking else 0,
                     structured.run_mode,
-                    source.task_id,
+                    target.task_id,
                     review_usage.prompt_tokens,
                     review_usage.completion_tokens,
                     review_usage.total_tokens,
@@ -221,6 +223,14 @@ class ReviewService:
                 ),
             )
             connection.commit()
+        self._sync_parent_review_projection(
+            target.task_id,
+            review_id=review_id,
+            is_blocking=is_blocking,
+            review_round=self.count_task_reviews(target.task_id),
+            status="completed",
+            summary=structured.summary,
+        )
         self._record_review_usage(target, review_usage)
         self.tasks.append_event(
             control_task.task_id,
@@ -325,7 +335,7 @@ class ReviewService:
             connection.commit()
 
         review = self.get_review(review_id)
-        review_target = ReviewTarget.from_source(review.source)
+        review_target = review.target
         if review.control_task_id:
             next_owner_agent = "ralph" if new_status == "changes_requested" else None
             self.tasks.update_task(
@@ -365,6 +375,14 @@ class ReviewService:
                         "next_owner_agent": next_owner_agent,
                     },
                 )
+            self._sync_parent_review_projection(
+                review.task_id,
+                review_id=review.review_id,
+                is_blocking=review.is_blocking,
+                review_round=self.count_task_reviews(review.task_id),
+                status=new_status,
+                summary=review.summary,
+            )
             if write_remote and review_target.repo and review_target.pr_number:
                 if payload.action == "request_changes":
                     self.bridge.write_pr_review(
@@ -398,7 +416,7 @@ class ReviewService:
     def publish_final_result(self, review_id: str, action: str) -> ReviewRun:
         review = self.get_review(review_id)
         body = self.bridge.render_review_decision_comment(review, action)
-        review_target = ReviewTarget.from_source(review.source)
+        review_target = review.target
         comment = self.bridge.write_comment(
             review_target,
             body,
@@ -420,6 +438,9 @@ class ReviewService:
 
     def count_blocking_reviews(self, task_id: str) -> int:
         return self.store.count_blocking_reviews(task_id)
+
+    def count_task_reviews(self, task_id: str) -> int:
+        return len(self.list_task_reviews(task_id))
 
     def _connect(self) -> sqlite3.Connection:
         return self.store.connect()
@@ -472,3 +493,29 @@ class ReviewService:
             )
         except ValueError:
             return
+
+    def _sync_parent_review_projection(
+        self,
+        task_id: str,
+        *,
+        review_id: str,
+        is_blocking: bool,
+        review_round: int,
+        status: str,
+        summary: str,
+    ) -> None:
+        parent_control_task = self._resolve_parent_control_task(task_id)
+        if parent_control_task is None:
+            return
+        blocking_count = self.count_blocking_reviews(task_id)
+        self.tasks.update_task(
+            parent_control_task.task_id,
+            payload_patch={
+                "latest_review_id": review_id,
+                "latest_review_blocking": is_blocking,
+                "latest_review_status": status,
+                "latest_review_summary": summary,
+                "review_round": review_round,
+                "blocking_review_count": blocking_count,
+            },
+        )

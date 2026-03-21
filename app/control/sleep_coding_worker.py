@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
@@ -222,22 +223,14 @@ class SleepCodingWorkerService:
         repo: str,
         issue_number: int,
     ) -> bool:
-        placeholders = ", ".join("?" for _ in self._ACTIVE_TASK_STATUSES)
-        try:
-            row = connection.execute(
-                f"""
-                SELECT task_id
-                FROM sleep_coding_tasks
-                WHERE repo = ? AND issue_number = ? AND status IN ({placeholders})
-                LIMIT 1
-                """,
-                (repo, issue_number, *sorted(self._ACTIVE_TASK_STATUSES)),
-            ).fetchone()
-        except sqlite3.OperationalError as exc:
-            if "no such table" in str(exc).lower():
-                return False
-            raise
-        return row is not None
+        del connection
+        active_task = self.tasks.find_latest_issue_task(
+            repo=repo,
+            issue_number=issue_number,
+            task_type="sleep_coding",
+            statuses=self._ACTIVE_TASK_STATUSES,
+        )
+        return active_task is not None
 
 
     def _list_open_issues(
@@ -319,18 +312,33 @@ class SleepCodingWorkerService:
         try:
             rows = connection.execute(
                 """
-                SELECT claims.repo, claims.issue_number, claims.task_id, claims.status AS claim_status,
-                       latest.task_id AS latest_task_id, latest.status AS task_status, latest.last_error
+                SELECT claims.repo,
+                       claims.issue_number,
+                       claims.task_id,
+                       claims.status AS claim_status,
+                       latest.external_ref AS latest_external_ref,
+                       latest.status AS task_status,
+                       latest.payload AS task_payload
                 FROM sleep_coding_issue_claims AS claims
                 LEFT JOIN (
-                    SELECT ranked.repo, ranked.issue_number, ranked.task_id, ranked.status, ranked.last_error
+                    SELECT ranked.repo,
+                           ranked.issue_number,
+                           ranked.external_ref,
+                           ranked.status,
+                           ranked.payload
                     FROM (
-                        SELECT repo, issue_number, task_id, status, last_error, created_at,
+                        SELECT repo,
+                               issue_number,
+                               external_ref,
+                               status,
+                               payload,
+                               created_at,
                                ROW_NUMBER() OVER (
                                    PARTITION BY repo, issue_number
                                    ORDER BY datetime(created_at) DESC, rowid DESC
                                ) AS rank_index
-                        FROM sleep_coding_tasks
+                        FROM control_tasks
+                        WHERE task_type = 'sleep_coding'
                     ) AS ranked
                     WHERE ranked.rank_index = 1
                 ) AS latest
@@ -344,12 +352,13 @@ class SleepCodingWorkerService:
                 return
             raise
         for row in rows:
-            latest_task_id = row["latest_task_id"]
+            latest_task_id = self._extract_domain_task_id(row["latest_external_ref"])
             task_status = row["task_status"]
             if not latest_task_id or not task_status:
                 continue
             if latest_task_id == row["task_id"] and task_status == row["claim_status"]:
                 continue
+            payload = self._decode_control_payload(row["task_payload"])
             lease_expires_at = None if task_status not in self._ACTIVE_TASK_STATUSES else connection.execute(
                 """
                 SELECT lease_expires_at
@@ -372,11 +381,29 @@ class SleepCodingWorkerService:
                     latest_task_id,
                     task_status,
                     lease_expires_at,
-                    row["last_error"],
+                    payload.get("last_error"),
                     row["repo"],
                     row["issue_number"],
                 ),
             )
+
+    def _decode_control_payload(self, payload: str | None) -> dict[str, object]:
+        if not payload:
+            return {}
+        try:
+            decoded = json.loads(payload)
+        except json.JSONDecodeError:
+            return {}
+        return decoded if isinstance(decoded, dict) else {}
+
+    def _extract_domain_task_id(self, external_ref: str | None) -> str | None:
+        if not external_ref:
+            return None
+        prefix = "sleep_coding_task:"
+        if not external_ref.startswith(prefix):
+            return None
+        task_id = external_ref.removeprefix(prefix).strip()
+        return task_id or None
 
     def _is_issue_eligible(self, issue: WorkerDiscoveredIssue) -> bool:
         issue_labels = set(issue.labels)

@@ -183,6 +183,23 @@ class TaskRegistryService:
         with closing(self._connect()) as connection:
             return self.tasks.find_parent_for_issue(connection, repo, issue_number)
 
+    def find_latest_issue_task(
+        self,
+        *,
+        repo: str,
+        issue_number: int,
+        task_type: ControlTaskType,
+        statuses: set[str] | None = None,
+    ) -> ControlTask | None:
+        with closing(self._connect()) as connection:
+            return self.tasks.find_latest_issue_task(
+                connection,
+                repo=repo,
+                issue_number=issue_number,
+                task_type=task_type,
+                statuses=statuses,
+            )
+
     def _ensure_parent_dir(self) -> None:
         self.database_path = ensure_writable_parent(self.database_path)
 

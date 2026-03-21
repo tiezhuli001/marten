@@ -473,10 +473,6 @@ class Settings(BaseSettings):
             self._get_provider_value(
                 provider_config,
                 "protocol",
-                "compat",
-                "compatibility",
-                "driver",
-                "transport",
             )
         )
         if protocol:
@@ -491,13 +487,6 @@ class Settings(BaseSettings):
                 self._get_provider_value(
                     provider_config,
                     "api_base",
-                    "apiBase",
-                    "base_url",
-                    "baseURL",
-                    "options.api_base",
-                    "options.apiBase",
-                    "options.base_url",
-                    "options.baseURL",
                 )
             )
             if api_base:
@@ -511,9 +500,6 @@ class Settings(BaseSettings):
             self._get_provider_value(
                 provider_config,
                 "api_key",
-                "apiKey",
-                "options.api_key",
-                "options.apiKey",
             )
         )
 
@@ -524,13 +510,6 @@ class Settings(BaseSettings):
             self._get_provider_value(
                 provider_config,
                 "api_base",
-                "apiBase",
-                "base_url",
-                "baseURL",
-                "options.api_base",
-                "options.apiBase",
-                "options.base_url",
-                "options.baseURL",
             )
         )
 
@@ -541,7 +520,6 @@ class Settings(BaseSettings):
             self._get_provider_value(
                 provider_config,
                 "default_model",
-                "defaultModel",
             )
         )
         if model:
@@ -555,7 +533,6 @@ class Settings(BaseSettings):
             self._get_provider_value(
                 provider_config,
                 "pricing_provider",
-                "pricingProvider",
             )
         )
         if value:

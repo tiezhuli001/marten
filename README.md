@@ -131,10 +131,10 @@ cp platform.json.example platform.json
   "providers": {
     "minimax": {
       "protocol": "openai",
-      "apiKey": "your-api-key",
-      "baseURL": "https://api.minimax.io/v1",
-      "defaultModel": "MiniMax-M2.5",
-      "pricingProvider": "minimax"
+      "api_key": "your-api-key",
+      "api_base": "https://api.minimax.io/v1",
+      "default_model": "MiniMax-M2.5",
+      "pricing_provider": "minimax"
     }
   }
 }
@@ -152,10 +152,10 @@ cp platform.json.example platform.json
   "providers": {
     "cpcpa": {
       "protocol": "openai",
-      "apiKey": "your-api-key",
-      "baseURL": "https://your-gateway.example.com/v1",
-      "defaultModel": "gpt-5.4-mini",
-      "pricingProvider": "openai"
+      "api_key": "your-api-key",
+      "api_base": "https://your-gateway.example.com/v1",
+      "default_model": "gpt-5.4-mini",
+      "pricing_provider": "openai"
     }
   }
 }
@@ -268,8 +268,9 @@ python -m unittest discover -s tests -v
 优先阅读：
 
 1. [docs/evolution/mvp-evolution.md](docs/evolution/mvp-evolution.md)
-2. [docs/architecture/mvp-agent-first-architecture.md](docs/architecture/mvp-agent-first-architecture.md)
+2. [docs/architecture/mvp-agent-platform-core.md](docs/architecture/mvp-agent-platform-core.md)
 3. [docs/architecture/github-issue-pr-state-model.md](docs/architecture/github-issue-pr-state-model.md)
+4. [docs/archive/architecture/mvp-agent-first-architecture.md](docs/archive/architecture/mvp-agent-first-architecture.md)（历史/过渡文档）
 
 ## Roadmap
 

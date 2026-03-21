@@ -7,7 +7,7 @@ from app.ledger.service import TokenLedgerService
 from app.models.schemas import (
     ReviewActionRequest,
     ReviewRun,
-    ReviewSource,
+    ReviewTarget,
     SleepCodingIssue,
     SleepCodingPullRequest,
     SleepCodingTaskActionRequest,
@@ -228,12 +228,11 @@ class FakeReviewService:
         is_blocking = self.blocking_sequence.pop(0) if self.blocking_sequence else False
         review = ReviewRun(
             review_id=f"review-{review_index}",
-            source=ReviewSource(
-                source_type="sleep_coding_task",
+            target=ReviewTarget(
+                task_id=task.task_id,
                 repo=task.repo,
                 pr_number=task.pull_request.pr_number if task.pull_request else None,
                 url=task.pull_request.html_url if task.pull_request else None,
-                task_id=task.task_id,
             ),
             status="completed",
             artifact_path=f"docs/review-runs/review-{review_index}.md",
@@ -292,7 +291,7 @@ class FakeReviewService:
 
     def publish_final_result(self, review_id: str, action: str) -> ReviewRun:
         review = next(review for review in self.reviews if review.review_id == review_id)
-        review.comment_url = f"https://github.com/{review.source.repo}/pull/88#final-{action}"
+        review.comment_url = f"https://github.com/{review.target.repo}/pull/88#final-{action}"
         return review
 
 

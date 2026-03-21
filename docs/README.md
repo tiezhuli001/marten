@@ -11,8 +11,11 @@
 
 1. [evolution/mvp-evolution.md](evolution/mvp-evolution.md)
 2. [architecture/mvp-agent-platform-core.md](architecture/mvp-agent-platform-core.md)
-3. [architecture/mvp-agent-first-architecture.md](architecture/mvp-agent-first-architecture.md)
-4. [architecture/github-issue-pr-state-model.md](architecture/github-issue-pr-state-model.md)
+3. [architecture/github-issue-pr-state-model.md](architecture/github-issue-pr-state-model.md)
+
+历史/过渡文档统一放在 `archive/`：
+
+- [archive/architecture/mvp-agent-first-architecture.md](archive/architecture/mvp-agent-first-architecture.md)
 
 清理原则：
 

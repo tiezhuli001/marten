@@ -1,7 +1,7 @@
 # MVP Evolution
 
-> 更新时间：2026-03-21
-> 用途：只保留当前仍有效的演进方向，不重复描述当前架构现状或阶段性执行计划。
+> 更新时间：2026-03-22
+> 用途：只保留当前仍有效的演进方向，不重复描述当前架构现状或最终实现计划。
 
 ## 文档边界
 
@@ -16,11 +16,13 @@
 
 - [current-mvp-status-summary.md](../architecture/current-mvp-status-summary.md)
 - [mvp-agent-platform-core.md](../architecture/mvp-agent-platform-core.md)
+- [framework-positioning-and-private-agent-layering.md](../architecture/framework-positioning-and-private-agent-layering.md)
+- [framework-implementation-plan.md](framework-implementation-plan.md)
 - `docs/archive/`
 
 这份文档只回答一个问题：
 
-在当前主链已经稳定之后，后续演进还应该继续把力气花在哪里？
+在当前主链已经稳定、且框架分层设计已经完成之后，后续还应该坚持哪些演进方向？
 
 ## 演进方向没有变化
 
@@ -54,13 +56,13 @@
 - 工程代码里对 agent 输出做过度兜底
 - 历史阶段性需求分析、计划文档、部署草稿
 
-## 近期演进顺序
+## 当前语境下的演进重点
 
-1. 继续压 `Ralph` 的执行编排，减少它对细粒度 writeback 的直接感知
-2. 继续压 `Code Review Agent` 的运行包装逻辑，坚持 skill-first
-3. 持续审查 `app/services/*`，只保留稳定领域服务
-4. 继续压缩配置和运行时兼容读取，坚持 canonical config
-5. 让 docs 只保留架构、演进、状态三类公开文档；阶段性交接和执行计划只进本地目录或归档
+1. 继续坚持 `prompt + MCP + skill + config` 优先，不把能力过早下沉成工程分支
+2. 继续收紧官方内置 agent 的稳定边界，而不是复制实现
+3. 继续让多入口、路由、RAG 都保持最小必要工程面
+4. 持续审查 `app/services/*`、兼容层和重复编排逻辑
+5. 保持公开文档树只表达事实、边界和执行计划，不回到阶段性草稿堆积
 
 ## 文档策略
 
@@ -78,3 +80,12 @@
 - 一次性的部署草稿
 - 仅面向在地 agent 的 handoff / 临时推演文档
 - agent 目录说明这类低信息密度文档
+
+## 当前结论
+
+这份文档现在只承担“长期方向约束”的角色。
+
+如果目标是进入实现，不应再从这里反推任务拆分，而应直接执行：
+
+- [framework-package-and-private-agent-rollout-plan.md](framework-package-and-private-agent-rollout-plan.md)
+- [framework-implementation-plan.md](framework-implementation-plan.md)

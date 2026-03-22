@@ -36,12 +36,15 @@ class ReviewService:
     ) -> None:
         self.settings = settings or get_settings()
         self.sleep_coding = sleep_coding or SleepCodingService(settings=self.settings)
-        self.skill = skill or ReviewSkillService(self.settings)
         self.tasks = tasks or TaskRegistryService(self.settings)
         self.sessions = sessions or SessionRegistryService(self.settings)
         self.context = ContextAssemblyService(self.sessions)
         self.workspace_support = ReviewWorkspaceSupport(self.settings, self.context)
-        self.mcp_client = mcp_client or build_default_mcp_client(self.settings)
+        self.mcp_client = mcp_client or self.sleep_coding.mcp_client or build_default_mcp_client(self.settings)
+        self.skill = skill or ReviewSkillService(
+            self.settings,
+            mcp_client=self.mcp_client,
+        )
         self.ledger = self.sleep_coding.ledger
         self.github_server = self.settings.mcp_github_server_name
         self.bridge = ReviewCommentBridge(

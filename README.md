@@ -189,7 +189,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 - Ralph 默认使用内建 LLM + agent runtime 生成 coding draft
 - `sleep_coding.execution.command` 只是可选覆盖，用于把 coding 委托给外部本地执行器
 - review 默认每轮本地执行，只在最终结果时统一写回远程平台
-- review 默认在 `30s` 后触发 follow-up repair loop
+- review 默认不再引入固定 follow-up delay；发现阻塞后会立即进入下一轮 repair loop
 
 常用覆盖项：
 
@@ -215,7 +215,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
   "live_test": {
     "enabled": true,
     "timeout_seconds": 900,
-    "poll_interval_seconds": 5
+    "poll_interval_seconds": 1
   }
 }
 ```

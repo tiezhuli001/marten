@@ -3,14 +3,21 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+from app.agents.code_review_agent import ReviewService
+from app.agents.ralph import SleepCodingService
+from app.control.sleep_coding_worker import SleepCodingWorkerService
 from app.core.config import Settings
 from app.models.schemas import TokenUsage
 from app.runtime.agent_runtime import AgentDescriptor, AgentRuntime
+from app.runtime import mcp as mcp_module
 from app.runtime.mcp import (
     GitHubMCPAdapter,
     MCPClient,
     InMemoryMCPServer,
+    StdioMCPServerAdapter,
+    StdioMCPServerConfig,
     load_mcp_server_definitions,
 )
 from app.runtime.skills import SkillLoader
@@ -30,6 +37,105 @@ class FakeLLMRuntime:
                 "usage": TokenUsage(total_tokens=12),
             },
         )()
+
+
+class FailingMCPClient:
+    def list_tools(self, server: str):
+        raise RuntimeError(f"{server} unavailable")
+
+
+class CountingAdapter:
+    def __init__(self) -> None:
+        self.list_calls = 0
+
+    def list_tools(self):
+        self.list_calls += 1
+        return [type("Tool", (), {"name": "issue_read", "description": ""})()]
+
+    def call_tool(self, tool: str, arguments: dict[str, object]):
+        raise NotImplementedError
+
+
+class FakeToolDefinition:
+    def __init__(self, name: str, description: str = "", input_schema: dict[str, object] | None = None) -> None:
+        self.name = name
+        self.description = description
+        self.inputSchema = input_schema or {}
+
+
+class FakeListToolsResult:
+    def __init__(self, tools: list[FakeToolDefinition]) -> None:
+        self.tools = tools
+
+
+class FakeCallToolResult:
+    def __init__(self, content: dict[str, object], is_error: bool = False) -> None:
+        self.structuredContent = content
+        self.content = []
+        self.isError = is_error
+
+
+class FakeStdioRuntime:
+    def __init__(self) -> None:
+        self.open_count = 0
+        self.close_count = 0
+        self.initialize_count = 0
+        self.list_count = 0
+        self.call_count = 0
+        self.fail_next_list = False
+
+
+class FakeStdioContext:
+    def __init__(self, runtime: FakeStdioRuntime, params: object) -> None:
+        self.runtime = runtime
+        self.params = params
+
+    async def __aenter__(self) -> tuple[str, str]:
+        self.runtime.open_count += 1
+        return ("read-stream", "write-stream")
+
+    async def __aexit__(self, exc_type, exc, tb) -> bool:
+        self.runtime.close_count += 1
+        return False
+
+
+class FakeClientSession:
+    runtime: FakeStdioRuntime | None = None
+
+    def __init__(self, read_stream: object, write_stream: object) -> None:
+        self.read_stream = read_stream
+        self.write_stream = write_stream
+
+    async def __aenter__(self) -> "FakeClientSession":
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> bool:
+        return False
+
+    async def initialize(self) -> None:
+        assert self.runtime is not None
+        self.runtime.initialize_count += 1
+
+    async def list_tools(self) -> FakeListToolsResult:
+        assert self.runtime is not None
+        self.runtime.list_count += 1
+        if self.runtime.fail_next_list:
+            self.runtime.fail_next_list = False
+            raise mcp_module.anyio.BrokenResourceError
+        return FakeListToolsResult([FakeToolDefinition("issue_read")])
+
+    async def call_tool(self, tool: str, arguments: dict[str, object], read_timeout_seconds=None) -> FakeCallToolResult:
+        assert self.runtime is not None
+        self.runtime.call_count += 1
+        return FakeCallToolResult({"tool": tool, "arguments": arguments})
+
+
+class FakeStdioServerParameters:
+    def __init__(self, command: str, args: list[str], env: dict[str, str] | None, cwd: Path | None) -> None:
+        self.command = command
+        self.args = args
+        self.env = env
+        self.cwd = cwd
 
 
 class RuntimeComponentTests(unittest.TestCase):
@@ -88,6 +194,19 @@ class RuntimeComponentTests(unittest.TestCase):
             )
             self.assertEqual(settings.resolved_llm_default_provider, "minimax")
             self.assertEqual(settings.resolved_llm_default_model, "MiniMax-M2.5")
+
+    def test_agent_runtime_surfaces_mcp_server_failures(self) -> None:
+        runtime = AgentRuntime(
+            Settings(),
+            llm_runtime=FakeLLMRuntime(),
+            mcp_client=FailingMCPClient(),
+        )
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            r"Failed to load MCP tools for server `github`: github unavailable",
+        ):
+            runtime.list_available_mcp_tools(["github"])
 
     def test_settings_prefer_platform_json_for_worker_defaults(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -170,7 +289,80 @@ class RuntimeComponentTests(unittest.TestCase):
             self.assertEqual(settings.resolved_sleep_coding_validation_timeout_seconds, 600.0)
             self.assertTrue(settings.resolved_review_writeback_final_only)
             self.assertEqual(settings.resolved_review_command_timeout_seconds, 600.0)
-            self.assertEqual(settings.resolved_review_follow_up_delay_seconds, 30)
+            self.assertEqual(settings.resolved_review_follow_up_delay_seconds, 0)
+
+    def test_mcp_client_caches_tool_catalog_per_server(self) -> None:
+        client = MCPClient()
+        adapter = CountingAdapter()
+        client.register_adapter("github", adapter)
+
+        self.assertTrue(client.has_tool("github", "issue_read"))
+        self.assertTrue(client.has_tool("github", "issue_read"))
+        self.assertEqual(adapter.list_calls, 1)
+
+    def test_stdio_mcp_adapter_reuses_initialized_session_across_calls(self) -> None:
+        runtime = FakeStdioRuntime()
+        FakeClientSession.runtime = runtime
+        adapter = StdioMCPServerAdapter(
+            StdioMCPServerConfig(server_name="github", command="fake-server", args=["stdio"])
+        )
+        with (
+            patch.object(mcp_module, "ClientSession", FakeClientSession),
+            patch.object(mcp_module, "StdioServerParameters", FakeStdioServerParameters),
+            patch.object(mcp_module, "stdio_client", lambda params: FakeStdioContext(runtime, params)),
+        ):
+            tools_first = adapter.list_tools()
+            tools_second = adapter.list_tools()
+            result = adapter.call_tool("issue_read", {"issue_number": 1})
+            adapter.close()
+
+        self.assertEqual([tool.name for tool in tools_first], ["issue_read"])
+        self.assertEqual([tool.name for tool in tools_second], ["issue_read"])
+        self.assertEqual(result.content["tool"], "issue_read")
+        self.assertEqual(runtime.open_count, 1)
+        self.assertEqual(runtime.initialize_count, 1)
+        self.assertEqual(runtime.list_count, 2)
+        self.assertEqual(runtime.call_count, 1)
+        self.assertEqual(runtime.close_count, 1)
+
+    def test_stdio_mcp_adapter_reconnects_after_broken_resource(self) -> None:
+        runtime = FakeStdioRuntime()
+        runtime.fail_next_list = True
+        FakeClientSession.runtime = runtime
+        adapter = StdioMCPServerAdapter(
+            StdioMCPServerConfig(server_name="github", command="fake-server", args=["stdio"])
+        )
+        with (
+            patch.object(mcp_module, "ClientSession", FakeClientSession),
+            patch.object(mcp_module, "StdioServerParameters", FakeStdioServerParameters),
+            patch.object(mcp_module, "stdio_client", lambda params: FakeStdioContext(runtime, params)),
+        ):
+            tools = adapter.list_tools()
+            adapter.close()
+
+        self.assertEqual([tool.name for tool in tools], ["issue_read"])
+        self.assertEqual(runtime.open_count, 2)
+        self.assertEqual(runtime.initialize_count, 2)
+        self.assertEqual(runtime.close_count, 2)
+
+    def test_review_and_worker_reuse_sleep_coding_mcp_client_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "models.json").write_text("{}", encoding="utf-8")
+            settings = Settings(
+                app_env="test",
+                database_url=f"sqlite:///{root / 'runtime.db'}",
+                models_config_path=str(root / "models.json"),
+            )
+            shared_client = MCPClient()
+            sleep_coding = SleepCodingService(settings=settings, mcp_client=shared_client)
+
+            review = ReviewService(settings=settings, sleep_coding=sleep_coding)
+            worker = SleepCodingWorkerService(settings=settings, sleep_coding=sleep_coding)
+
+            self.assertIs(review.mcp_client, shared_client)
+            self.assertIs(review.skill.mcp_client, shared_client)
+            self.assertIs(worker.mcp_client, shared_client)
 
     def test_settings_allow_platform_json_to_override_review_writeback_mode(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

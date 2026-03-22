@@ -245,7 +245,7 @@ class LiveChainIntegrationTests(unittest.TestCase):
         task_id: str,
     ) -> SleepCodingTask:
         timeout_seconds = int(self.live_config.get("timeout_seconds", 900))
-        poll_interval_seconds = max(int(self.live_config.get("poll_interval_seconds", 5)), 1)
+        poll_interval_seconds = max(int(self.live_config.get("poll_interval_seconds", 1)), 1)
         deadline = time.time() + timeout_seconds
         latest = sleep_coding.get_task(task_id)
         while time.time() < deadline:

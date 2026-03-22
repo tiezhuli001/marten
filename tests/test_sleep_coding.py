@@ -130,14 +130,20 @@ def build_github_mcp(github: FakeGitHubService) -> MCPClient:
 
 class FakeChannelService:
     def __init__(self) -> None:
-        self.messages: list[tuple[str, list[str]]] = []
+        self.messages: list[tuple[str, list[str], str | None]] = []
 
-    def notify(self, title: str, lines: list[str]) -> ChannelNotificationResult:
-        self.messages.append((title, lines))
+    def notify(
+        self,
+        title: str,
+        lines: list[str],
+        endpoint_id: str | None = None,
+    ) -> ChannelNotificationResult:
+        self.messages.append((title, lines, endpoint_id))
         return ChannelNotificationResult(
             provider="feishu",
             delivered=False,
             is_dry_run=True,
+            endpoint_id=endpoint_id,
         )
 
 
@@ -1176,7 +1182,7 @@ class SleepCodingServiceTests(unittest.TestCase):
             self.assertEqual(updated.git_execution.status, "prepared")
             self.assertIn("codex/issue-25-sleep-coding", git_workspace.cleaned_branches)
             self.assertEqual(len(channel.messages), 2)
-            self.assertTrue(any("Ralph 执行计划" in title for title, _ in channel.messages))
+            self.assertTrue(any("Ralph 执行计划" in title for title, _, _ in channel.messages))
 
     def test_repair_round_reuses_existing_pull_request(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

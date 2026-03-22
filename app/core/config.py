@@ -89,7 +89,7 @@ class Settings(BaseSettings):
     review_command_timeout_seconds: float = 600.0
     review_force_blocking_first_pass: bool = False
     review_writeback_final_only: bool = True
-    review_follow_up_delay_seconds: int = 30
+    review_follow_up_delay_seconds: int = 0
 
     model_config = SettingsConfigDict(
         env_file=".env",

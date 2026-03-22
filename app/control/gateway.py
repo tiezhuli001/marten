@@ -6,6 +6,7 @@ from uuid import uuid4
 
 from app.agents.main_agent import MainAgentService
 from app.agents.ralph import SleepCodingService
+from app.channel.endpoints import ChannelEndpointRegistry
 from app.core.config import Settings, get_settings
 from app.ledger.service import TokenLedgerService
 from app.models.schemas import (
@@ -43,11 +44,21 @@ class GatewayControlPlaneService:
         self.sleep_coding = sleep_coding or SleepCodingService(settings=self.settings, ledger=self.ledger)
         self.sessions = sessions or SessionRegistryService(self.settings)
         self.tasks = tasks or TaskRegistryService(self.settings)
+        self.endpoints = ChannelEndpointRegistry(self.settings)
 
     def run(self, payload: GatewayMessageRequest) -> GatewayMessageResponse:
         request_id = payload.request_id or str(uuid4())
         run_id = str(uuid4())
-        route = resolve_route(payload.content)
+        source_endpoint_id = self.endpoints.resolve_endpoint_id(
+            endpoint_id=payload.endpoint_id,
+            provider=payload.source,
+        )
+        binding = self.endpoints.resolve_binding(source_endpoint_id)
+        route = resolve_route(payload.content, endpoint_binding=binding)
+        delivery_endpoint_id = self.endpoints.resolve_delivery_endpoint_id(
+            source_endpoint_id=source_endpoint_id,
+            workflow=route.intent,
+        )
         chain_context = self._resolve_chain_context(
             payload=payload,
             request_id=request_id,
@@ -62,6 +73,8 @@ class GatewayControlPlaneService:
             content=payload.content,
             target_agent=route.target_agent,
             direct_mention=route.direct_mention,
+            source_endpoint_id=source_endpoint_id,
+            delivery_endpoint_id=delivery_endpoint_id,
             linked_user_session_id=chain_context.linked_user_session_id,
             parent_task_id=chain_context.parent_task_id,
         )
@@ -74,6 +87,8 @@ class GatewayControlPlaneService:
                 request_id=request_id,
                 run_id=run_id,
                 chain_request_id=chain_context.chain_request_id,
+                source_endpoint_id=source_endpoint_id,
+                delivery_endpoint_id=delivery_endpoint_id,
             )
         recorded = self.ledger.record_request(
             request_id=request_id,
@@ -92,6 +107,7 @@ class GatewayControlPlaneService:
             token_usage=recorded,
             task_id=task_id,
             run_session_id=run_session.session_id,
+            delivery_endpoint_id=delivery_endpoint_id,
         )
 
     def _ensure_sessions(
@@ -105,6 +121,8 @@ class GatewayControlPlaneService:
         content: str,
         target_agent: str,
         direct_mention: bool,
+        source_endpoint_id: str,
+        delivery_endpoint_id: str,
         linked_user_session_id: str | None = None,
         parent_task_id: str | None = None,
     ):
@@ -113,6 +131,10 @@ class GatewayControlPlaneService:
             external_ref=f"{source}:{user_id}",
             user_id=user_id,
             source=source,
+            payload={
+                "source_endpoint_id": source_endpoint_id,
+                "delivery_endpoint_id": delivery_endpoint_id,
+            },
         )
         self.sessions.set_active_agent(user_session.session_id, target_agent)
         return self.sessions.get_or_create_session(
@@ -125,8 +147,11 @@ class GatewayControlPlaneService:
                 "intent": intent,
                 "content": content,
                 "target_agent": target_agent,
+                "active_workflow": intent,
                 "direct_mention": direct_mention,
                 "chain_request_id": chain_request_id,
+                "source_endpoint_id": source_endpoint_id,
+                "delivery_endpoint_id": delivery_endpoint_id,
                 "linked_user_session_id": linked_user_session_id,
                 "parent_task_id": parent_task_id,
             },
@@ -177,16 +202,31 @@ class GatewayControlPlaneService:
         request_id: str,
         run_id: str,
         chain_request_id: str,
+        source_endpoint_id: str,
+        delivery_endpoint_id: str,
     ) -> tuple[TokenUsage, str, str | None]:
         if route.target_agent == "ralph":
-            return self._handle_sleep_coding(payload, chain_request_id)
-        return self._handle_general(payload, request_id, run_id)
+            return self._handle_sleep_coding(
+                payload,
+                chain_request_id,
+                source_endpoint_id,
+                delivery_endpoint_id,
+            )
+        return self._handle_general(
+            payload,
+            request_id,
+            run_id,
+            source_endpoint_id,
+            delivery_endpoint_id,
+        )
 
     def _handle_general(
         self,
         payload: GatewayMessageRequest,
         request_id: str,
         run_id: str,
+        source_endpoint_id: str,
+        delivery_endpoint_id: str,
     ) -> tuple[TokenUsage, str, str | None]:
         intake = self.main_agent.intake(
             MainAgentIntakeRequest(
@@ -196,6 +236,8 @@ class GatewayControlPlaneService:
                 request_id=request_id,
                 run_id=run_id,
                 persist_usage=False,
+                source_endpoint_id=source_endpoint_id,
+                delivery_endpoint_id=delivery_endpoint_id,
             )
         )
         message = f"{intake.message}. Issue URL: {intake.issue.html_url or 'n/a'}."
@@ -212,6 +254,8 @@ class GatewayControlPlaneService:
         self,
         payload: GatewayMessageRequest,
         request_id: str,
+        source_endpoint_id: str,
+        delivery_endpoint_id: str,
     ) -> tuple[TokenUsage, str, str | None]:
         issue_number = self._extract_issue_number(payload.content)
         if issue_number is None:
@@ -226,6 +270,8 @@ class GatewayControlPlaneService:
                 issue_number=issue_number,
                 request_id=request_id,
                 notify_plan_ready=True,
+                source_endpoint_id=source_endpoint_id,
+                delivery_endpoint_id=delivery_endpoint_id,
             )
         )
         message = (

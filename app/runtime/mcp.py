@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import json
 import os
+import queue
+import threading
 from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, Protocol
-from contextlib import asynccontextmanager
 
 try:
     import anyio
@@ -78,13 +79,20 @@ class MCPServerConfigDefinition:
 class MCPClient:
     def __init__(self) -> None:
         self._adapters: dict[str, MCPServerAdapter] = {}
+        self._tool_cache: dict[str, list[MCPTool]] = {}
 
     def register_adapter(self, server: str, adapter: MCPServerAdapter) -> None:
         self._adapters[server] = adapter
+        self._tool_cache.pop(server, None)
 
     def list_tools(self, server: str) -> list[MCPTool]:
+        cached = self._tool_cache.get(server)
+        if cached is not None:
+            return list(cached)
         adapter = self._require_adapter(server)
-        return adapter.list_tools()
+        tools = adapter.list_tools()
+        self._tool_cache[server] = list(tools)
+        return list(tools)
 
     def has_tool(self, server: str, tool: str) -> bool:
         return any(candidate.name == tool for candidate in self.list_tools(server))
@@ -106,85 +114,211 @@ class MCPClient:
 class StdioMCPServerAdapter:
     def __init__(self, config: StdioMCPServerConfig) -> None:
         self.config = config
+        self._lock = threading.RLock()
+        self._runtime: _StdioSessionRuntime | None = None
         self._require_sdk()
 
     def list_tools(self) -> list[MCPTool]:
-        return anyio.run(self._list_tools_async)
+        with self._lock:
+            runtime = self._ensure_runtime_locked()
+            try:
+                return runtime.list_tools()
+            except BaseException as exc:
+                if not self._is_recoverable_session_error(exc):
+                    raise
+                self._close_runtime_locked()
+                return self._ensure_runtime_locked().list_tools()
 
     def call_tool(self, tool: str, arguments: dict[str, Any]) -> MCPToolResult:
-        return anyio.run(self._call_tool_async, tool, arguments)
+        with self._lock:
+            runtime = self._ensure_runtime_locked()
+            try:
+                return runtime.call_tool(tool, arguments)
+            except BaseException as exc:
+                if not self._is_recoverable_session_error(exc):
+                    raise
+                self._close_runtime_locked()
+                return self._ensure_runtime_locked().call_tool(tool, arguments)
 
-    async def _list_tools_async(self) -> list[MCPTool]:
-        async with self._open_session() as session:
-            result = await session.list_tools()
-        return [
-            MCPTool(
-                server=self.config.server_name,
-                name=tool.name,
-                description=tool.description or "",
-                input_schema=tool.inputSchema or {},
-            )
-            for tool in result.tools
-        ]
+    def close(self) -> None:
+        with self._lock:
+            self._close_runtime_locked()
 
-    async def _call_tool_async(self, tool: str, arguments: dict[str, Any]) -> MCPToolResult:
-        async with self._open_session() as session:
-            result = await session.call_tool(
-                tool,
-                arguments,
-                read_timeout_seconds=timedelta(seconds=self.config.timeout_seconds),
-            )
-        return MCPToolResult(
-            server=self.config.server_name,
-            tool=tool,
-            content=self._extract_content(result),
-            is_error=bool(result.isError),
+    def _ensure_runtime_locked(self) -> "_StdioSessionRuntime":
+        if self._runtime is None:
+            self._runtime = _StdioSessionRuntime(self.config)
+        return self._runtime
+
+    def _close_runtime_locked(self) -> None:
+        if self._runtime is None:
+            return
+        self._runtime.close()
+        self._runtime = None
+
+    def _is_recoverable_session_error(self, exc: BaseException) -> bool:
+        if isinstance(exc, BaseExceptionGroup):
+            return any(self._is_recoverable_session_error(item) for item in exc.exceptions)
+        recoverable_types = (
+            anyio.BrokenResourceError,
+            anyio.ClosedResourceError,
+            anyio.EndOfStream,
         )
+        return isinstance(exc, recoverable_types)
 
-    @asynccontextmanager
-    async def _open_session(self) -> Any:
+    def _require_sdk(self) -> None:
+        if (
+            anyio is None
+            or ClientSession is None
+            or StdioServerParameters is None
+            or stdio_client is None
+        ):
+            raise RuntimeError(
+                "The `mcp` package is required for stdio MCP adapters. Install project dependencies first."
+            )
+
+
+class _AsyncStdioSession:
+    def __init__(self, config: StdioMCPServerConfig) -> None:
+        self.config = config
+
+    async def run(self, request_queue: "queue.Queue[_SessionRequest]") -> None:
         params = StdioServerParameters(
             command=self.config.command,
             args=self.config.args,
             env=self.config.env or None,
             cwd=self.config.cwd,
         )
+        async with stdio_client(params) as (read_stream, write_stream):
+            async with ClientSession(read_stream, write_stream) as session:
+                await session.initialize()
+                while True:
+                    request = await anyio.to_thread.run_sync(request_queue.get)
+                    if request.kind == "close":
+                        request.succeed(None)
+                        return
+                    try:
+                        if request.kind == "list_tools":
+                            result = await session.list_tools()
+                            request.succeed(_build_mcp_tools(self.config.server_name, result))
+                            continue
+                        if request.kind == "call_tool":
+                            result = await session.call_tool(
+                                request.tool,
+                                request.arguments,
+                                read_timeout_seconds=timedelta(seconds=self.config.timeout_seconds),
+                            )
+                            request.succeed(
+                                MCPToolResult(
+                                    server=self.config.server_name,
+                                    tool=request.tool,
+                                    content=_extract_call_tool_content(result),
+                                    is_error=bool(result.isError),
+                                )
+                            )
+                            continue
+                        request.fail(RuntimeError(f"Unsupported MCP request kind: {request.kind}"))
+                    except BaseException as exc:
+                        request.fail(exc)
+                        raise
+
+
+class _StdioSessionRuntime:
+    def __init__(self, config: StdioMCPServerConfig) -> None:
+        self._config = config
+        self._terminal_error: BaseException | None = None
+        self._request_queue: queue.Queue[_SessionRequest] = queue.Queue()
+        self._thread = threading.Thread(
+            target=self._run_session_thread,
+            name=f"mcp-session-{config.server_name}",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def list_tools(self) -> list[MCPTool]:
+        return self._submit(_SessionRequest(kind="list_tools"))
+
+    def call_tool(self, tool: str, arguments: dict[str, Any]) -> MCPToolResult:
+        return self._submit(_SessionRequest(kind="call_tool", tool=tool, arguments=arguments))
+
+    def close(self) -> None:
+        if not self._thread.is_alive():
+            return
         try:
-            async with stdio_client(params) as (read_stream, write_stream):
-                async with ClientSession(read_stream, write_stream) as session:
-                    await session.initialize()
-                    yield session
-        except* anyio.BrokenResourceError:
-            # Some MCP stdio servers close their stdout immediately after a successful
-            # request. Treat that shutdown race as benign so diagnostics stay stable.
+            self._submit(_SessionRequest(kind="close"), timeout_seconds=5.0)
+        except BaseException:
             pass
+        self._thread.join(timeout=5.0)
 
-    def _extract_content(self, result: CallToolResult) -> Any:
-        if result.structuredContent is not None:
-            return result.structuredContent
-        if len(result.content) == 1 and isinstance(result.content[0], TextContent):
-            text = result.content[0].text.strip()
-            if not text:
-                return ""
-            try:
-                return json.loads(text)
-            except json.JSONDecodeError:
-                return text
-        normalized: list[Any] = []
-        for item in result.content:
-            if isinstance(item, TextContent):
-                normalized.append(item.text)
-            elif hasattr(item, "model_dump"):
-                normalized.append(item.model_dump(mode="json"))
-            else:
-                normalized.append(item)
-        return normalized
+    def _submit(self, request: "_SessionRequest", timeout_seconds: float | None = None) -> Any:
+        if not self._thread.is_alive():
+            if self._terminal_error is not None:
+                raise self._terminal_error
+            raise RuntimeError(f"MCP session thread stopped for server `{self._config.server_name}`")
+        self._request_queue.put(request)
+        return request.await_result(timeout_seconds)
 
-    def _require_sdk(self) -> None:
-        if anyio is None or ClientSession is None or StdioServerParameters is None or stdio_client is None:
-            raise RuntimeError(
-                "The `mcp` package is required for stdio MCP adapters. Install project dependencies first."
-            )
+    def _run_session_thread(self) -> None:
+        try:
+            anyio.run(self._serve)
+        except BaseException as exc:
+            self._terminal_error = exc
+
+    async def _serve(self) -> None:
+        await _AsyncStdioSession(self._config).run(self._request_queue)
+
+
+@dataclass
+class _SessionRequest:
+    kind: str
+    tool: str = ""
+    arguments: dict[str, Any] = field(default_factory=dict)
+    _response_queue: "queue.Queue[tuple[bool, Any]]" = field(default_factory=queue.Queue)
+
+    def succeed(self, value: Any) -> None:
+        self._response_queue.put((True, value))
+
+    def fail(self, exc: BaseException) -> None:
+        self._response_queue.put((False, exc))
+
+    def await_result(self, timeout_seconds: float | None = None) -> Any:
+        succeeded, value = self._response_queue.get(timeout=timeout_seconds)
+        if not succeeded:
+            raise value
+        return value
+
+
+def _extract_call_tool_content(result: CallToolResult) -> Any:
+    if result.structuredContent is not None:
+        return result.structuredContent
+    if len(result.content) == 1 and isinstance(result.content[0], TextContent):
+        text = result.content[0].text.strip()
+        if not text:
+            return ""
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            return text
+    normalized: list[Any] = []
+    for item in result.content:
+        if isinstance(item, TextContent):
+            normalized.append(item.text)
+        elif hasattr(item, "model_dump"):
+            normalized.append(item.model_dump(mode="json"))
+        else:
+            normalized.append(item)
+    return normalized
+
+
+def _build_mcp_tools(server_name: str, result: Any) -> list[MCPTool]:
+    return [
+        MCPTool(
+            server=server_name,
+            name=tool.name,
+            description=tool.description or "",
+            input_schema=tool.inputSchema or {},
+        )
+        for tool in result.tools
+    ]
 
 
 class GitHubMCPAdapter:

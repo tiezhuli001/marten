@@ -119,6 +119,8 @@ class MainAgentService:
                 "agent_session_id": agent_session.session_id,
                 "request_id": request_id,
                 "run_id": run_id,
+                "source_endpoint_id": payload.source_endpoint_id,
+                "delivery_endpoint_id": payload.delivery_endpoint_id,
             },
         )
         self.tasks.append_event(
@@ -164,6 +166,7 @@ class MainAgentService:
                 self._summarize_issue_body(issue.body),
                 "Ralph 正在处理中，完成后将自动提交 Pull Request...",
             ],
+            endpoint_id=payload.delivery_endpoint_id,
         )
         self.tasks.append_event(
             control_task.task_id,
@@ -172,6 +175,7 @@ class MainAgentService:
                 "provider": notification.provider,
                 "delivered": notification.delivered,
                 "is_dry_run": notification.is_dry_run,
+                "endpoint_id": notification.endpoint_id,
                 "stage": "issue_created",
             },
         )
@@ -226,6 +230,7 @@ class MainAgentService:
                 return self.agent_runtime.generate_structured_output(
                     self._build_agent_descriptor(),
                     user_prompt=prompt,
+                    workflow="general",
                     output_contract=(
                         "Return strict JSON with keys `title`, `body`, and `labels`. "
                         "The labels array must include `agent:ralph` and `workflow:sleep-coding`."

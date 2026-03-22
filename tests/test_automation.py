@@ -152,11 +152,21 @@ class FakeGitHubService:
 
 class FakeChannelService:
     def __init__(self) -> None:
-        self.notifications: list[tuple[str, list[str]]] = []
+        self.notifications: list[tuple[str, list[str], str | None]] = []
 
-    def notify(self, title: str, lines: list[str]) -> ChannelNotificationResult:
-        self.notifications.append((title, lines))
-        return ChannelNotificationResult(provider="feishu", delivered=False, is_dry_run=True)
+    def notify(
+        self,
+        title: str,
+        lines: list[str],
+        endpoint_id: str | None = None,
+    ) -> ChannelNotificationResult:
+        self.notifications.append((title, lines, endpoint_id))
+        return ChannelNotificationResult(
+            provider="feishu",
+            delivered=False,
+            is_dry_run=True,
+            endpoint_id=endpoint_id,
+        )
 
 
 class FakeGitWorkspaceService:
@@ -394,7 +404,7 @@ class AutomationServiceTests(unittest.TestCase):
             updated = automation.handle_sleep_coding_action(task.task_id, "approve_plan")
 
             self.assertEqual(updated.status, "approved")
-            self.assertTrue(any("任务完成" in title for title, _ in channel.notifications))
+            self.assertTrue(any("任务完成" in title for title, _, _ in channel.notifications))
             final_lines = channel.notifications[-1][1]
             self.assertIn("工作总结:", final_lines)
             self.assertIn("二、关键变更说明", final_lines)
@@ -436,7 +446,9 @@ class AutomationServiceTests(unittest.TestCase):
             updated = automation.handle_sleep_coding_action(task.task_id, "approve_plan")
 
             self.assertEqual(updated.status, "changes_requested")
-            self.assertTrue(any("Manual review required" in title for title, _ in channel.notifications))
+            self.assertTrue(
+                any("Manual review required" in title for title, _, _ in channel.notifications)
+            )
 
     def test_real_review_service_can_force_one_blocking_pass_then_approve(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

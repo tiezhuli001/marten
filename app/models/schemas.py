@@ -127,6 +127,7 @@ class GatewayMessageRequest(BaseModel):
     source: str = "manual"
     request_id: str | None = None
     chain_request_id: str | None = None
+    endpoint_id: str | None = None
 
 
 class GatewayMessageResponse(BaseModel):
@@ -137,6 +138,7 @@ class GatewayMessageResponse(BaseModel):
     token_usage: TokenUsage
     task_id: str | None = None
     run_session_id: str | None = None
+    delivery_endpoint_id: str | None = None
 
 
 class GitHubIssueDraft(BaseModel):
@@ -172,6 +174,8 @@ class MainAgentIntakeRequest(BaseModel):
     request_id: str | None = None
     run_id: str | None = None
     persist_usage: bool = True
+    source_endpoint_id: str | None = None
+    delivery_endpoint_id: str | None = None
 
 
 class MainAgentIntakeResponse(BaseModel):
@@ -310,6 +314,8 @@ class SleepCodingTaskRequest(BaseModel):
     request_id: str | None = None
     parent_task_id: str | None = None
     notify_plan_ready: bool = True
+    source_endpoint_id: str | None = None
+    delivery_endpoint_id: str | None = None
 
 
 class SleepCodingTaskActionRequest(BaseModel):
@@ -420,6 +426,32 @@ class ControlSession(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
     created_at: str
     updated_at: str
+
+
+class ChannelEndpoint(BaseModel):
+    endpoint_id: str
+    provider: str
+    mode: str = "primary"
+    entry_enabled: bool = True
+    delivery_enabled: bool = True
+    webhook_url: str | None = None
+    external_refs: list[str] = Field(default_factory=list)
+
+
+class EndpointBinding(BaseModel):
+    endpoint_id: str
+    default_agent: str = "main-agent"
+    default_workflow: str = "general"
+    delivery_policy: dict[str, Any] = Field(default_factory=lambda: {"mode": "same_endpoint"})
+    allowed_handoffs: list[str] = Field(default_factory=list)
+
+
+class ConversationRoute(BaseModel):
+    session_id: str
+    source_endpoint_id: str
+    active_agent: str
+    active_workflow: str
+    delivery_endpoint_id: str | None = None
 
 
 SleepCodingWorkerPollResponse.model_rebuild()

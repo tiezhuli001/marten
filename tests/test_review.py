@@ -127,8 +127,18 @@ def build_github_mcp(github: FakeGitHubService) -> MCPClient:
 
 
 class FakeChannelService:
-    def notify(self, title: str, lines: list[str]) -> ChannelNotificationResult:
-        return ChannelNotificationResult(provider="feishu", delivered=False, is_dry_run=True)
+    def notify(
+        self,
+        title: str,
+        lines: list[str],
+        endpoint_id: str | None = None,
+    ) -> ChannelNotificationResult:
+        return ChannelNotificationResult(
+            provider="feishu",
+            delivered=False,
+            is_dry_run=True,
+            endpoint_id=endpoint_id,
+        )
 
 
 class FakeGitWorkspaceService:

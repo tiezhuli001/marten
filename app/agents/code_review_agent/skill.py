@@ -268,6 +268,7 @@ class ReviewSkillService:
                 return self.agent_runtime.generate_structured_output(
                     self._build_agent_descriptor(),
                     user_prompt=user_prompt,
+                    workflow="code_review",
                     output_contract=output_contract,
                 )
             except Exception as exc:

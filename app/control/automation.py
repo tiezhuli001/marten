@@ -440,7 +440,11 @@ class AutomationService:
             review_round=review_round,
             max_repair_rounds=self.max_repair_rounds,
         )
-        notification = self.channel.notify(title=title, lines=lines)
+        notification = self.channel.notify(
+            title=title,
+            lines=lines,
+            endpoint_id=self._resolve_delivery_endpoint_id(task),
+        )
         self._record_notification(task, stage=f"review_round_{review_round}", notification=notification)
 
     def _publish_manual_handoff(
@@ -455,7 +459,11 @@ class AutomationService:
             blocking_reviews=blocking_reviews,
             max_repair_rounds=self.max_repair_rounds,
         )
-        notification = self.channel.notify(title=title, lines=lines)
+        notification = self.channel.notify(
+            title=title,
+            lines=lines,
+            endpoint_id=self._resolve_delivery_endpoint_id(task),
+        )
         self._record_notification(task, stage="manual_handoff", notification=notification)
         payload = {
             "review_id": review.review_id,
@@ -471,7 +479,11 @@ class AutomationService:
         review: ReviewRun | None = None,
     ) -> None:
         title, lines = self.delivery.build_final_delivery(task, review)
-        notification = self.channel.notify(title=title, lines=lines)
+        notification = self.channel.notify(
+            title=title,
+            lines=lines,
+            endpoint_id=self._resolve_delivery_endpoint_id(task),
+        )
         self._record_notification(task, stage="final_delivery", notification=notification)
         payload = {
             "task_status": task.status,
@@ -523,6 +535,7 @@ class AutomationService:
                     "provider": notification.provider,
                     "delivered": notification.delivered,
                     "is_dry_run": notification.is_dry_run,
+                    "endpoint_id": notification.endpoint_id,
                     "stage": stage,
                 },
             )
@@ -535,7 +548,17 @@ class AutomationService:
                     "provider": notification.provider,
                     "delivered": notification.delivered,
                     "is_dry_run": notification.is_dry_run,
+                    "endpoint_id": notification.endpoint_id,
                     "stage": stage,
                     "domain_task_id": task.task_id,
                 },
             )
+
+    def _resolve_delivery_endpoint_id(self, task: SleepCodingTask) -> str | None:
+        control_task = self._get_control_task(task)
+        if control_task is None:
+            return None
+        endpoint_id = control_task.payload.get("delivery_endpoint_id")
+        if isinstance(endpoint_id, str) and endpoint_id.strip():
+            return endpoint_id
+        return None

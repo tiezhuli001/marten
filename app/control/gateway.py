@@ -90,6 +90,11 @@ class GatewayControlPlaneService:
                 source_endpoint_id=source_endpoint_id,
                 delivery_endpoint_id=delivery_endpoint_id,
             )
+        self._record_routing_failure(
+            task_id=task_id,
+            route=route,
+            source_endpoint_id=source_endpoint_id,
+        )
         recorded = self.ledger.record_request(
             request_id=request_id,
             run_id=run_id,
@@ -108,6 +113,28 @@ class GatewayControlPlaneService:
             task_id=task_id,
             run_session_id=run_session.session_id,
             delivery_endpoint_id=delivery_endpoint_id,
+        )
+
+    def _record_routing_failure(
+        self,
+        *,
+        task_id: str | None,
+        route: GatewayRoute,
+        source_endpoint_id: str,
+    ) -> None:
+        if task_id is None:
+            return
+        if route.routing_failure_reason is None or route.requested_agent is None:
+            return
+        self.tasks.append_event(
+            task_id,
+            "routing_failure",
+            {
+                "requested_agent": route.requested_agent,
+                "resolved_agent": route.target_agent,
+                "reason": route.routing_failure_reason,
+                "source_endpoint_id": source_endpoint_id,
+            },
         )
 
     def _ensure_sessions(

@@ -16,6 +16,8 @@ class GatewayRoute:
     intent: IntentType
     target_agent: str
     direct_mention: bool = False
+    requested_agent: str | None = None
+    routing_failure_reason: str | None = None
 
 
 def classify_intent(content: str) -> IntentType:
@@ -27,7 +29,19 @@ def resolve_route(content: str, endpoint_binding: EndpointBinding | None = None)
     if any(keyword in lowered for keyword in STATS_KEYWORDS):
         return GatewayRoute(intent="stats_query", target_agent="main-agent")
     if _contains_any(lowered, RALPH_MENTIONS):
-        return GatewayRoute(intent="sleep_coding", target_agent="ralph", direct_mention=True)
+        if _handoff_allowed(endpoint_binding, "ralph"):
+            return GatewayRoute(intent="sleep_coding", target_agent="ralph", direct_mention=True)
+        fallback = _resolve_endpoint_default_route(endpoint_binding) or GatewayRoute(
+            intent="general",
+            target_agent="main-agent",
+        )
+        return GatewayRoute(
+            intent=fallback.intent,
+            target_agent=fallback.target_agent,
+            direct_mention=False,
+            requested_agent="ralph",
+            routing_failure_reason="handoff_not_allowed",
+        )
     if _contains_any(lowered, REVIEW_MENTIONS):
         return GatewayRoute(intent="general", target_agent="main-agent")
     endpoint_route = _resolve_endpoint_default_route(endpoint_binding)
@@ -60,3 +74,21 @@ def _resolve_endpoint_default_route(
     if default_workflow == "general":
         return GatewayRoute(intent="general", target_agent="main-agent")
     return None
+
+
+def _handoff_allowed(
+    endpoint_binding: EndpointBinding | None,
+    requested_agent: str,
+) -> bool:
+    if endpoint_binding is None:
+        return True
+    if endpoint_binding.default_agent == requested_agent:
+        return True
+    if endpoint_binding.endpoint_id == "default" and not endpoint_binding.allowed_handoffs:
+        return True
+    allowed = {
+        value.strip()
+        for value in endpoint_binding.allowed_handoffs
+        if isinstance(value, str) and value.strip()
+    }
+    return requested_agent in allowed

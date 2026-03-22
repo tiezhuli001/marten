@@ -1,52 +1,83 @@
 # Docs
 
-本目录只保留当前公开仓库需要的正式文档。到 `2026-03-22` 为止，设计阶段已经结束，公开文档树的目标是：
+本目录现在按“当前真相”和“历史材料”分层。
 
-- 说明当前代码事实
-- 固化长期有效的架构边界
-- 给后续编码 agent 提供可直接执行的实现依据
+目标只有三个：
 
-- `architecture/`: 长期有效的系统边界和状态模型
-- `evolution/`: 当前仍有效的演进方向
-- `archive/`: 历史方案和阶段性计划归档
+- 说明当前仍成立的系统事实
+- 固化当前 agent system 与 RAG 的稳定边界
+- 让任何 agent 只靠 handoff、设计文档、执行计划就能继续推进
 
-公开树与内部工作内容请严格分离。`docs/internal/` 只应作为本地开发目录存在，不是公开文档树的一部分；需要共享的内容，应先提炼后写入 `architecture/` 或 `evolution/`。
+目录语义如下：
 
-建议阅读顺序：
+- `architecture/`: 当前正式生效的架构边界、状态模型、系统 contract
+- `evolution/`: 当前仍有效的演进约束与 rollout 方向
+- `handoffs/`: 交接文档规则与模板
+- `plans/`: 当前可执行的实现计划
+- `archive/`: 历史方案、旧阶段计划、已被取代的设计文档
 
-1. 当前代码与主链事实
-   [architecture/current-mvp-status-summary.md](architecture/current-mvp-status-summary.md)
-   [architecture/github-issue-pr-state-model.md](architecture/github-issue-pr-state-model.md)
-2. 当前平台核心与边界
-   [architecture/mvp-agent-platform-core.md](architecture/mvp-agent-platform-core.md)
-   [architecture/framework-positioning-and-private-agent-layering.md](architecture/framework-positioning-and-private-agent-layering.md)
-   [architecture/framework-public-surface.md](architecture/framework-public-surface.md)
-3. 本轮新增实现规格
-   [architecture/multi-endpoint-channel-routing.md](architecture/multi-endpoint-channel-routing.md)
-   [architecture/rag-capability-mvp.md](architecture/rag-capability-mvp.md)
-4. 演进方向与编码计划
-   [evolution/mvp-evolution.md](evolution/mvp-evolution.md)
-   [evolution/framework-package-and-private-agent-rollout-plan.md](evolution/framework-package-and-private-agent-rollout-plan.md)
-   [evolution/framework-implementation-plan.md](evolution/framework-implementation-plan.md)
+`docs/internal/` 只作为本地工作目录存在，不属于公开主文档树。需要共享的内容，应先提炼后进入 `architecture/`、`evolution/`、`handoffs/` 或 `plans/`。
 
-如果目标是直接进入实现，最少需要先读完下面 5 份文档：
+## Current Source Of Truth
 
-1. [architecture/framework-positioning-and-private-agent-layering.md](architecture/framework-positioning-and-private-agent-layering.md)
-2. [architecture/framework-public-surface.md](architecture/framework-public-surface.md)
-3. [architecture/multi-endpoint-channel-routing.md](architecture/multi-endpoint-channel-routing.md)
-4. [architecture/rag-capability-mvp.md](architecture/rag-capability-mvp.md)
-5. [evolution/framework-implementation-plan.md](evolution/framework-implementation-plan.md)
+如果你要理解当前 `Marten`，推荐按下面顺序阅读。
 
-历史/过渡文档统一放在 `archive/`：
+### 1. 当前主链与状态事实
 
-- [archive/README.md](archive/README.md)
-- [archive/architecture/mvp-agent-first-architecture.md](archive/architecture/mvp-agent-first-architecture.md)
+- [architecture/current-mvp-status-summary.md](architecture/current-mvp-status-summary.md)
+- [architecture/github-issue-pr-state-model.md](architecture/github-issue-pr-state-model.md)
+- [architecture/mvp-agent-platform-core.md](architecture/mvp-agent-platform-core.md)
 
-清理原则：
+### 2. 当前 agent system 正式边界
 
-- 不保留历史 phase 文档
-- 不保留 requirements / plans 的阶段性副本
-- 不保留 review 归档和运行产物
-- 不保留一次性部署草稿和低信息密度说明文档
-- 不把内部 handoff、执行计划、临时推演直接放进公开文档树
-- 不让 `architecture/` 和 `evolution/` 同时承担同一层语义
+- [architecture/agent-system-overview.md](architecture/agent-system-overview.md)
+- [architecture/agent-runtime-contracts.md](architecture/agent-runtime-contracts.md)
+
+### 3. 当前 RAG 正式边界
+
+- [architecture/rag-provider-surface.md](architecture/rag-provider-surface.md)
+
+### 4. 当前演进方向
+
+- [evolution/mvp-evolution.md](evolution/mvp-evolution.md)
+- [evolution/agent-system-rollout-plan.md](evolution/agent-system-rollout-plan.md)
+- [evolution/rag-provider-rollout-plan.md](evolution/rag-provider-rollout-plan.md)
+
+### 5. 当前执行依据
+
+- [handoffs/README.md](handoffs/README.md)
+- [handoffs/templates/agent-handoff-template.md](handoffs/templates/agent-handoff-template.md)
+- [plans/2026-03-22-agent-system-documentation-and-rollout.md](plans/2026-03-22-agent-system-documentation-and-rollout.md)
+- [plans/2026-03-22-rag-provider-surface-rollout.md](plans/2026-03-22-rag-provider-surface-rollout.md)
+
+## Minimal Read Set Before Implementation
+
+如果目标是继续实现，而不是重新讨论方向，至少先读完下面 7 份文档：
+
+1. [architecture/current-mvp-status-summary.md](architecture/current-mvp-status-summary.md)
+2. [architecture/github-issue-pr-state-model.md](architecture/github-issue-pr-state-model.md)
+3. [architecture/agent-system-overview.md](architecture/agent-system-overview.md)
+4. [architecture/agent-runtime-contracts.md](architecture/agent-runtime-contracts.md)
+5. [architecture/rag-provider-surface.md](architecture/rag-provider-surface.md)
+6. [plans/2026-03-22-agent-system-documentation-and-rollout.md](plans/2026-03-22-agent-system-documentation-and-rollout.md)
+7. [plans/2026-03-22-rag-provider-surface-rollout.md](plans/2026-03-22-rag-provider-surface-rollout.md)
+
+## Historical References
+
+上一轮设计与执行计划已经完成使命，不再作为主入口文档，现已下沉到 `archive/`：
+
+- [archive/architecture/2026-03-22-framework-positioning-and-private-agent-layering.md](archive/architecture/2026-03-22-framework-positioning-and-private-agent-layering.md)
+- [archive/architecture/2026-03-22-framework-public-surface.md](archive/architecture/2026-03-22-framework-public-surface.md)
+- [archive/architecture/2026-03-22-multi-endpoint-channel-routing.md](archive/architecture/2026-03-22-multi-endpoint-channel-routing.md)
+- [archive/architecture/2026-03-22-rag-capability-mvp.md](archive/architecture/2026-03-22-rag-capability-mvp.md)
+- [archive/plans/2026-03-22-framework-package-and-private-agent-rollout-plan.md](archive/plans/2026-03-22-framework-package-and-private-agent-rollout-plan.md)
+- [archive/plans/2026-03-22-framework-implementation-plan.md](archive/plans/2026-03-22-framework-implementation-plan.md)
+
+这些文档仍可用于回溯“为什么会这样演进”，但不应继续充当当前实现入口。
+
+## Cleaning Rules
+
+- 不让 `architecture/` 同时承载“当前真相”和“上一轮设计推演”
+- 不让 `evolution/` 同时承载“长期方向”和“已经完成的旧计划”
+- 不把内部临时 handoff、工作日志、运行产物直接暴露为主文档
+- 任何已经被新 canonical 文档覆盖的旧文档，应先总结，再归档

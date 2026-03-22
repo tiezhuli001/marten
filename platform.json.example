@@ -7,6 +7,58 @@
     "timeout_seconds": 900,
     "poll_interval_seconds": 5
   },
+  "rag": {
+    "providers": {
+      "local-qdrant": {
+        "kind": "qdrant",
+        "url": "http://127.0.0.1:6333",
+        "model_name": "BAAI/bge-small-zh-v1.5",
+        "model_path": "/absolute/path/to/models/bge-small-zh-v1.5",
+        "device": "cpu"
+      },
+      "local-milvus": {
+        "kind": "milvus",
+        "uri": "./milvus-data/marten-docs.db",
+        "model_name": "BAAI/bge-small-zh-v1.5",
+        "model_path": "/absolute/path/to/models/bge-small-zh-v1.5",
+        "device": "cpu",
+        "search_params": {
+          "metric_type": "COSINE"
+        },
+        "vector_field": "vector",
+        "primary_field": "id"
+      }
+    },
+    "domains": {
+      "repo-docs": {
+        "domain_type": "operational",
+        "owner": "framework",
+        "visibility": "shared",
+        "provider": "local-qdrant",
+        "collection_name": "marten-docs"
+      },
+      "repo-docs-milvus": {
+        "domain_type": "operational",
+        "owner": "framework",
+        "visibility": "shared",
+        "provider": "local-milvus",
+        "collection_name": "marten_docs_milvus"
+      }
+    },
+    "policies": [
+      {
+        "agent_id": "main-agent",
+        "workflow": "general",
+        "domains": ["repo-docs"],
+        "top_k": 4,
+        "trigger_mode": "always",
+        "merge_mode": "append",
+        "max_tokens": 1200,
+        "dedupe": true,
+        "citation_mode": "inline"
+      }
+    ]
+  },
   "sleep_coding": {
     "git": {
       "enable_commit": false,

@@ -5,7 +5,7 @@
 > 更新时间：2026-03-22
 > 目标：把 `Marten` 收口成一个小而硬的 agent platform core，用统一 contract 承载当前 MVP 主链：`main-agent -> ralph -> code-review-agent`。
 
-> 边界说明：本文件描述当前平台核心的长期有效骨架。关于 `Marten` 作为框架、官方内置 agent 可复用边界、多 endpoint 和 RAG MVP 的新增实现规格，以 `framework-*`、`multi-endpoint-*`、`rag-*` 文档为准。
+> 边界说明：本文件描述当前平台核心的长期有效骨架。关于当前正式生效的 agent system、agent contract 与 RAG provider surface，请以 `agent-system-*`、`agent-runtime-contracts.md`、`rag-provider-surface.md` 为准；上一轮已完成的设计推演已迁入 `docs/archive/`。
 
 ## 一、北极星
 
@@ -211,7 +211,7 @@ MVP 采用 `mixed-entry` 模型，但保持实现很薄。
 
 `code-review-agent` 属于主链后置阶段，不作为默认用户直达入口。
 
-未来若支持多机器人入口，应以 [multi-endpoint-channel-routing.md](multi-endpoint-channel-routing.md) 的对象模型和回退规则为准；本节仅描述当前单入口 MVP 的既有事实。
+未来若支持多机器人入口，应优先以 [agent-system-overview.md](agent-system-overview.md) 所约束的当前 system surface 为准；上一轮 `multi-endpoint` 设计文档已迁入 `docs/archive/`，仅作历史参考。本节只描述当前单入口 MVP 的既有事实。
 
 ### 路由对象
 

@@ -1,38 +1,64 @@
 ## Goal
 
-检查 `docs/evolution` 对应实现是否完整，必要时修复并验证；并完成一轮完整测试，确认服务达到可用阶段。
+在统一 `RAGFacade` / provider surface 不变的前提下，补齐真实 `Milvus` 接入，并把文档索引推进到具备最小可用的增量同步与 collection schema 管理。
 
 ## Baseline
 
-- `docs/evolution/`
-- `docs/archive/status/STATUS.md`（路径不存在，已确认）
+- `docs/architecture/rag-provider-surface.md`
+- `docs/evolution/rag-provider-rollout-plan.md`
+- `docs/plans/2026-03-22-rag-provider-surface-rollout.md`
+- `platform.json`
 
 ## Done Criteria
 
-- 读完 evolution 与关联 architecture 文档
-- 核对实现与测试覆盖
-- 修复安全且在范围内的缺口
-- 跑相关验证并记录结果
-- 跑完整测试轮并确认关键链路可用
+- 真实 `Milvus` provider 接入完成，不改 `RAGFacade` 调用面
+- `search/fetch` 映射通过测试与真实 smoke test
+- `platform.json` 可装配 `Milvus` provider
+- `docs/` 语料成功写入本地 `Milvus`
+- 文档索引具备最小增量同步与 schema 守卫
+- 相关单元测试通过
+- 完成一轮目标偏移检查
+- `STATUS.md` 与当前状态一致
 
 ## Done
 
-- 读取 `docs/evolution` 三份文档与四份关联 architecture 文档
-- 确认仓库内不存在用户给定的 `docs/archive/status/STATUS.md`
-- 识别出当前实现已覆盖 public surface / multi-endpoint / RAG 的基础骨架
-- 跑通现有针对性测试：`python3 -m unittest tests.test_framework_public_surface tests.test_channel_routing tests.test_rag_capability tests.test_private_project_example`
-- 建立工作分支 `codex/evolution-implementation-audit`
-- 新增回归测试，锁定两个文档缺口：
-- `MartenFramework` 缺少稳定 facade 收口
-- `allowed_handoffs` 未阻止显式 handoff，且未记录 routing failure
-- 补齐 `MartenFramework` 对 channel/session/context/task/runtime/rag 的公开入口
-- 在 gateway routing 中执行 `allowed_handoffs`，对被拒绝的显式 `@ralph` 回退到默认路由并记录 `routing_failure` 事件
-- 跑通扩展后的回归集合：`python3 -m unittest tests.test_framework_public_surface tests.test_gateway tests.test_channel_routing tests.test_rag_capability tests.test_private_project_example tests.test_mvp_e2e`
-- 按仓库推荐入口跑完整测试轮：`python3 -m unittest discover -s tests -v`
-- 在当前配置下，`live_test.enabled=true`，完整测试轮包含 `tests.test_live_chain` 在内并通过
-- 修复 live chain 暴露出的 LLM timeout 缺口：`TimeoutError` 现在会进入统一重试路径
-- 新增回归测试：`tests.test_llm_runtime.SharedLLMRuntimeTests.test_generate_retries_timeout_errors_with_exponential_backoff`
-- 重新跑完整测试轮，最新结果提升为 147 tests 全绿
+- 完成 agent system / RAG provider 文档重构，当前主入口已收口到 `docs/architecture/*`、`docs/evolution/*`、`docs/plans/*`
+- 收紧 `agents/main-agent/AGENTS.md`、`agents/ralph/AGENTS.md`、`agents/code-review-agent/AGENTS.md`，与新的 runtime contracts 对齐
+- 升级 `app/rag/retrieval.py`，形成统一 `RetrievalRequest` / `RetrievedDocument` / `RetrievalResponse` surface，并支持按 `platform.json` 自动注册 provider
+- 新增 `app/rag/providers/qdrant.py` 与 `app/rag/providers/milvus.py`，保持 facade contract 不变
+- 更新 `app/rag/__init__.py`，导出新的 retrieval surface
+- 在 `platform.json` 与 `platform.json.example` 中加入真实 Qdrant RAG 配置，覆盖 `main-agent`、`ralph`、`code-review-agent`
+- 新增 `scripts/index_docs_to_qdrant.py`
+- 在 `platform.json` 与 `platform.json.example` 中加入 `local-milvus` provider 与 `repo-docs-milvus` domain 配置
+- 新增 `scripts/index_docs_to_milvus.py`
+- 新增共享索引模块 `app/rag/indexing.py`
+- 创建本地数据目录 `/Users/litiezhu/workspace/github/qdrant-data`
+- 创建本地模型目录 `/Users/litiezhu/workspace/github/models`
+- 创建本地 `Milvus Lite` 数据目录 `/Users/litiezhu/workspace/github/milvus-data`
+- 拉起本地 Qdrant 容器 `marten-qdrant`，监听 `http://127.0.0.1:6333`
+- 下载本地模型到 `/Users/litiezhu/workspace/github/models/bge-small-zh-v1.5`
+- 使用 `docs/**/*.md` 完成首轮索引，写入 collection `marten-docs`
+- 安装 `pymilvus` 与 `milvus-lite`
+- 真实接入 `MilvusRetrievalProvider`：
+- 支持 `uri` / `token` / `db_name` / `vector_field` / `primary_field` / `search_params` / 本地 embedding 配置
+- 使用 `pymilvus` 连接与 collection API 完成真实 `search/fetch`
+- 支持从 `domain.metadata["collection_name"]` 解析实际 collection
+- `item_ref` 统一为 `{collection}:{id}`
+- 强化 `tests/test_rag_capability.py`：
+- 覆盖 `Milvus` 的 `search/fetch` 映射
+- 覆盖 `RAGFacade` 从 `platform.json` 装配 `MilvusRetrievalProvider`
+- 新增 `tests/test_rag_indexing.py`
+- 覆盖 markdown chunk 稳定切片、重复标题唯一 ID、增量同步计划
+- 为 `Qdrant` / `Milvus` 索引脚本补充最小 schema 守卫与 manifest 驱动的增量同步
+- 修复索引主键稳定性 bug：同文件重复标题 chunk 现在使用 occurrence 参与 stable id，避免 manifest 冲突导致每轮重复 upsert
+- 验证 `Qdrant` 与 `Milvus` 第二轮索引都可收敛到 `0 upserts / 0 deletes`
+- 完成一轮目标偏移检查：本轮实现仍然围绕统一 provider surface；`Milvus` 只是新增 provider 实现与本地索引能力，没有改 `RAGFacade` 调用 contract
+- 修复 `QdrantRetrievalProvider` 的真实运行时问题：
+- 改为优先使用显式 `query_points` 检索，避免误走 `qdrant-client` 的隐式 embedding / `fastembed` 路径
+- 保留旧 `query()` 仅作为兼容 fallback
+- 强化 `tests/test_rag_capability.py`，覆盖“client 同时暴露 `query` 和 `query_points` 时必须优先走 `query_points`”
+- 清理 `requirements.txt` 中重复的 `tiktoken` 依赖项
+- 完成目标偏移检查：实现仍然符合统一 provider surface 设计，没有把调用面耦合到具体向量库 SDK
 
 ## In Progress
 
@@ -40,21 +66,21 @@
 
 ## Next
 
-- 如需继续提高上线把握度，可补一轮手动 smoke run / API 启动验证
-- 如需合并，可继续做代码评审或提交整理
+- 如需继续深化，可把 `Milvus Lite` 本地模式和远端 `Milvus Standalone/Distributed` 配置切换补成更明确的运行手册
+- 如需继续深化，可补充 provider 级 filter compatibility、rerank、observability 指标
 
 ## Blockers
 
-- `pytest` 本地不可用，需改用 `python3 -m unittest`
-- 用户给定状态文件路径不存在
+- 无
 
 ## Verification
 
-- `python3 -m unittest tests.test_framework_public_surface tests.test_channel_routing tests.test_rag_capability tests.test_private_project_example` -> PASS
-- `pytest -q tests/test_framework_public_surface.py tests/test_channel_routing.py tests/test_rag_capability.py tests/test_private_project_example.py` -> FAIL (`pytest: command not found`)
-- `python3 -m unittest tests.test_framework_public_surface tests.test_gateway` -> PASS
-- `python3 -m unittest tests.test_framework_public_surface tests.test_gateway tests.test_channel_routing tests.test_rag_capability tests.test_private_project_example tests.test_mvp_e2e` -> PASS
-- `python3 -m unittest tests.test_llm_runtime.SharedLLMRuntimeTests.test_generate_retries_timeout_errors_with_exponential_backoff -v` -> PASS
-- `python3 -m unittest tests.test_llm_runtime -v` -> PASS (`Ran 17 tests ... OK`)
-- `python3 -m unittest tests.test_live_chain -v` -> PASS (`Ran 1 test in 89.508s ... OK`)
-- `python3 -m unittest discover -s tests -v` -> PASS (`Ran 147 tests in 96.170s`, includes live configuration path because `platform.json` has `live_test.enabled=true`)
+- `docker ps --filter name=marten-qdrant --format '{{.Names}}\t{{.Status}}\t{{.Ports}}'` -> PASS（`marten-qdrant` 运行中，`6333` 已映射）
+- `curl http://127.0.0.1:6333/collections` -> PASS（返回 `marten-docs` collection）
+- `python scripts/index_docs_to_qdrant.py` -> PASS（首轮入库成功，随后稳定到 `chunks_upserted=0`, `chunks_deleted=0`, `chunks_unchanged=413`）
+- `python scripts/index_docs_to_milvus.py` -> PASS（首轮入库成功，随后稳定到 `chunks_upserted=0`, `chunks_deleted=0`, `chunks_unchanged=413`）
+- `python - <<'PY' ... RAGFacade(...).retrieve_response(agent_id='main-agent', workflow='general', query='主链路 main agent ralph code review final delivery') ... PY` -> PASS（`provider=qdrant`, `count=4`）
+- `python - <<'PY' ... for agent_id in ['main-agent', 'ralph', 'code-review-agent'] ... retrieve_response(...) ... PY` -> PASS（三个 agent 都命中 `qdrant`, 各返回 `4` 条结果）
+- `python - <<'PY' ... repo-docs-milvus policy ... RAGFacade(...).retrieve_response(...) ... fetched=... PY` -> PASS（`provider=milvus`, `count=4`, `fetch` 正常）
+- `python -m unittest tests.test_rag_indexing tests.test_rag_capability tests.test_runtime_components tests.test_framework_public_surface tests.test_automation -v` -> PASS（`Ran 43 tests in 6.749s ... OK`）
+- `rg -n "Qdrant|Milvus|provider surface|main-agent|ralph|code-review-agent|collection_name|retrieve_response" docs/architecture docs/plans docs/evolution -g '*.md'` -> PASS（文档与实现焦点一致）

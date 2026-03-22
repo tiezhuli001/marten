@@ -16,8 +16,11 @@
 
 - [current-mvp-status-summary.md](../architecture/current-mvp-status-summary.md)
 - [mvp-agent-platform-core.md](../architecture/mvp-agent-platform-core.md)
-- [framework-positioning-and-private-agent-layering.md](../architecture/framework-positioning-and-private-agent-layering.md)
-- [framework-implementation-plan.md](framework-implementation-plan.md)
+- [agent-system-overview.md](../architecture/agent-system-overview.md)
+- [agent-runtime-contracts.md](../architecture/agent-runtime-contracts.md)
+- [rag-provider-surface.md](../architecture/rag-provider-surface.md)
+- [agent-system-rollout-plan.md](agent-system-rollout-plan.md)
+- [rag-provider-rollout-plan.md](rag-provider-rollout-plan.md)
 - `docs/archive/`
 
 这份文档只回答一个问题：
@@ -87,5 +90,7 @@
 
 如果目标是进入实现，不应再从这里反推任务拆分，而应直接执行：
 
-- [framework-package-and-private-agent-rollout-plan.md](framework-package-and-private-agent-rollout-plan.md)
-- [framework-implementation-plan.md](framework-implementation-plan.md)
+- [agent-system-rollout-plan.md](agent-system-rollout-plan.md)
+- [rag-provider-rollout-plan.md](rag-provider-rollout-plan.md)
+
+上一轮已经完成使命的设计与计划文档已迁入 `docs/archive/`，避免历史推演继续与当前入口混用。

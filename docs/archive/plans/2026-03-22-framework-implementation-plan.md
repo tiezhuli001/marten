@@ -18,11 +18,11 @@
 
 实现前，编码 agent 必须先读下面 5 份文档：
 
-1. [framework-positioning-and-private-agent-layering.md](../architecture/framework-positioning-and-private-agent-layering.md)
-2. [framework-public-surface.md](../architecture/framework-public-surface.md)
-3. [multi-endpoint-channel-routing.md](../architecture/multi-endpoint-channel-routing.md)
-4. [rag-capability-mvp.md](../architecture/rag-capability-mvp.md)
-5. [framework-package-and-private-agent-rollout-plan.md](framework-package-and-private-agent-rollout-plan.md)
+1. [2026-03-22-framework-positioning-and-private-agent-layering.md](../architecture/2026-03-22-framework-positioning-and-private-agent-layering.md)
+2. [2026-03-22-framework-public-surface.md](../architecture/2026-03-22-framework-public-surface.md)
+3. [2026-03-22-multi-endpoint-channel-routing.md](../architecture/2026-03-22-multi-endpoint-channel-routing.md)
+4. [2026-03-22-rag-capability-mvp.md](../architecture/2026-03-22-rag-capability-mvp.md)
+5. [2026-03-22-framework-package-and-private-agent-rollout-plan.md](2026-03-22-framework-package-and-private-agent-rollout-plan.md)
 
 ## 三、实现总原则
 

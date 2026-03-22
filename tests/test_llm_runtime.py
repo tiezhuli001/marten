@@ -482,6 +482,40 @@ class SharedLLMRuntimeTests(unittest.TestCase):
         self.assertEqual(len(transport.calls), 3)
         self.assertEqual(delays, [1.0, 2.0])
 
+    def test_generate_retries_timeout_errors_with_exponential_backoff(self) -> None:
+        transport = FlakyTransport(
+            failures=[
+                TimeoutError("read timed out"),
+                TimeoutError("read timed out again"),
+            ],
+            response_payload={
+                "id": "resp-openai-timeout-retry",
+                "choices": [{"message": {"content": "Recovered after timeout"}}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            },
+        )
+        delays = []
+        runtime = SharedLLMRuntime(
+            Settings(
+                openai_api_key="test-openai-key",
+                llm_request_max_attempts=3,
+                llm_request_retry_base_delay_seconds=1.0,
+            ),
+            transport=transport,
+            sleep_fn=delays.append,
+        )
+
+        response = runtime.generate(
+            LLMRequest(
+                messages=[LLMMessage(role="user", content="retry on timeout please")],
+                provider="openai",
+            )
+        )
+
+        self.assertEqual(response.output_text, "Recovered after timeout")
+        self.assertEqual(len(transport.calls), 3)
+        self.assertEqual(delays, [1.0, 2.0])
+
     def test_generate_raises_after_max_attempts(self) -> None:
         transport = FlakyTransport(
             failures=[

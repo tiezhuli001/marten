@@ -1,4 +1,7 @@
 import unittest
+import json
+import tempfile
+from pathlib import Path
 
 from app.core.config import Settings
 from app.control.gateway import GatewayControlPlaneService
@@ -53,6 +56,7 @@ class FakeLedgerService:
 class FakeTaskRegistryService:
     def __init__(self, parent_request_id: str | None = None) -> None:
         self.parent_request_id = parent_request_id
+        self.events = []
 
     def find_parent_for_issue(self, repo: str, issue_number: int):  # noqa: ANN001
         if self.parent_request_id is None:
@@ -68,6 +72,10 @@ class FakeTaskRegistryService:
                 },
             },
         )()
+
+    def append_event(self, task_id: str, event_type: str, payload: dict):  # noqa: ANN001
+        self.events.append((task_id, event_type, payload))
+        return None
 
 
 class FakeSleepCodingService:
@@ -166,6 +174,64 @@ class GatewayRoutingTests(unittest.TestCase):
         self.assertEqual(response.intent, "sleep_coding")
         self.assertEqual(sleep_coding.requests[0].issue_number, 55)
         self.assertEqual(sessions.payload_updates[-1][1], "ralph")
+
+    def test_disallowed_direct_handoff_falls_back_and_records_routing_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            platform_json = root / "platform.json"
+            platform_json.write_text(
+                json.dumps(
+                    {
+                        "channel": {
+                            "provider": "feishu",
+                            "default_endpoint": "main-entry",
+                            "endpoints": {
+                                "main-entry": {
+                                    "provider": "feishu",
+                                    "mode": "primary",
+                                    "entry_enabled": True,
+                                    "delivery_enabled": True,
+                                    "default_agent": "main-agent",
+                                    "default_workflow": "general",
+                                    "allowed_handoffs": [],
+                                }
+                            },
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            sessions = FakeSessionRegistryService()
+            tasks = FakeTaskRegistryService()
+            service = GatewayControlPlaneService(
+                settings=Settings(
+                    app_env="test",
+                    database_url=f"sqlite:///{root / 'gateway.db'}",
+                    platform_config_path=str(platform_json),
+                ),
+                main_agent=FakeMainAgentService(),
+                sessions=sessions,
+                ledger=FakeLedgerService(),
+                tasks=tasks,
+            )
+
+            response = service.run(
+                GatewayMessageRequest(
+                    user_id="feishu:test-user",
+                    source="feishu",
+                    endpoint_id="main-entry",
+                    content="@ralph 请接手 issue #55",
+                )
+            )
+
+            self.assertEqual(response.intent, "general")
+            self.assertEqual(response.task_id, "control-task-101")
+            self.assertEqual(sessions.payload_updates[-1][1], "main-agent")
+            self.assertEqual(len(tasks.events), 1)
+            self.assertEqual(tasks.events[0][0], "control-task-101")
+            self.assertEqual(tasks.events[0][1], "routing_failure")
+            self.assertEqual(tasks.events[0][2]["requested_agent"], "ralph")
+            self.assertEqual(tasks.events[0][2]["reason"], "handoff_not_allowed")
 
 
 if __name__ == "__main__":

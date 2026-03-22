@@ -88,6 +88,28 @@ class FrameworkPublicSurfaceTests(unittest.TestCase):
             self.assertEqual(config_surface["default_model_profile"], ("openai", "gpt-5-mini"))
             self.assertEqual(config_surface["builtin_agent_ids"], ["main-agent", "ralph", "code-review-agent"])
 
+    def test_framework_facade_exposes_supported_extension_surfaces(self) -> None:
+        from app.framework import MartenFramework
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = Settings(
+                app_env="test",
+                database_url=f"sqlite:///{root / 'framework.db'}",
+            )
+
+            framework = MartenFramework(settings)
+
+            self.assertEqual(
+                framework.channel_endpoints().resolve_binding("missing-endpoint").default_agent,
+                "main-agent",
+            )
+            self.assertEqual(framework.context().build_agent_input(session_id=None, current_input="hello"), "hello")
+            self.assertEqual(framework.sessions().__class__.__name__, "SessionRegistryService")
+            self.assertEqual(framework.tasks().__class__.__name__, "TaskRegistryService")
+            self.assertEqual(framework.runtime().__class__.__name__, "AgentRuntime")
+            self.assertEqual(framework.rag().__class__.__name__, "RAGFacade")
+
 
 if __name__ == "__main__":
     unittest.main()

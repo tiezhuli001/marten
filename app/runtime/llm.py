@@ -242,6 +242,13 @@ class SharedLLMRuntime:
                     payload=payload,
                     timeout=timeout,
                 )
+            except TimeoutError as exc:
+                last_error = RuntimeError(f"LLM provider request timed out after {timeout} seconds")
+                if attempt >= max_attempts:
+                    break
+                delay_seconds = base_delay * (2 ** (attempt - 1))
+                if delay_seconds > 0:
+                    self.sleep_fn(delay_seconds)
             except RuntimeError as exc:
                 last_error = exc
                 if attempt >= max_attempts:

@@ -160,11 +160,21 @@ class ImmediateBackgroundJobs:
 
 class FakeChannelService:
     def __init__(self) -> None:
-        self.notifications: list[tuple[str, list[str]]] = []
+        self.notifications: list[tuple[str, list[str], str | None]] = []
 
-    def notify(self, title: str, lines: list[str]) -> ChannelNotificationResult:
-        self.notifications.append((title, lines))
-        return ChannelNotificationResult(provider="feishu", delivered=False, is_dry_run=True)
+    def notify(
+        self,
+        title: str,
+        lines: list[str],
+        endpoint_id: str | None = None,
+    ) -> ChannelNotificationResult:
+        self.notifications.append((title, lines, endpoint_id))
+        return ChannelNotificationResult(
+            provider="feishu",
+            delivered=False,
+            is_dry_run=True,
+            endpoint_id=endpoint_id,
+        )
 
 
 class FakeGitHubService:
@@ -484,11 +494,13 @@ class MVPE2ETests(unittest.TestCase):
             self.assertIsNone(review_task.payload["next_owner_agent"])
             self.assertEqual(user_session.payload["active_agent"], "main-agent")
             self.assertGreater(task.token_usage.total_tokens, 0)
-            self.assertTrue(any("Review round 1" in title for title, _ in channel.notifications))
-            issue_notifications = [lines for title, lines in channel.notifications if "Ralph 任务开始" in title]
+            self.assertTrue(any("Review round 1" in title for title, _, _ in channel.notifications))
+            issue_notifications = [
+                lines for title, lines, _ in channel.notifications if "Ralph 任务开始" in title
+            ]
             self.assertTrue(issue_notifications)
             self.assertTrue(any(any(line.startswith("任务摘要:") for line in lines) for lines in issue_notifications))
-            self.assertTrue(any("任务完成" in title for title, _ in channel.notifications))
+            self.assertTrue(any("任务完成" in title for title, _, _ in channel.notifications))
             self.assertTrue(github.pr_comments)
             self.assertIn("## Ralph Review Decision", github.pr_comments[-1][1])
             self.assertIn("- Decision: Approved", github.pr_comments[-1][1])
@@ -571,10 +583,10 @@ class MVPE2ETests(unittest.TestCase):
             self.assertEqual(task.background_follow_up_status, "completed")
             self.assertEqual(len(reviews), 1)
             self.assertEqual(reviews[0].status, "approved")
-            self.assertTrue(any("Review round 1" in title for title, _ in channel.notifications))
+            self.assertTrue(any("Review round 1" in title for title, _, _ in channel.notifications))
             self.assertTrue(github.pr_comments)
             self.assertIn("## Ralph Review Decision", github.pr_comments[-1][1])
-            self.assertTrue(any("任务完成" in title for title, _ in channel.notifications))
+            self.assertTrue(any("任务完成" in title for title, _, _ in channel.notifications))
 
     def test_gateway_api_to_worker_to_final_delivery_keeps_single_request_usage(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -707,12 +719,15 @@ class MVPE2ETests(unittest.TestCase):
             self.assertEqual(review_payload["token_usage"]["total_tokens"], review_usage.total_tokens)
             self.assertEqual(review_payload["token_usage"]["step_name"], "code_review")
 
-            final_title, final_lines = channel.notifications[-1]
+            final_title, final_lines, _ = channel.notifications[-1]
             self.assertIn("任务完成", final_title)
-            self.assertTrue(any("Ralph 任务开始" in title for title, _ in channel.notifications))
-            self.assertTrue(any("Ralph 执行计划" in title for title, _ in channel.notifications))
-            self.assertTrue(any("Review round 1" in title for title, _ in channel.notifications))
-            self.assertNotIn("ready for confirmation", "\n".join(title for title, _ in channel.notifications))
+            self.assertTrue(any("Ralph 任务开始" in title for title, _, _ in channel.notifications))
+            self.assertTrue(any("Ralph 执行计划" in title for title, _, _ in channel.notifications))
+            self.assertTrue(any("Review round 1" in title for title, _, _ in channel.notifications))
+            self.assertNotIn(
+                "ready for confirmation",
+                "\n".join(title for title, _, _ in channel.notifications),
+            )
             self.assertIn("工作总结:", final_lines)
             self.assertIn("一、修改文件清单", final_lines)
             self.assertIn("二、关键变更说明", final_lines)
@@ -867,12 +882,14 @@ class MVPE2ETests(unittest.TestCase):
             self.assertEqual(payload["automation_follow_up"]["mode"], "worker_poll")
             self.assertEqual(payload["automation_follow_up"]["claimed_count"], 1)
 
-            self.assertFalse(any("ready for confirmation" in title for title, _ in channel.notifications))
-            self.assertTrue(any("Ralph 任务开始" in title for title, _ in channel.notifications))
-            self.assertTrue(any("Ralph 执行计划" in title for title, _ in channel.notifications))
-            self.assertTrue(any("Review round 1" in title for title, _ in channel.notifications))
-            self.assertTrue(any("任务完成" in title for title, _ in channel.notifications))
-            final_title, final_lines = channel.notifications[-1]
+            self.assertFalse(
+                any("ready for confirmation" in title for title, _, _ in channel.notifications)
+            )
+            self.assertTrue(any("Ralph 任务开始" in title for title, _, _ in channel.notifications))
+            self.assertTrue(any("Ralph 执行计划" in title for title, _, _ in channel.notifications))
+            self.assertTrue(any("Review round 1" in title for title, _, _ in channel.notifications))
+            self.assertTrue(any("任务完成" in title for title, _, _ in channel.notifications))
+            final_title, final_lines, _ = channel.notifications[-1]
             self.assertIn("任务完成", final_title)
             self.assertIn("工作总结:", final_lines)
             self.assertIn("二、关键变更说明", final_lines)

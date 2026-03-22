@@ -66,6 +66,7 @@ class RalphDraftingService:
                 response = self.agent_runtime.generate_structured_output(
                     self.build_agent_descriptor(),
                     user_prompt=prompt,
+                    workflow="sleep_coding",
                     output_contract=(
                         "Return strict JSON with keys `summary`, `scope`, `validation`, and `risks`. "
                         "Each non-summary key must be an array of short strings. "
@@ -170,6 +171,7 @@ class RalphDraftingService:
                 response = self.agent_runtime.generate_structured_output(
                     self.build_agent_descriptor(),
                     user_prompt=prompt,
+                    workflow="sleep_coding",
                     output_contract=(
                         "Return strict JSON with keys `artifact_markdown`, `commit_message`, and `file_changes`. "
                         "`artifact_markdown` must be markdown for `.sleep_coding/issue-<number>.md`. "

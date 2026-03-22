@@ -6,6 +6,7 @@ import json
 from dataclasses import dataclass
 from typing import Mapping
 
+from app.channel.endpoints import ChannelEndpointRegistry
 from app.control.workflow import GatewayWorkflowService
 from app.core.config import Settings
 from app.models.schemas import GatewayMessageRequest, GatewayMessageResponse
@@ -27,6 +28,7 @@ class FeishuWebhookService:
     ) -> None:
         self.settings = settings
         self.workflow = workflow or GatewayWorkflowService(settings)
+        self.endpoints = ChannelEndpointRegistry(settings)
 
     def handle_event(
         self,
@@ -52,6 +54,10 @@ class FeishuWebhookService:
                 user_id=message.user_id,
                 content=message.content,
                 source="feishu",
+                endpoint_id=self.endpoints.resolve_endpoint_id(
+                    provider="feishu",
+                    external_ref=message.chat_id,
+                ),
             )
         )
         return self._build_ack_response(

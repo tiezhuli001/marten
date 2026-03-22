@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass
 from urllib import error, request
 
+from app.channel.endpoints import ChannelEndpointRegistry
 from app.core.config import Settings
 
 
@@ -13,24 +14,38 @@ class ChannelNotificationResult:
     provider: str
     delivered: bool
     is_dry_run: bool
+    endpoint_id: str | None = None
 
 
 class ChannelNotificationService:
     def __init__(self, settings: Settings) -> None:
+        self.settings = settings
         self.provider = settings.resolved_channel_provider
         self.webhook_url = None if settings.app_env == "test" else settings.channel_webhook_url
+        self.endpoints = ChannelEndpointRegistry(settings)
 
-    def notify(self, title: str, lines: list[str]) -> ChannelNotificationResult:
-        if not self.webhook_url:
+    def notify(
+        self,
+        title: str,
+        lines: list[str],
+        endpoint_id: str | None = None,
+    ) -> ChannelNotificationResult:
+        endpoint = self.endpoints.get_endpoint(endpoint_id) if endpoint_id else None
+        provider = endpoint.provider if endpoint is not None else self.provider
+        webhook_url = None if self.settings.app_env == "test" else (
+            endpoint.webhook_url if endpoint is not None and endpoint.webhook_url else self.webhook_url
+        )
+        if not webhook_url:
             return ChannelNotificationResult(
-                provider=self.provider,
+                provider=provider,
                 delivered=False,
                 is_dry_run=True,
+                endpoint_id=endpoint.endpoint_id if endpoint is not None else endpoint_id,
             )
 
-        payload = self._build_payload(title, lines)
+        payload = self._build_payload(title, lines, provider)
         http_request = request.Request(
-            self.webhook_url,
+            webhook_url,
             data=json.dumps(payload).encode("utf-8"),
             headers={"Content-Type": "application/json"},
             method="POST",
@@ -38,9 +53,10 @@ class ChannelNotificationService:
         try:
             with request.urlopen(http_request, timeout=15):
                 return ChannelNotificationResult(
-                    provider=self.provider,
+                    provider=provider,
                     delivered=True,
                     is_dry_run=False,
+                    endpoint_id=endpoint.endpoint_id if endpoint is not None else endpoint_id,
                 )
         except error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="ignore")
@@ -50,8 +66,14 @@ class ChannelNotificationService:
         except error.URLError as exc:
             raise RuntimeError(f"Channel notification is unreachable: {exc.reason}") from exc
 
-    def _build_payload(self, title: str, lines: list[str]) -> dict[str, object]:
-        if self.provider == "feishu":
+    def _build_payload(
+        self,
+        title: str,
+        lines: list[str],
+        provider: str | None = None,
+    ) -> dict[str, object]:
+        active_provider = provider or self.provider
+        if active_provider == "feishu":
             return self._build_feishu_card_payload(title, lines)
         message = title + "\n" + "\n".join(lines)
         return {"text": message}

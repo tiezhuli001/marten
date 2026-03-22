@@ -66,6 +66,8 @@ class RalphTaskWorkflow:
             payload={
                 "head_branch": head_branch,
                 "base_branch": payload.base_branch,
+                "source_endpoint_id": payload.source_endpoint_id,
+                "delivery_endpoint_id": payload.delivery_endpoint_id,
             },
         )
         parent_agent_session_id = parent_task.payload.get("agent_session_id") if parent_task else None
@@ -84,6 +86,8 @@ class RalphTaskWorkflow:
                 "run_session_id": run_session.session_id,
                 "owner_agent": "ralph",
                 "source_agent": parent_task.agent_id if parent_task else "gateway",
+                "source_endpoint_id": payload.source_endpoint_id,
+                "delivery_endpoint_id": payload.delivery_endpoint_id,
                 "handoff": {
                     "task_id": task_id,
                     "session_id": run_session.session_id,

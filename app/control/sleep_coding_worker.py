@@ -42,8 +42,8 @@ class SleepCodingWorkerService:
         tasks: TaskRegistryService | None = None,
     ) -> None:
         self.settings = settings or get_settings()
-        self.mcp_client = mcp_client or build_default_mcp_client(self.settings)
         self.sleep_coding = sleep_coding or SleepCodingService(self.settings)
+        self.mcp_client = mcp_client or self.sleep_coding.mcp_client or build_default_mcp_client(self.settings)
         self.tasks = tasks or TaskRegistryService(self.settings)
         self.store = SleepCodingWorkerStore(self.settings.resolved_database_path)
         self.database_path = self.store.database_path

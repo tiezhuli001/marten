@@ -6,6 +6,7 @@ from typing import Any
 
 from app.core.config import AgentSpec, Settings
 from app.models.schemas import LLMMessage, LLMRequest, LLMResponse
+from app.rag import RAGFacade
 from app.runtime.llm import SharedLLMRuntime
 from app.runtime.mcp import MCPClient
 from app.runtime.skills import SkillLoader
@@ -43,11 +44,13 @@ class AgentRuntime:
         llm_runtime: SharedLLMRuntime | None = None,
         skills: SkillLoader | None = None,
         mcp_client: MCPClient | None = None,
+        rag: RAGFacade | None = None,
     ) -> None:
         self.settings = settings
         self.llm_runtime = llm_runtime or SharedLLMRuntime(settings)
         self.skills = skills or SkillLoader(settings)
         self.mcp = mcp_client or MCPClient()
+        self.rag = rag or RAGFacade(settings)
 
     def generate_structured_output(
         self,
@@ -55,12 +58,18 @@ class AgentRuntime:
         *,
         user_prompt: str,
         output_contract: str,
+        workflow: str | None = None,
         provider: str | None = None,
         model: str | None = None,
         temperature: float = 0.2,
     ) -> LLMResponse:
         profile_provider, profile_model = self.settings.resolve_model_profile(agent.model_profile)
-        system_prompt = self._build_system_prompt(agent, output_contract)
+        system_prompt = self._build_system_prompt(
+            agent,
+            output_contract,
+            user_prompt=user_prompt,
+            workflow=workflow,
+        )
         return self.llm_runtime.generate(
             LLMRequest(
                 provider=provider or profile_provider,  # type: ignore[arg-type]
@@ -78,17 +87,27 @@ class AgentRuntime:
         for server in servers:
             try:
                 server_tools = self.mcp.list_tools(server)
-            except Exception:
-                continue
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Failed to load MCP tools for server `{server}`: {exc}"
+                ) from exc
             for tool in server_tools:
                 tools.append(f"{server}.{tool.name}: {tool.description}".strip())
         return tools
 
-    def _build_system_prompt(self, agent: AgentDescriptor, output_contract: str) -> str:
+    def _build_system_prompt(
+        self,
+        agent: AgentDescriptor,
+        output_contract: str,
+        *,
+        user_prompt: str,
+        workflow: str | None,
+    ) -> str:
         skill_catalog = self.skills.render_skill_catalog(agent.skill_names, agent.workspace)
         skill_instructions = self._render_skill_instructions(agent)
         mcp_tools = self.list_available_mcp_tools(agent.mcp_servers)
         workspace_instructions = self._load_workspace_instructions(agent.workspace)
+        rag_context = self._render_retrieved_context(agent, user_prompt, workflow=workflow)
         mcp_section = (
             "\n".join(f"- {tool}" for tool in mcp_tools)
             if mcp_tools
@@ -112,6 +131,8 @@ class AgentRuntime:
             f"{skill_instructions}\n\n"
             "Available MCP Tools:\n"
             f"{mcp_section}\n\n"
+            "Retrieved Context:\n"
+            f"{rag_context}\n\n"
             "Output Contract:\n"
             f"{output_contract}"
         )
@@ -131,3 +152,32 @@ class AgentRuntime:
         return "\n\n".join(
             f"## {skill.name}\n{skill.instructions}" for skill in skills
         )
+
+    def _render_retrieved_context(
+        self,
+        agent: AgentDescriptor,
+        user_prompt: str,
+        *,
+        workflow: str | None,
+    ) -> str:
+        active_workflow = workflow.strip() if isinstance(workflow, str) and workflow.strip() else "default"
+        results = self.rag.retrieve(
+            agent_id=agent.agent_id,
+            workflow=active_workflow,
+            query=user_prompt,
+        )
+        if not results:
+            return "No retrieved context."
+        merge_policy = self.rag.resolve_merge_policy(
+            agent_id=agent.agent_id,
+            workflow=active_workflow,
+        )
+        lines: list[str] = []
+        used_chars = 0
+        for item in results:
+            snippet = f"- [{item.domain_id}] {item.title}: {item.content}"
+            used_chars += len(snippet)
+            if used_chars > merge_policy.max_tokens:
+                break
+            lines.append(snippet)
+        return "\n".join(lines) if lines else "No retrieved context."

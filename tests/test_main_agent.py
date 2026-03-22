@@ -63,14 +63,19 @@ def build_failing_github_mcp(message: str) -> MCPClient:
 
 class FakeChannelService:
     def __init__(self) -> None:
-        self.notifications: list[tuple[str, list[str]]] = []
+        self.notifications: list[tuple[str, list[str], str | None]] = []
 
-    def notify(self, title: str, lines: list[str]):
-        self.notifications.append((title, lines))
+    def notify(self, title: str, lines: list[str], endpoint_id: str | None = None):
+        self.notifications.append((title, lines, endpoint_id))
         return type(
             "ChannelNotificationResultStub",
             (),
-            {"provider": "feishu", "delivered": False, "is_dry_run": True},
+            {
+                "provider": "feishu",
+                "delivered": False,
+                "is_dry_run": True,
+                "endpoint_id": endpoint_id,
+            },
         )()
 
 
@@ -199,10 +204,11 @@ class MainAgentServiceTests(unittest.TestCase):
             self.assertGreater(response.token_usage.total_tokens, 0)
             self.assertEqual(response.token_usage.step_name, "main_agent_issue_intake")
             self.assertEqual(len(channel.notifications), 1)
-            title, lines = channel.notifications[0]
+            title, lines, endpoint_id = channel.notifications[0]
             self.assertIn("Ralph 任务开始", title)
             self.assertTrue(any(line.startswith("任务摘要:") for line in lines))
             self.assertTrue(any(line.startswith("状态: ") for line in lines))
+            self.assertIsNone(endpoint_id)
 
     def test_intake_uses_skill_runtime_draft_when_provider_is_configured(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

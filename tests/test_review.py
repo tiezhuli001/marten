@@ -426,6 +426,15 @@ class ReviewServiceTests(unittest.TestCase):
             self.assertTrue(review.comment_url)
             self.assertEqual(review.token_usage.total_tokens, 30)
             self.assertGreater(sleep_coding.get_task(task.task_id).token_usage.total_tokens, 30)
+            control_task = review_service.tasks.get_task(review.control_task_id)
+            machine_output = control_task.payload.get("machine_output")
+            human_output = control_task.payload.get("human_output")
+            self.assertIsInstance(machine_output, dict)
+            self.assertEqual(machine_output["blocking"], False)
+            self.assertIn("severity_counts", machine_output)
+            self.assertIsInstance(human_output, dict)
+            self.assertIn("summary", human_output)
+            self.assertIn("review_markdown", human_output)
 
     def test_apply_action_updates_sleep_coding_task(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -140,6 +140,11 @@ class AutomationService:
                     if last_review is not None
                     else self._get_latest_review_blocking(current_task)
                 ),
+                latest_review_status=(
+                    last_review.status
+                    if last_review is not None
+                    else self._get_latest_review_status(current_task)
+                ),
                 blocking_reviews=blocking_reviews,
             )
             if decision.action == "rerun_coding":
@@ -178,7 +183,10 @@ class AutomationService:
                         last_review.review_id,
                         "request_changes",
                     )
-                current_task = self.sleep_coding.get_task(current_task.task_id)
+                current_task = self.sleep_coding.mark_needs_attention(
+                    current_task.task_id,
+                    reason="Reached maximum blocking review rounds.",
+                )
                 self._publish_manual_handoff(current_task, last_review, decision.blocking_reviews)
                 return current_task
             if decision.action == "approve_review":
@@ -214,6 +222,15 @@ class AutomationService:
             value = control_task.payload.get("latest_review_blocking")
             if isinstance(value, bool):
                 return value
+        return None
+
+    def _get_latest_review_status(self, task: SleepCodingTask) -> str | None:
+        control_task = self._get_control_task(task)
+        if control_task is None:
+            return None
+        value = control_task.payload.get("latest_review_status")
+        if isinstance(value, str) and value.strip():
+            return value
         return None
 
     def _get_review_round(
@@ -355,6 +372,7 @@ class AutomationService:
         *,
         task_status: str,
         review_blocking: bool | None = None,
+        latest_review_status: str | None = None,
         blocking_reviews: int = 0,
     ) -> ReviewLoopDecision:
         if task_status == "changes_requested":
@@ -369,7 +387,17 @@ class AutomationService:
             if review_blocking:
                 return ReviewLoopDecision("request_changes", blocking_reviews=blocking_reviews)
             return ReviewLoopDecision("approve_review", blocking_reviews=blocking_reviews)
-        if task_status in {"approved", "failed", "cancelled"}:
+        if task_status == "approved":
+            if latest_review_status is None:
+                return ReviewLoopDecision("run_review", blocking_reviews=blocking_reviews)
+            if latest_review_status == "completed":
+                return ReviewLoopDecision("approve_review", blocking_reviews=blocking_reviews)
+            if latest_review_status == "approved":
+                return ReviewLoopDecision("deliver", blocking_reviews=blocking_reviews)
+            if latest_review_status == "changes_requested":
+                return ReviewLoopDecision("handoff", blocking_reviews=blocking_reviews)
+            return ReviewLoopDecision("stop", blocking_reviews=blocking_reviews)
+        if task_status in {"failed", "cancelled", "needs_attention"}:
             return ReviewLoopDecision("deliver", blocking_reviews=blocking_reviews)
         return ReviewLoopDecision("stop", blocking_reviews=blocking_reviews)
 

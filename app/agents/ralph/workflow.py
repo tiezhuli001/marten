@@ -282,7 +282,31 @@ class RalphTaskWorkflow:
                     {"path": change.path, "description": change.description}
                     for change in execution.file_changes
                 ],
+                "artifact": {
+                    "artifact_path": git_execution.artifact_path,
+                    "commit_message": execution.commit_message,
+                    "file_changes": [
+                        {"path": change.path, "description": change.description}
+                        for change in execution.file_changes
+                    ],
+                },
             },
+        )
+        self.service.tasks.update_task(
+            task["control_task_id"],
+            payload_patch={
+                "coding_artifact": {
+                    "artifact_path": git_execution.artifact_path,
+                    "worktree_path": git_execution.worktree_path,
+                    "commit_message": execution.commit_message,
+                    "generated_files": [change.path for change in execution.file_changes],
+                    "file_changes": [
+                        {"path": change.path, "description": change.description}
+                        for change in execution.file_changes
+                    ],
+                },
+            },
+            connection=connection,
         )
         control_task = self.service.tasks.get_task(task["control_task_id"])
         run_session_id = control_task.payload.get("run_session_id")

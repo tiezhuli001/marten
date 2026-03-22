@@ -120,6 +120,20 @@ class ReviewService:
                 "run_session_id": run_session.session_id,
                 "owner_agent": "code-review-agent",
                 "source_agent": "ralph",
+                "machine_output": {
+                    "blocking": is_blocking,
+                    "severity_counts": severity_counts,
+                    "findings": [
+                        finding.model_dump(mode="json")
+                        for finding in structured.findings
+                    ],
+                    "repair_strategy": structured.repair_strategy,
+                },
+                "human_output": {
+                    "summary": structured.summary,
+                    "review_markdown": structured.review_markdown,
+                    "comment_url": comment.html_url if comment is not None else None,
+                },
                 "review_target": target.model_dump(mode="json"),
                 "handoff": {
                     "task_id": target.task_id,

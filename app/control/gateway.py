@@ -267,7 +267,10 @@ class GatewayControlPlaneService:
                 delivery_endpoint_id=delivery_endpoint_id,
             )
         )
-        message = f"{intake.message}. Issue URL: {intake.issue.html_url or 'n/a'}."
+        if intake.mode == "chat":
+            return intake.token_usage, intake.message, None
+        issue_url = intake.issue.html_url if intake.issue is not None else None
+        message = f"{intake.message}. Issue URL: {issue_url or 'n/a'}."
         return intake.token_usage, message, intake.control_task_id
 
     def _handle_stats_query(

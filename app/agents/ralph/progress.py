@@ -151,6 +151,17 @@ class RalphTaskProgress:
                 "pr_url": pull_request.html_url,
                 "pr_number": pull_request.pr_number,
                 "validation_status": validation.status,
+                "review_handoff": {
+                    "task_id": task["task_id"],
+                    "next_owner_agent": "code-review-agent",
+                    "source_agent": "ralph",
+                    "status": "in_review",
+                    "repo": task["repo"],
+                    "pr_number": pull_request.pr_number,
+                    "pr_url": pull_request.html_url,
+                    "head_branch": task["head_branch"],
+                    "base_branch": task["base_branch"],
+                },
             },
             connection=connection,
         )

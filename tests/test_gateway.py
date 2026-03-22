@@ -17,6 +17,7 @@ from app.models.schemas import (
 class FakeMainAgentService:
     def intake(self, payload):  # noqa: ANN001
         return MainAgentIntakeResponse(
+            mode="coding_handoff",
             issue=GitHubIssueResult(
                 issue_number=101,
                 title="Gateway-created issue",

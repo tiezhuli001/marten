@@ -184,6 +184,30 @@ class SleepCodingService:
         self._sync_control_task(task, status="changes_requested", connection=connection)
         self.store.append_event(connection, task["task_id"], "changes_requested", {})
 
+    def mark_needs_attention(
+        self,
+        task_id: str,
+        *,
+        reason: str,
+    ) -> SleepCodingTask:
+        with closing(self._connect()) as connection:
+            task = self._get_task_row(connection, task_id)
+            self.store.update_status(connection, task_id, "needs_attention")
+            self._sync_control_task(
+                task,
+                status="needs_attention",
+                payload_patch={"last_error": reason},
+                connection=connection,
+            )
+            self.store.append_event(
+                connection,
+                task_id,
+                "needs_attention",
+                {"reason": reason},
+            )
+            connection.commit()
+        return self.get_task(task_id)
+
     def _handle_terminal_action(
         self,
         connection: sqlite3.Connection,

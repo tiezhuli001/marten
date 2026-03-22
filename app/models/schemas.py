@@ -3,6 +3,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 IntentType = Literal["general", "stats_query", "sleep_coding"]
+MainAgentMode = Literal["chat", "coding_handoff"]
 ProviderType = str
 MessageRole = Literal["system", "user", "assistant"]
 ReviewStatus = Literal[
@@ -26,6 +27,7 @@ TaskStatus = Literal[
     "in_review",
     "changes_requested",
     "approved",
+    "needs_attention",
     "merged",
     "failed",
     "cancelled",
@@ -179,8 +181,11 @@ class MainAgentIntakeRequest(BaseModel):
 
 
 class MainAgentIntakeResponse(BaseModel):
-    issue: GitHubIssueResult
+    mode: MainAgentMode
+    issue: GitHubIssueResult | None = None
     message: str
+    chat_response: str | None = None
+    handoff: dict[str, Any] | None = None
     token_usage: TokenUsage
     control_task_id: str | None = None
 

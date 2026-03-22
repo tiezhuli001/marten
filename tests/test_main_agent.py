@@ -140,6 +140,28 @@ def build_settings(database_path: Path, **kwargs) -> Settings:
 
 
 class MainAgentServiceTests(unittest.TestCase):
+    def test_intake_returns_chat_mode_for_non_coding_question(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            channel = FakeChannelService()
+            service = MainAgentService(
+                build_settings(Path(temp_dir) / "main-agent.db"),
+                channel=channel,
+                mcp_client=build_github_mcp(),
+            )
+
+            response = service.intake(
+                MainAgentIntakeRequest(
+                    user_id="user-1",
+                    content="Ralph 现在主要负责什么？先解释一下，不要创建 issue。",
+                )
+            )
+
+            self.assertEqual(response.mode, "chat")
+            self.assertIsNone(response.issue)
+            self.assertIsNone(response.control_task_id)
+            self.assertIsNotNone(response.chat_response)
+            self.assertEqual(channel.notifications, [])
+
     def test_intake_records_request_usage_and_persists_request_id_on_control_task(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             settings = build_settings(Path(temp_dir) / "main-agent.db")
@@ -176,6 +198,9 @@ class MainAgentServiceTests(unittest.TestCase):
             request_id = control_task.payload.get("request_id")
 
             self.assertIsInstance(request_id, str)
+            self.assertEqual(response.mode, "coding_handoff")
+            self.assertIsNotNone(response.handoff)
+            self.assertEqual(response.handoff["next_owner_agent"], "ralph")
             usage = TokenLedgerService(settings).get_request_usage(request_id)
             self.assertEqual(usage.total_tokens, response.token_usage.total_tokens)
             self.assertEqual(usage.step_name, "main_agent_issue_intake")

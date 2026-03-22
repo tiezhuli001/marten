@@ -61,8 +61,6 @@ class MainAgentService:
 
     def intake(self, payload: MainAgentIntakeRequest) -> MainAgentIntakeResponse:
         repo = payload.repo or self.settings.resolved_github_repository
-        if not repo:
-            raise ValueError("GitHub repository is not configured")
         user_session = self.sessions.get_or_create_session(
             session_type="user_session",
             external_ref=f"{payload.source}:{payload.user_id}",
@@ -79,21 +77,53 @@ class MainAgentService:
             parent_session_id=user_session.session_id,
             payload={"workspace": str(self.settings.resolved_main_agent_workspace)},
         )
-        draft, usage = self._build_issue_draft(payload, user_session.session_id)
+        mode, usage, chat_response, handoff = self._build_main_agent_output(
+            payload,
+            user_session.session_id,
+            repo=repo,
+        )
         request_id = payload.request_id or str(uuid4())
         run_id = payload.run_id or str(uuid4())
-        usage = usage.model_copy(update={"step_name": "main_agent_issue_intake"})
+        usage_step = "main_agent_chat" if mode == "chat" else "main_agent_issue_intake"
+        usage = usage.model_copy(update={"step_name": usage_step})
         if payload.persist_usage:
             usage = self.ledger.record_request(
                 request_id=request_id,
                 run_id=run_id,
                 user_id=payload.user_id,
                 source=payload.source,
-                intent="sleep_coding",
+                intent="general" if mode == "chat" else "sleep_coding",
                 content=payload.content,
                 usage=usage,
-                step_name="main_agent_issue_intake",
+                step_name=usage_step,
             )
+        if mode == "chat":
+            response_message = chat_response or "Main Agent kept the request in chat mode."
+            self.context.record_short_memory(
+                user_session.session_id,
+                f"Main Agent answered in chat mode: {response_message}",
+            )
+            self.context.record_short_memory(
+                agent_session.session_id,
+                "Main Agent kept the request in chat mode and did not create a coding handoff.",
+            )
+            return MainAgentIntakeResponse(
+                mode="chat",
+                issue=None,
+                message=response_message,
+                chat_response=response_message,
+                handoff=None,
+                token_usage=usage,
+                control_task_id=None,
+            )
+        if not repo:
+            raise ValueError("GitHub repository is not configured")
+        assert handoff is not None
+        draft = GitHubIssueDraft(
+            title=str(handoff["title"]),
+            body=str(handoff["body"]),
+            labels=[str(item) for item in handoff.get("labels", []) if isinstance(item, str)],
+        )
         issue = self._create_issue(repo, draft)
         control_task = self.tasks.create_task(
             task_type="main_agent_intake",
@@ -115,6 +145,8 @@ class MainAgentService:
                 "labels": issue.labels,
                 "entry_agent": "main-agent",
                 "next_owner_agent": "ralph",
+                "mode": "coding_handoff",
+                "handoff": handoff,
                 "user_session_id": user_session.session_id,
                 "agent_session_id": agent_session.session_id,
                 "request_id": request_id,
@@ -185,41 +217,59 @@ class MainAgentService:
             else "dry-run draft"
         )
         return MainAgentIntakeResponse(
+            mode="coding_handoff",
             issue=issue,
             message=f"Main Agent created {issue_ref}: {issue.title}",
+            chat_response=None,
+            handoff=handoff,
             token_usage=usage,
             control_task_id=control_task.task_id,
         )
 
-    def _build_issue_draft(
+    def _build_main_agent_output(
         self,
         payload: MainAgentIntakeRequest,
         user_session_id: str,
-    ) -> tuple[GitHubIssueDraft, TokenUsage]:
+        *,
+        repo: str | None,
+    ) -> tuple[str, TokenUsage, str | None, dict[str, Any] | None]:
         prompt = self.context.build_main_agent_input(user_session_id, payload.content)
+        llm_usage: TokenUsage | None = None
         if self.settings.has_runtime_llm_credentials:
             try:
                 response = self._generate_issue_draft_with_retry(
                     prompt,
                 )
+                llm_usage = response.usage
                 try:
                     parsed = self._parse_issue_draft_output(response.output_text)
-                    return GitHubIssueDraft.model_validate(parsed), response.usage
+                    mode, chat_response, handoff = self._normalize_main_agent_output(
+                        parsed,
+                        payload,
+                        repo=repo,
+                    )
+                    return mode, response.usage, chat_response, handoff
                 except (json.JSONDecodeError, ValidationError):
-                    draft = self._build_heuristic_issue_draft(payload)
-                    return draft, response.usage
+                    pass
             except Exception:
                 if self.settings.app_env != "test":
                     raise
-        draft = self._build_heuristic_issue_draft(payload)
+        mode, chat_response, handoff = self._build_heuristic_main_agent_output(payload, repo=repo)
+        output_text = (
+            chat_response
+            if mode == "chat"
+            else json.dumps(handoff, ensure_ascii=False)
+        )
         usage = self.token_counter.estimate_text_usage(
             provider=self.settings.resolved_llm_default_provider,
             model=self.settings.resolved_llm_default_model,
             input_text=prompt,
-            output_text=json.dumps(draft.model_dump(), ensure_ascii=False),
+            output_text=output_text,
             existing_usage=TokenUsage(),
         )
-        return draft, usage.model_copy(update={"message_count": 2})
+        if llm_usage is not None:
+            return mode, llm_usage, chat_response, handoff
+        return mode, usage.model_copy(update={"message_count": 2}), chat_response, handoff
 
     def _generate_issue_draft_with_retry(self, prompt: str):
         max_attempts = self.settings.resolved_llm_request_max_attempts
@@ -232,8 +282,12 @@ class MainAgentService:
                     user_prompt=prompt,
                     workflow="general",
                     output_contract=(
-                        "Return strict JSON with keys `title`, `body`, and `labels`. "
-                        "The labels array must include `agent:ralph` and `workflow:sleep-coding`."
+                        "Return strict JSON. "
+                        "For chat mode, return keys `mode`=`chat` and `reply`. "
+                        "For coding mode, return keys `mode`=`coding_handoff` and `handoff`. "
+                        "`handoff` must contain `title`, `body`, `labels`, `acceptance`, `constraints`, `repo`, and `next_owner_agent`. "
+                        "The labels array must include `agent:ralph` and `workflow:sleep-coding`. "
+                        "`next_owner_agent` must be `ralph`."
                     ),
                 )
             except Exception as exc:
@@ -251,6 +305,129 @@ class MainAgentService:
         if not isinstance(parsed, dict):
             raise json.JSONDecodeError("Issue draft output must be an object", output_text, 0)
         return parsed
+
+    def _normalize_main_agent_output(
+        self,
+        parsed: dict[str, Any],
+        payload: MainAgentIntakeRequest,
+        *,
+        repo: str | None,
+    ) -> tuple[str, str | None, dict[str, Any] | None]:
+        raw_mode = parsed.get("mode")
+        mode = str(raw_mode).strip() if isinstance(raw_mode, str) and raw_mode.strip() else ""
+        if mode == "chat":
+            reply = parsed.get("reply") or parsed.get("message")
+            if isinstance(reply, str) and reply.strip():
+                return "chat", reply.strip(), None
+        if mode == "coding_handoff":
+            raw_handoff = parsed.get("handoff")
+            if isinstance(raw_handoff, dict):
+                return "coding_handoff", None, self._normalize_handoff(raw_handoff, payload, repo=repo)
+        if {"title", "body", "labels"} <= parsed.keys():
+            return "coding_handoff", None, self._normalize_handoff(parsed, payload, repo=repo)
+        return self._build_heuristic_main_agent_output(payload, repo=repo)
+
+    def _build_heuristic_main_agent_output(
+        self,
+        payload: MainAgentIntakeRequest,
+        *,
+        repo: str | None,
+    ) -> tuple[str, str | None, dict[str, Any] | None]:
+        if self._should_route_to_coding(payload.content):
+            draft = self._build_heuristic_issue_draft(payload)
+            return "coding_handoff", None, self._normalize_handoff(draft.model_dump(mode="json"), payload, repo=repo)
+        reply = (
+            "Main Agent kept this request in chat mode and did not open a coding handoff. "
+            "If you want code changes, say which behavior or files should change."
+        )
+        return "chat", reply, None
+
+    def _normalize_handoff(
+        self,
+        raw: dict[str, Any],
+        payload: MainAgentIntakeRequest,
+        *,
+        repo: str | None,
+    ) -> dict[str, Any]:
+        labels = [str(item) for item in raw.get("labels", []) if isinstance(item, str)]
+        for required in ("agent:ralph", "workflow:sleep-coding"):
+            if required not in labels:
+                labels.append(required)
+        if "agent:main" not in labels:
+            labels.insert(0, "agent:main")
+        acceptance = self._coerce_string_list(raw.get("acceptance"))
+        if not acceptance:
+            acceptance = [
+                "Implement the minimum viable change.",
+                "Add or update tests for the changed behavior.",
+            ]
+        constraints = self._coerce_string_list(raw.get("constraints"))
+        if not constraints:
+            constraints = ["Keep the implementation scoped to the requested change."]
+        title = str(raw.get("title", "")).strip() or self._build_heuristic_issue_draft(payload).title
+        body = str(raw.get("body", "")).strip() or self._build_heuristic_issue_draft(payload).body
+        return {
+            "title": title,
+            "body": body,
+            "labels": labels,
+            "acceptance": acceptance,
+            "constraints": constraints,
+            "repo": repo,
+            "next_owner_agent": "ralph",
+        }
+
+    def _should_route_to_coding(self, content: str) -> bool:
+        normalized = " ".join(content.strip().lower().split())
+        if not normalized:
+            return False
+        chat_override_markers = (
+            "不要创建 issue",
+            "别创建 issue",
+            "just explain",
+            "只解释",
+            "先解释",
+            "介绍一下",
+            "负责什么",
+            "是什么",
+            "进度怎么样",
+            "状态怎么样",
+        )
+        if any(marker in normalized for marker in chat_override_markers):
+            return False
+        coding_markers = (
+            "实现",
+            "开发",
+            "修复",
+            "修改",
+            "新增",
+            "添加",
+            "支持",
+            "接入",
+            "重构",
+            "代码",
+            "测试",
+            "bug",
+            "issue",
+            "pull request",
+            "pr",
+            "workflow",
+            "接口",
+            "功能",
+            "需求",
+            "github",
+            "mcp",
+            "错误",
+            "报错",
+            "链路",
+        )
+        return any(marker in normalized for marker in coding_markers)
+
+    def _coerce_string_list(self, value: Any) -> list[str]:
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()]
+        if isinstance(value, str) and value.strip():
+            return [value.strip()]
+        return []
 
     def _create_issue(self, repo: str, draft: GitHubIssueDraft) -> GitHubIssueResult:
         server = self._require_github_server("create_issue")

@@ -474,6 +474,36 @@ def build_settings(database_path: Path, **kwargs) -> Settings:
 
 
 class SleepCodingServiceTests(unittest.TestCase):
+    def test_sleep_coding_emits_structured_handoff_and_execution_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = build_settings(root / "sleep_coding.db")
+            github = FakeGitHubService()
+            service = SleepCodingService(
+                settings=settings,
+                channel=FakeChannelService(),
+                git_workspace=FakeGitWorkspaceService(root=root / "worktrees"),
+                validator=FakeValidationRunner("passed"),
+                ledger=TokenLedgerService(settings),
+                agent_runtime=FakeAgentRuntime(),
+                mcp_client=build_github_mcp(github),
+            )
+
+            task = service.start_task(SleepCodingTaskRequest(issue_number=12))
+            task = service.apply_action(
+                task.task_id,
+                SleepCodingTaskActionRequest(action="approve_plan"),
+            )
+            control_task = service.tasks.get_task(task.control_task_id)
+
+            self.assertEqual(control_task.payload["handoff"]["owner_agent"], "ralph")
+            self.assertIn("coding_artifact", control_task.payload)
+            self.assertIn("review_handoff", control_task.payload)
+            self.assertEqual(control_task.payload["review_handoff"]["next_owner_agent"], "code-review-agent")
+            coding_event = next(event for event in task.events if event.event_type == "coding_draft_generated")
+            self.assertIn("artifact", coding_event.payload)
+            self.assertIn("file_changes", coding_event.payload["artifact"])
+
     def test_build_plan_normalizes_summary_list_from_llm_output(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             database_path = Path(temp_dir) / "sleep_coding.db"

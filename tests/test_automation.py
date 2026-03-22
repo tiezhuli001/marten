@@ -293,10 +293,12 @@ class FakeReviewService:
                     SleepCodingTaskActionRequest(action="request_changes"),
                 )
             elif payload.action == "approve_review":
-                self.sleep_coding.apply_action(
-                    review.task_id,
-                    SleepCodingTaskActionRequest(action="approve_pr"),
-                )
+                task = self.sleep_coding.get_task(review.task_id)
+                if task.status != "approved":
+                    self.sleep_coding.apply_action(
+                        review.task_id,
+                        SleepCodingTaskActionRequest(action="approve_pr"),
+                    )
         return review
 
     def publish_final_result(self, review_id: str, action: str) -> ReviewRun:
@@ -445,10 +447,52 @@ class AutomationServiceTests(unittest.TestCase):
 
             updated = automation.handle_sleep_coding_action(task.task_id, "approve_plan")
 
-            self.assertEqual(updated.status, "changes_requested")
+            self.assertEqual(updated.status, "needs_attention")
             self.assertTrue(
                 any("Manual review required" in title for title, _, _ in channel.notifications)
             )
+            self.assertFalse(
+                any("任务完成" in title for title, _, _ in channel.notifications)
+            )
+            control_task = automation.tasks.get_task(updated.control_task_id)
+            self.assertEqual(control_task.status, "needs_attention")
+
+    def test_approved_task_without_review_does_not_skip_review_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = build_settings(Path(temp_dir) / "automation.db")
+            github = FakeGitHubService()
+            channel = FakeChannelService()
+            sleep_coding = SleepCodingService(
+                settings=settings,
+                channel=channel,
+                git_workspace=FakeGitWorkspaceService(),
+                validator=FakeValidationRunner(),
+                ledger=TokenLedgerService(settings),
+                mcp_client=build_github_mcp(github),
+            )
+            review = FakeReviewService(sleep_coding, blocking_sequence=[False])
+            automation = AutomationService(
+                settings=settings,
+                sleep_coding=sleep_coding,
+                review=review,
+                channel=channel,
+                ledger=TokenLedgerService(settings),
+            )
+            task = sleep_coding.start_task(SleepCodingTaskRequest(issue_number=74))
+            task = sleep_coding.apply_action(
+                task.task_id,
+                SleepCodingTaskActionRequest(action="approve_plan"),
+            )
+            task = sleep_coding.apply_action(
+                task.task_id,
+                SleepCodingTaskActionRequest(action="approve_pr"),
+            )
+
+            updated = automation.run_review_loop(task.task_id)
+
+            self.assertEqual(updated.status, "approved")
+            self.assertEqual(len(review.reviews), 1)
+            self.assertTrue(any("任务完成" in title for title, _, _ in channel.notifications))
 
     def test_real_review_service_can_force_one_blocking_pass_then_approve(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

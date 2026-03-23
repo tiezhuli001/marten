@@ -14,10 +14,11 @@
 
 设计原则：
 
+- `agent-first`，但不是 prompt-only
 - `MCP` 负责平台操作和外部系统桥接
 - `LLM + skill` 负责规划、编码和审查的认知能力
 - 本地 `worktree / checkout` 负责真实代码上下文、命令执行和验证
-- JSON-first，默认值优先，减少脆弱编排
+- schema-first、JSON-first，优先减少脆弱编排而不是继续扩张状态机
 
 ## Highlights
 
@@ -45,12 +46,13 @@ Ralph 和 Review Agent 的目标不是“远程读一点上下文就生成文本
 ## Workflow
 
 1. 用户从 Feishu 或 API 提交需求
-2. Main Agent 生成或接管 GitHub issue
-3. Ralph Worker 轮询并 claim issue
-4. Ralph 在本地 worktree 中规划、编码、验证、提交 PR
-5. Review Agent 在本地代码上下文上执行 review
-6. 若有阻塞问题，Ralph 延时后自动修复，最多 3 轮
-7. 最终结果写回 GitHub / GitLab，并发送 Feishu 通知
+2. Main Agent 先区分 `chat` 与 `coding_handoff`
+3. 对于 coding 请求，Main Agent 生成或接管 GitHub issue
+4. Ralph Worker 轮询并 claim issue
+5. Ralph 在本地 worktree 中规划、编码、验证、提交 PR
+6. Review Agent 在本地代码上下文上执行 review，并输出稳定的 machine/human review payload
+7. 若有阻塞问题，Ralph 自动修复，最多 3 轮；超过上限进入 `needs_attention`
+8. 只有 review 通过后，最终结果才写回 GitHub / GitLab，并发送 Feishu 通知
 
 ## Current Scope
 
@@ -267,15 +269,17 @@ python -m unittest discover -s tests -v
 
 优先阅读：
 
-1. [docs/architecture/current-mvp-status-summary.md](docs/architecture/current-mvp-status-summary.md)
-2. [docs/architecture/mvp-agent-platform-core.md](docs/architecture/mvp-agent-platform-core.md)
-3. [docs/architecture/github-issue-pr-state-model.md](docs/architecture/github-issue-pr-state-model.md)
-4. [docs/evolution/mvp-evolution.md](docs/evolution/mvp-evolution.md)
-5. [docs/archive/architecture/mvp-agent-first-architecture.md](docs/archive/architecture/mvp-agent-first-architecture.md)（历史/过渡文档）
+1. [docs/architecture/agent-first-implementation-principles.md](docs/architecture/agent-first-implementation-principles.md)
+2. [docs/architecture/agent-system-overview.md](docs/architecture/agent-system-overview.md)
+3. [docs/architecture/agent-runtime-contracts.md](docs/architecture/agent-runtime-contracts.md)
+4. [docs/architecture/rag-provider-surface.md](docs/architecture/rag-provider-surface.md)
+5. [docs/handoffs/README.md](docs/handoffs/README.md)
+6. [docs/README.md](docs/README.md)
 
 ## Roadmap
 
 - 继续减少 Ralph 对 issue-only 上下文的依赖
 - 继续强化 GitHub / GitLab source materialize 的健壮性
 - 继续压缩 Python fallback，让 LLM + skill + 本地仓库成为真正主路径
+- 继续把 runtime payload 从自由 patch 收口成更稳定的 public/API schema
 - 在保证可调试性的前提下继续做仓库瘦身

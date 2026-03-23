@@ -4,6 +4,10 @@
 > 文档角色：`docs/architecture` 下的实现规格文档
 > 目标：给 `main-agent`、`ralph`、`code-review-agent` 定义统一的运行 contract，保证任何 agent 只靠文档与 handoff 也能继续执行。
 
+实现取向补充：
+
+- [agent-first-implementation-principles.md](agent-first-implementation-principles.md)
+
 ## 一、设计目标
 
 三个 builtin agent 的 contract 必须做到：
@@ -76,6 +80,10 @@
 - `repo`
 - `next_owner_agent=ralph`
 
+当前运行时实现应优先对齐显式 schema，而不是依赖自由 dict：
+
+- `MainAgentCodingHandoff`
+
 ### Decision Rules
 
 - 能直接回答的轻问题，直接回答
@@ -128,6 +136,11 @@
 - 验证命令和结果
 - PR 信息
 - review handoff summary
+
+当前运行时实现应优先对齐显式 schema：
+
+- `RalphCodingArtifact`
+- `RalphReviewHandoff`
 
 ### Decision Rules
 
@@ -193,12 +206,20 @@
 - `findings[]`
 - `repair_strategy[]`
 
+当前运行时实现应优先对齐显式 schema：
+
+- `ReviewMachineOutput`
+
 #### 人可读层
 
 - summary
 - highlights
 - findings markdown
 - additional suggestions
+
+当前运行时实现应优先对齐显式 schema：
+
+- `ReviewHumanOutput`
 
 ### Severity Rules
 
@@ -240,3 +261,21 @@
 2. handoff 文档
 3. agent `AGENTS.md`
 4. 局部实现细节
+
+## 八、实现边界原则
+
+本文件定义的是 runtime contract，不等于鼓励把所有 agent 行为都写成编排代码。
+
+默认原则：
+
+- contract 要稳定
+- artifact 要结构化
+- gate 要确定
+- 但理解、规划、review 推理、repair strategy 仍应优先由 agent 完成
+
+如果实现只是为了让输出更稳定，优先顺序应是：
+
+1. 补 schema
+2. 补 handoff
+3. 补测试
+4. 最后才考虑新增流程编排代码

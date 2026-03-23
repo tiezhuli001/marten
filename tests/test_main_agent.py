@@ -8,6 +8,7 @@ from app.ledger.service import TokenLedgerService
 from app.models.schemas import (
     GitHubIssueDraft,
     GitHubIssueResult,
+    MainAgentCodingHandoff,
     MainAgentIntakeRequest,
     TokenUsage,
 )
@@ -199,8 +200,12 @@ class MainAgentServiceTests(unittest.TestCase):
 
             self.assertIsInstance(request_id, str)
             self.assertEqual(response.mode, "coding_handoff")
-            self.assertIsNotNone(response.handoff)
-            self.assertEqual(response.handoff["next_owner_agent"], "ralph")
+            self.assertIsInstance(response.handoff, MainAgentCodingHandoff)
+            self.assertEqual(response.handoff.next_owner_agent, "ralph")
+            self.assertIsInstance(
+                MainAgentCodingHandoff.model_validate(control_task.payload["handoff"]),
+                MainAgentCodingHandoff,
+            )
             usage = TokenLedgerService(settings).get_request_usage(request_id)
             self.assertEqual(usage.total_tokens, response.token_usage.total_tokens)
             self.assertEqual(usage.step_name, "main_agent_issue_intake")

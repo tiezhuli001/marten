@@ -18,10 +18,10 @@
 - Modify: `docs/README.md`
 - Modify: `docs/archive/README.md`
 
-- [ ] Step 1: 读取当前 docs 入口与 archive 说明
-- [ ] Step 2: 明确 current source of truth 与 historical references
-- [ ] Step 3: 更新 docs 入口，去掉旧阶段文档作为主入口的角色
-- [ ] Step 4: 自查阅读顺序是否能让新 agent 在 10 分钟内知道从哪里开始
+- [x] Step 1: 读取当前 docs 入口与 archive 说明
+- [x] Step 2: 明确 current source of truth 与 historical references
+- [x] Step 3: 更新 docs 入口，去掉旧阶段文档作为主入口的角色
+- [x] Step 4: 自查阅读顺序是否能让新 agent 在 10 分钟内知道从哪里开始
 
 ### Task 2: 归档上一轮已完成设计
 
@@ -29,10 +29,10 @@
 - Move to archive: `docs/archive/architecture/*`
 - Move to archive: `docs/archive/plans/*`
 
-- [ ] Step 1: 识别上一轮已完成使命的设计与计划文档
-- [ ] Step 2: 确保主文档树已有新的 canonical 替代
-- [ ] Step 3: 再归档旧文档
-- [ ] Step 4: 更新主入口中的历史映射
+- [x] Step 1: 识别上一轮已完成使命的设计与计划文档
+- [x] Step 2: 确保主文档树已有新的 canonical 替代
+- [x] Step 3: 再归档旧文档
+- [x] Step 4: 更新主入口中的历史映射
 
 ## Chunk 2: Agent System Canonical Docs
 
@@ -41,10 +41,10 @@
 **Files:**
 - Create: `docs/architecture/agent-system-overview.md`
 
-- [ ] Step 1: 固化三 agent 主链和状态机
-- [ ] Step 2: 固化 review / repair 最多 3 轮规则
-- [ ] Step 3: 固化 final delivery 只能在 review 通过后发生
-- [ ] Step 4: 检查文档是否和当前 `current-mvp-status-summary.md` 一致
+- [x] Step 1: 固化三 agent 主链和状态机
+- [x] Step 2: 固化 review / repair 最多 3 轮规则
+- [x] Step 3: 固化 final delivery 只能在 review 通过后发生
+- [x] Step 4: 检查文档是否和当前 `current-mvp-status-summary.md` 一致
 
 ### Task 4: 写 `agent-runtime-contracts.md`
 
@@ -54,10 +54,10 @@
 - Reference: `agents/ralph/AGENTS.md`
 - Reference: `agents/code-review-agent/AGENTS.md`
 
-- [ ] Step 1: 为三个 agent 统一 contract 结构
-- [ ] Step 2: 明确 allowed / forbidden work
-- [ ] Step 3: 明确 input / output / handoff / failure
-- [ ] Step 4: 检查 contract 是否能直接指导后续 prompt/runtime 文档收紧
+- [x] Step 1: 为三个 agent 统一 contract 结构
+- [x] Step 2: 明确 allowed / forbidden work
+- [x] Step 3: 明确 input / output / handoff / failure
+- [x] Step 4: 检查 contract 是否能直接指导后续 prompt/runtime 文档收紧
 
 ## Chunk 3: Handoff System
 
@@ -67,10 +67,10 @@
 - Create: `docs/handoffs/README.md`
 - Create: `docs/handoffs/templates/agent-handoff-template.md`
 
-- [ ] Step 1: 定义何时必须写 handoff
-- [ ] Step 2: 定义最小字段
-- [ ] Step 3: 定义 quality bar
-- [ ] Step 4: 检查是否能支持跨轮次、跨 agent 接手
+- [x] Step 1: 定义何时必须写 handoff
+- [x] Step 2: 定义最小字段
+- [x] Step 3: 定义 quality bar
+- [x] Step 4: 检查是否能支持跨轮次、跨 agent 接手
 
 ## Chunk 4: Implementation Rollout
 
@@ -80,18 +80,18 @@
 - Modify later: `agents/*/AGENTS.md`
 - Modify later: relevant runtime/control-plane code
 
-- [ ] Step 1: 先按 architecture + handoff docs 对齐 agent prompt 文档
-- [ ] Step 2: 再把 runtime 状态机和 review loop 对齐文档
-- [ ] Step 3: 增加回归测试覆盖 review / repair 最多 3 轮与 final delivery gating
-- [ ] Step 4: 重新核对文档与实现是否偏移
+- [x] Step 1: 先按 architecture + handoff docs 对齐 agent prompt 文档
+- [x] Step 2: 再把 runtime 状态机和 review loop 对齐文档
+- [x] Step 3: 增加回归测试覆盖 review / repair 最多 3 轮与 final delivery gating
+- [x] Step 4: 重新核对文档与实现是否偏移
 
 ## Verification
 
-- [ ] `sed -n '1,240p' docs/README.md`
-- [ ] `sed -n '1,260p' docs/architecture/agent-system-overview.md`
-- [ ] `sed -n '1,320p' docs/architecture/agent-runtime-contracts.md`
-- [ ] `sed -n '1,220p' docs/handoffs/README.md`
-- [ ] `rg -n "framework-positioning|framework-public-surface|multi-endpoint-channel-routing|rag-capability-mvp|framework-implementation-plan" docs`
+- [x] `sed -n '1,240p' docs/README.md`
+- [x] `sed -n '1,260p' docs/architecture/agent-system-overview.md`
+- [x] `sed -n '1,320p' docs/architecture/agent-runtime-contracts.md`
+- [x] `sed -n '1,220p' docs/handoffs/README.md`
+- [x] `rg -n "framework-positioning|framework-public-surface|multi-endpoint-channel-routing|rag-capability-mvp|framework-implementation-plan" docs`
 
 ## Done Criteria
 

@@ -64,6 +64,7 @@ handoff 不是 plan 的替代。
 任何 agent 继续工作时，至少要同时读：
 
 - relevant architecture doc
+- `agent-first-implementation-principles.md`
 - relevant plan
 - latest handoff
 
@@ -78,3 +79,7 @@ handoff 不是 plan 的替代。
 当前继续执行 RAG / provider 工作时，优先读取：
 
 - [2026-03-23-rag-provider-runtime-handoff.md](2026-03-23-rag-provider-runtime-handoff.md)
+
+当前继续执行 agent runtime / contract 工作时，优先读取：
+
+- [2026-03-23-agent-runtime-output-handoff.md](2026-03-23-agent-runtime-output-handoff.md)

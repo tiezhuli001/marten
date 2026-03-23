@@ -17,6 +17,7 @@ from app.ledger.service import TokenLedgerService
 from app.models.schemas import (
     GitHubIssueDraft,
     GitHubIssueResult,
+    MainAgentCodingHandoff,
     MainAgentIntakeRequest,
     MainAgentIntakeResponse,
     TokenUsage,
@@ -120,9 +121,9 @@ class MainAgentService:
             raise ValueError("GitHub repository is not configured")
         assert handoff is not None
         draft = GitHubIssueDraft(
-            title=str(handoff["title"]),
-            body=str(handoff["body"]),
-            labels=[str(item) for item in handoff.get("labels", []) if isinstance(item, str)],
+            title=handoff.title,
+            body=handoff.body,
+            labels=list(handoff.labels),
         )
         issue = self._create_issue(repo, draft)
         control_task = self.tasks.create_task(
@@ -146,7 +147,7 @@ class MainAgentService:
                 "entry_agent": "main-agent",
                 "next_owner_agent": "ralph",
                 "mode": "coding_handoff",
-                "handoff": handoff,
+                "handoff": handoff.model_dump(mode="json"),
                 "user_session_id": user_session.session_id,
                 "agent_session_id": agent_session.session_id,
                 "request_id": request_id,
@@ -232,7 +233,7 @@ class MainAgentService:
         user_session_id: str,
         *,
         repo: str | None,
-    ) -> tuple[str, TokenUsage, str | None, dict[str, Any] | None]:
+    ) -> tuple[str, TokenUsage, str | None, MainAgentCodingHandoff | None]:
         prompt = self.context.build_main_agent_input(user_session_id, payload.content)
         llm_usage: TokenUsage | None = None
         if self.settings.has_runtime_llm_credentials:
@@ -258,7 +259,7 @@ class MainAgentService:
         output_text = (
             chat_response
             if mode == "chat"
-            else json.dumps(handoff, ensure_ascii=False)
+            else handoff.model_dump_json()
         )
         usage = self.token_counter.estimate_text_usage(
             provider=self.settings.resolved_llm_default_provider,
@@ -312,7 +313,7 @@ class MainAgentService:
         payload: MainAgentIntakeRequest,
         *,
         repo: str | None,
-    ) -> tuple[str, str | None, dict[str, Any] | None]:
+    ) -> tuple[str, str | None, MainAgentCodingHandoff | None]:
         raw_mode = parsed.get("mode")
         mode = str(raw_mode).strip() if isinstance(raw_mode, str) and raw_mode.strip() else ""
         if mode == "chat":
@@ -332,7 +333,7 @@ class MainAgentService:
         payload: MainAgentIntakeRequest,
         *,
         repo: str | None,
-    ) -> tuple[str, str | None, dict[str, Any] | None]:
+    ) -> tuple[str, str | None, MainAgentCodingHandoff | None]:
         if self._should_route_to_coding(payload.content):
             draft = self._build_heuristic_issue_draft(payload)
             return "coding_handoff", None, self._normalize_handoff(draft.model_dump(mode="json"), payload, repo=repo)
@@ -348,7 +349,7 @@ class MainAgentService:
         payload: MainAgentIntakeRequest,
         *,
         repo: str | None,
-    ) -> dict[str, Any]:
+    ) -> MainAgentCodingHandoff:
         labels = [str(item) for item in raw.get("labels", []) if isinstance(item, str)]
         for required in ("agent:ralph", "workflow:sleep-coding"):
             if required not in labels:
@@ -366,15 +367,15 @@ class MainAgentService:
             constraints = ["Keep the implementation scoped to the requested change."]
         title = str(raw.get("title", "")).strip() or self._build_heuristic_issue_draft(payload).title
         body = str(raw.get("body", "")).strip() or self._build_heuristic_issue_draft(payload).body
-        return {
-            "title": title,
-            "body": body,
-            "labels": labels,
-            "acceptance": acceptance,
-            "constraints": constraints,
-            "repo": repo,
-            "next_owner_agent": "ralph",
-        }
+        return MainAgentCodingHandoff(
+            title=title,
+            body=body,
+            labels=labels,
+            acceptance=acceptance,
+            constraints=constraints,
+            repo=repo,
+            next_owner_agent="ralph",
+        )
 
     def _should_route_to_coding(self, content: str) -> bool:
         normalized = " ".join(content.strip().lower().split())

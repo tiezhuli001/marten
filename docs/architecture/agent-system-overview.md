@@ -4,6 +4,10 @@
 > 文档角色：`docs/architecture` 下的 canonical agent system 文档
 > 目标：定义 `Marten` 当前正式生效的三 agent 主链、职责边界、handoff contract 与闭环规则。
 
+实现边界与 agent-first 原则，另见：
+
+- [agent-first-implementation-principles.md](agent-first-implementation-principles.md)
+
 ## 一、设计结论
 
 `Marten` 当前正式支持的内置 agent system 只有一条主链：
@@ -162,3 +166,13 @@ handoff 的详细格式以 `docs/handoffs/README.md` 与模板为准。
 上一轮关于 framework layering、public surface、多 endpoint、RAG MVP 的设计已经完成使命。
 
 它们仍然可以解释历史推导过程，但不再是当前 agent system 的主入口。当前实现与后续执行应优先以本文件、agent runtime contracts、RAG provider surface 和当前 plans 为准。
+
+## 九、实现原则补充
+
+当前系统在实现层默认遵循：
+
+- `agent-first`
+- `LLM + MCP + skill first`
+- 仅对权限、门禁、状态投影、artifact contract 做确定性编排
+
+如果某项能力本质上属于理解、规划、review 推理或 handoff 组织，应优先交给 agent，而不是继续下沉成更细的流程代码。

@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from app.agents.ralph.progress import RalphTaskProgress
 from app.models.schemas import (
+    RalphCodingArtifact,
     GitExecutionResult,
     SleepCodingIssue,
     SleepCodingPlan,
@@ -282,29 +283,31 @@ class RalphTaskWorkflow:
                     {"path": change.path, "description": change.description}
                     for change in execution.file_changes
                 ],
-                "artifact": {
-                    "artifact_path": git_execution.artifact_path,
-                    "commit_message": execution.commit_message,
-                    "file_changes": [
+                "artifact": RalphCodingArtifact(
+                    artifact_path=git_execution.artifact_path,
+                    worktree_path=git_execution.worktree_path,
+                    commit_message=execution.commit_message,
+                    generated_files=[change.path for change in execution.file_changes],
+                    file_changes=[
                         {"path": change.path, "description": change.description}
                         for change in execution.file_changes
                     ],
-                },
+                ).model_dump(mode="json"),
             },
         )
         self.service.tasks.update_task(
             task["control_task_id"],
             payload_patch={
-                "coding_artifact": {
-                    "artifact_path": git_execution.artifact_path,
-                    "worktree_path": git_execution.worktree_path,
-                    "commit_message": execution.commit_message,
-                    "generated_files": [change.path for change in execution.file_changes],
-                    "file_changes": [
+                "coding_artifact": RalphCodingArtifact(
+                    artifact_path=git_execution.artifact_path,
+                    worktree_path=git_execution.worktree_path,
+                    commit_message=execution.commit_message,
+                    generated_files=[change.path for change in execution.file_changes],
+                    file_changes=[
                         {"path": change.path, "description": change.description}
                         for change in execution.file_changes
                     ],
-                },
+                ).model_dump(mode="json"),
             },
             connection=connection,
         )

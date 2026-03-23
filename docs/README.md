@@ -30,6 +30,7 @@
 
 ### 2. 当前 agent system 正式边界
 
+- [architecture/agent-first-implementation-principles.md](architecture/agent-first-implementation-principles.md)
 - [architecture/agent-system-overview.md](architecture/agent-system-overview.md)
 - [architecture/agent-runtime-contracts.md](architecture/agent-runtime-contracts.md)
 
@@ -54,11 +55,11 @@
 
 如果目标是继续实现，而不是重新讨论方向，至少先读完下面 7 份文档：
 
-1. [architecture/current-mvp-status-summary.md](architecture/current-mvp-status-summary.md)
-2. [architecture/github-issue-pr-state-model.md](architecture/github-issue-pr-state-model.md)
-3. [architecture/agent-system-overview.md](architecture/agent-system-overview.md)
-4. [architecture/agent-runtime-contracts.md](architecture/agent-runtime-contracts.md)
-5. [architecture/rag-provider-surface.md](architecture/rag-provider-surface.md)
+1. [architecture/agent-first-implementation-principles.md](architecture/agent-first-implementation-principles.md)
+2. [architecture/agent-system-overview.md](architecture/agent-system-overview.md)
+3. [architecture/agent-runtime-contracts.md](architecture/agent-runtime-contracts.md)
+4. [architecture/rag-provider-surface.md](architecture/rag-provider-surface.md)
+5. [handoffs/README.md](handoffs/README.md)
 6. [plans/2026-03-22-agent-system-documentation-and-rollout.md](plans/2026-03-22-agent-system-documentation-and-rollout.md)
 7. [plans/2026-03-22-rag-provider-surface-rollout.md](plans/2026-03-22-rag-provider-surface-rollout.md)
 

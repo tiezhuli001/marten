@@ -9,6 +9,8 @@ from app.ledger.service import TokenLedgerService
 from app.models.github_results import GitHubCommentResult
 from app.models.schemas import (
     GitExecutionResult,
+    RalphCodingArtifact,
+    RalphReviewHandoff,
     SleepCodingIssue,
     SleepCodingPlan,
     SleepCodingPullRequest,
@@ -497,12 +499,13 @@ class SleepCodingServiceTests(unittest.TestCase):
             control_task = service.tasks.get_task(task.control_task_id)
 
             self.assertEqual(control_task.payload["handoff"]["owner_agent"], "ralph")
-            self.assertIn("coding_artifact", control_task.payload)
-            self.assertIn("review_handoff", control_task.payload)
-            self.assertEqual(control_task.payload["review_handoff"]["next_owner_agent"], "code-review-agent")
+            coding_artifact = RalphCodingArtifact.model_validate(control_task.payload["coding_artifact"])
+            review_handoff = RalphReviewHandoff.model_validate(control_task.payload["review_handoff"])
+            self.assertTrue(coding_artifact.generated_files)
+            self.assertEqual(review_handoff.next_owner_agent, "code-review-agent")
             coding_event = next(event for event in task.events if event.event_type == "coding_draft_generated")
-            self.assertIn("artifact", coding_event.payload)
-            self.assertIn("file_changes", coding_event.payload["artifact"])
+            event_artifact = RalphCodingArtifact.model_validate(coding_event.payload["artifact"])
+            self.assertTrue(event_artifact.file_changes)
 
     def test_build_plan_normalizes_summary_list_from_llm_output(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

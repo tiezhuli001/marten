@@ -18,6 +18,12 @@
 
 - `code-review-agent`
 - control task payload 中新增稳定的 `machine_output` 与 `human_output`
+- 上述 payload 已进一步收口到显式 schema：
+- `MainAgentCodingHandoff`
+- `RalphCodingArtifact`
+- `RalphReviewHandoff`
+- `ReviewMachineOutput`
+- `ReviewHumanOutput`
 
 - `automation`
 - `approved` 任务不会跳过 review gate
@@ -49,7 +55,7 @@
 - `python -m unittest tests.test_main_agent.MainAgentServiceTests.test_intake_returns_chat_mode_for_non_coding_question tests.test_automation.AutomationServiceTests.test_auto_review_stops_after_three_blocking_rounds_and_hands_off tests.test_automation.AutomationServiceTests.test_approved_task_without_review_does_not_skip_review_gate tests.test_review.ReviewServiceTests.test_trigger_for_task_records_review_and_comment tests.test_sleep_coding.SleepCodingServiceTests.test_sleep_coding_emits_structured_handoff_and_execution_artifacts -v`
 - `python -m unittest tests.test_main_agent tests.test_gateway tests.test_sleep_coding tests.test_review tests.test_automation tests.test_rag_capability tests.test_runtime_components tests.test_framework_public_surface -v`
 
-结果：`Ran 97 tests in 14.798s`，全部通过。
+结果：`Ran 97 tests in 16.265s`，全部通过。
 
 ## Alignment Check
 
@@ -61,4 +67,4 @@
 
 ## Suggested Next Step
 
-- 如果下一轮继续收紧 contract，优先把 `coding_artifact` / `review_handoff` / `machine_output` / `human_output` 升级为显式 schema，并补 API 层序列化回归。
+- 如果下一轮继续收紧 contract，优先补 API 层序列化回归与 channel/UI 消费回归，锁住这些 schema 在外部接口上的稳定性。

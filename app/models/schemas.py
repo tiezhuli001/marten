@@ -180,12 +180,22 @@ class MainAgentIntakeRequest(BaseModel):
     delivery_endpoint_id: str | None = None
 
 
+class MainAgentCodingHandoff(BaseModel):
+    title: str
+    body: str
+    labels: list[str] = Field(default_factory=list)
+    acceptance: list[str] = Field(default_factory=list)
+    constraints: list[str] = Field(default_factory=list)
+    repo: str | None = None
+    next_owner_agent: Literal["ralph"] = "ralph"
+
+
 class MainAgentIntakeResponse(BaseModel):
     mode: MainAgentMode
     issue: GitHubIssueResult | None = None
     message: str
     chat_response: str | None = None
-    handoff: dict[str, Any] | None = None
+    handoff: MainAgentCodingHandoff | None = None
     token_usage: TokenUsage
     control_task_id: str | None = None
 
@@ -255,6 +265,26 @@ class SleepCodingExecutionDraft(BaseModel):
     artifact_markdown: str
     commit_message: str
     file_changes: list[SleepCodingFileChange] = Field(default_factory=list)
+
+
+class RalphCodingArtifact(BaseModel):
+    artifact_path: str | None = None
+    worktree_path: str | None = None
+    commit_message: str
+    generated_files: list[str] = Field(default_factory=list)
+    file_changes: list[dict[str, str]] = Field(default_factory=list)
+
+
+class RalphReviewHandoff(BaseModel):
+    task_id: str
+    next_owner_agent: Literal["code-review-agent"] = "code-review-agent"
+    source_agent: Literal["ralph"] = "ralph"
+    status: Literal["in_review"] = "in_review"
+    repo: str
+    pr_number: int | None = None
+    pr_url: str | None = None
+    head_branch: str
+    base_branch: str
 
 
 class ReviewFinding(BaseModel):
@@ -391,6 +421,19 @@ class ReviewRun(BaseModel):
     created_at: str
     updated_at: str
     reviewed_at: str | None = None
+
+
+class ReviewMachineOutput(BaseModel):
+    blocking: bool
+    severity_counts: dict[str, int] = Field(default_factory=dict)
+    findings: list[ReviewFinding] = Field(default_factory=list)
+    repair_strategy: list[str] = Field(default_factory=list)
+
+
+class ReviewHumanOutput(BaseModel):
+    summary: str
+    review_markdown: str = ""
+    comment_url: str | None = None
 
 
 class ControlTask(BaseModel):

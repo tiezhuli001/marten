@@ -4,7 +4,7 @@ import sqlite3
 from typing import TYPE_CHECKING
 
 from app.control.events import ControlEventType
-from app.models.schemas import GitExecutionResult, SleepCodingPullRequest, TokenUsage, ValidationResult
+from app.models.schemas import GitExecutionResult, RalphReviewHandoff, SleepCodingPullRequest, TokenUsage, ValidationResult
 
 if TYPE_CHECKING:
     from app.agents.ralph.application import SleepCodingService
@@ -151,17 +151,17 @@ class RalphTaskProgress:
                 "pr_url": pull_request.html_url,
                 "pr_number": pull_request.pr_number,
                 "validation_status": validation.status,
-                "review_handoff": {
-                    "task_id": task["task_id"],
-                    "next_owner_agent": "code-review-agent",
-                    "source_agent": "ralph",
-                    "status": "in_review",
-                    "repo": task["repo"],
-                    "pr_number": pull_request.pr_number,
-                    "pr_url": pull_request.html_url,
-                    "head_branch": task["head_branch"],
-                    "base_branch": task["base_branch"],
-                },
+                "review_handoff": RalphReviewHandoff(
+                    task_id=task["task_id"],
+                    next_owner_agent="code-review-agent",
+                    source_agent="ralph",
+                    status="in_review",
+                    repo=task["repo"],
+                    pr_number=pull_request.pr_number,
+                    pr_url=pull_request.html_url,
+                    head_branch=task["head_branch"],
+                    base_branch=task["base_branch"],
+                ).model_dump(mode="json"),
             },
             connection=connection,
         )

@@ -13,6 +13,8 @@ from app.models.github_results import GitHubCommentResult
 from app.models.schemas import (
     ReviewActionRequest,
     ReviewFinding,
+    ReviewHumanOutput,
+    ReviewMachineOutput,
     ReviewStartRequest,
     ReviewSkillOutput,
     ReviewTarget,
@@ -429,12 +431,12 @@ class ReviewServiceTests(unittest.TestCase):
             control_task = review_service.tasks.get_task(review.control_task_id)
             machine_output = control_task.payload.get("machine_output")
             human_output = control_task.payload.get("human_output")
-            self.assertIsInstance(machine_output, dict)
-            self.assertEqual(machine_output["blocking"], False)
-            self.assertIn("severity_counts", machine_output)
-            self.assertIsInstance(human_output, dict)
-            self.assertIn("summary", human_output)
-            self.assertIn("review_markdown", human_output)
+            machine = ReviewMachineOutput.model_validate(machine_output)
+            human = ReviewHumanOutput.model_validate(human_output)
+            self.assertEqual(machine.blocking, False)
+            self.assertIn("P2", machine.severity_counts)
+            self.assertIn("summary", human.model_dump(mode="json"))
+            self.assertIn("review_markdown", human.model_dump(mode="json"))
 
     def test_apply_action_updates_sleep_coding_task(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

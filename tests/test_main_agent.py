@@ -216,7 +216,7 @@ class MainAgentServiceTests(unittest.TestCase):
 
             self.assertEqual(response.mode, "chat")
             self.assertIsNone(response.issue)
-            self.assertIn("拆成", response.message)
+            self.assertIn("split it into 1-2 concrete changes", response.message)
 
     def test_intake_records_request_usage_and_persists_request_id_on_control_task(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

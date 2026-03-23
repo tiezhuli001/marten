@@ -532,6 +532,72 @@ class ReviewServiceTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "validation evidence"):
                 review_service.trigger_for_task(task.task_id)
 
+    def test_review_allows_explicit_validation_gap(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = build_settings(root / "review.db", root / "review-runs")
+            sleep_coding, mcp_client = build_sleep_coding_service(settings)
+            task = sleep_coding.start_task(SleepCodingTaskRequest(issue_number=54))
+            task = sleep_coding.apply_action(
+                task.task_id,
+                SleepCodingTaskActionRequest(action="approve_plan"),
+            )
+            with sleep_coding._connect() as connection:
+                sleep_coding.store.update_task_payloads(
+                    connection,
+                    task.task_id,
+                    status="in_review",
+                    validation=ValidationResult(status="pending"),
+                )
+                connection.commit()
+            sleep_coding.tasks.update_task(
+                task.control_task_id,
+                payload_patch={"validation_status": "pending", "validation_gap": "manual validation pending"},
+            )
+            review_service = ReviewService(
+                settings=settings,
+                sleep_coding=sleep_coding,
+                skill=FakeReviewSkillService(),
+                mcp_client=mcp_client,
+            )
+
+            review = review_service.trigger_for_task(task.task_id)
+
+            self.assertEqual(review.task_id, task.task_id)
+
+    def test_build_review_return_payload_includes_repair_strategy_and_round(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = build_settings(root / "review.db", root / "review-runs")
+            sleep_coding, mcp_client = build_sleep_coding_service(settings)
+            task = sleep_coding.start_task(SleepCodingTaskRequest(issue_number=55))
+            task = sleep_coding.apply_action(
+                task.task_id,
+                SleepCodingTaskActionRequest(action="approve_plan"),
+            )
+            review_service = ReviewService(
+                settings=settings,
+                sleep_coding=sleep_coding,
+                skill=FakeReviewSkillService(),
+                mcp_client=mcp_client,
+            )
+            review = review_service.trigger_for_task(task.task_id)
+            review_service.tasks.update_task(
+                review.control_task_id,
+                payload_patch={
+                    "machine_output": {
+                        "repair_strategy": ["fix test", "rerun validation"],
+                    }
+                },
+            )
+
+            payload = review_service._build_review_return_payload(review)
+
+            self.assertEqual(payload["blocking"], review.is_blocking)
+            self.assertEqual(payload["review_summary"], review.summary)
+            self.assertEqual(payload["repair_strategy"], ["fix test", "rerun validation"])
+            self.assertEqual(payload["review_round"], 1)
+
     def test_start_review_requires_sleep_coding_task_id(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

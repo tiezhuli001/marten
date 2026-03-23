@@ -349,7 +349,7 @@ class MainAgentService:
         if self._needs_scope_clarification(payload.content):
             reply = (
                 "Main Agent needs the request narrowed before opening a coding handoff. "
-                "请先拆成 1-2 个明确改动点，并说明最优先的主链目标。"
+                "Please split it into 1-2 concrete changes and name the highest-priority main-chain goal."
             )
             return "chat", reply, None
         if self._should_route_to_coding(payload.content):

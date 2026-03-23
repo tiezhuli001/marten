@@ -131,7 +131,6 @@ class SleepCodingService:
         return self.store.load_task(task_id)
 
     def resume_task(self, task_id: str) -> SleepCodingTask:
-        pending_usage: tuple[str, str, TokenUsage] | None = None
         pending_memories: list[tuple[str, str]] = []
         follow_up_action: str | None = None
         with closing(self._connect()) as connection:
@@ -139,7 +138,7 @@ class SleepCodingService:
             if task["status"] == "awaiting_confirmation":
                 return self.get_task(task_id)
             if task["status"] == "validating":
-                pending_usage = self.workflow.resume_after_validation(
+                self.workflow.resume_after_validation(
                     connection,
                     task,
                     pending_memories,
@@ -155,14 +154,6 @@ class SleepCodingService:
             else:
                 return self.get_task(task_id)
             connection.commit()
-        if pending_usage is not None:
-            request_id, step_name, usage = pending_usage
-            self._record_task_usage(
-                request_id=request_id,
-                step_name=step_name,
-                usage=usage,
-            )
-            self._refresh_task_tokens(task_id)
         for session_id, summary in pending_memories:
             self.context.record_short_memory(session_id, summary)
         if follow_up_action is not None:

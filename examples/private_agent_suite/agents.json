@@ -1,0 +1,14 @@
+{
+  "agents": [
+    {
+      "name": "assistant",
+      "type": "builtin",
+      "description": "General purpose assistant"
+    },
+    {
+      "name": "coder",
+      "type": "builtin",
+      "description": "Code generation and review assistant"
+    }
+  ]
+}

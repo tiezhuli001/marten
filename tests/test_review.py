@@ -11,6 +11,7 @@ from app.core.config import Settings
 from app.ledger.service import TokenLedgerService
 from app.models.github_results import GitHubCommentResult
 from app.models.schemas import (
+    GitExecutionResult,
     ReviewActionRequest,
     ReviewFinding,
     ReviewHumanOutput,
@@ -165,6 +166,27 @@ class FakeGitWorkspaceService:
             is_dry_run=True,
         )
 
+    def capture_worktree_evidence(self, branch):
+        from app.models.schemas import GitExecutionResult
+
+        changed_files = [
+            ".sleep_coding/issue-artifact.md",
+            "tests/generated_test.py",
+        ]
+        return GitExecutionResult(
+            status="prepared",
+            worktree_path=f"/tmp/{branch.replace('/', '__')}",
+            output="captured worktree evidence",
+            is_dry_run=True,
+            changed_files=changed_files,
+            file_changes=[
+                {"path": path, "diff_excerpt": f"new file: {path}"}
+                for path in changed_files
+            ],
+            diff_summary="2 files changed in worktree.",
+            diff_excerpt="new file: tests/generated_test.py",
+        )
+
     def commit_changes(self, branch, message):
         from app.models.schemas import GitExecutionResult
 
@@ -224,6 +246,31 @@ class FakeReviewSkillService:
                 completion_tokens=9,
                 total_tokens=30,
                 cost_usd=0.001,
+                step_name="code_review",
+            ),
+        )
+
+
+class CapturingReviewSkillService:
+    def __init__(self) -> None:
+        self.contexts: list[str] = []
+
+    def run(self, source, context: str) -> ReviewSkillRunResult:  # noqa: ANN001
+        self.contexts.append(context)
+        return ReviewSkillRunResult(
+            output=ReviewSkillOutput(
+                summary="Captured review",
+                findings=[],
+                repair_strategy=[],
+                blocking=False,
+                run_mode="dry_run",
+                review_markdown="## Review\n\nCaptured",
+            ),
+            token_usage=TokenUsage(
+                prompt_tokens=8,
+                completion_tokens=4,
+                total_tokens=12,
+                cost_usd=0.0,
                 step_name="code_review",
             ),
         )
@@ -319,6 +366,99 @@ class MalformedAgentRuntime:
         )()
 
 
+class RecoveringReviewAgentRuntime:
+    def __init__(self) -> None:
+        self.mcp = MCPClient()
+        self.calls = 0
+
+    def generate_structured_output(self, agent, **kwargs):
+        self.calls += 1
+        output_text = (
+            "review: invalid output"
+            if self.calls == 1
+            else '{"summary":"Recovered review","findings":[],"repair_strategy":[],"blocking":false,"review_markdown":"## Review"}'
+        )
+        return type(
+            "LLMResponseStub",
+            (),
+            {
+                "output_text": output_text,
+                "usage": TokenUsage(
+                    prompt_tokens=18,
+                    completion_tokens=6,
+                    total_tokens=24,
+                    provider="minimax",
+                    model_name="MiniMax-M2.5",
+                    cost_usd=0.0,
+                    step_name="code_review",
+                ),
+            },
+        )()
+
+
+class ScalarRepairStrategyReviewAgentRuntime:
+    def __init__(self) -> None:
+        self.mcp = MCPClient()
+        self.calls = 0
+
+    def generate_structured_output(self, agent, **kwargs):
+        self.calls += 1
+        return type(
+            "LLMResponseStub",
+            (),
+            {
+                "output_text": (
+                    '{"summary":"Blocking review","findings":[],'
+                    '"repair_strategy":"Fix the branch edge case and rerun review.",'
+                    '"blocking":true,"review_markdown":"## Review"}'
+                ),
+                "usage": TokenUsage(
+                    prompt_tokens=18,
+                    completion_tokens=6,
+                    total_tokens=24,
+                    provider="minimax",
+                    model_name="MiniMax-M2.5",
+                    cost_usd=0.0,
+                    step_name="code_review",
+                ),
+            },
+        )()
+
+
+class FakeRalphAgentRuntime:
+    def __init__(self) -> None:
+        self.mcp = MCPClient()
+
+    def generate_structured_output(self, agent, *, output_contract, **kwargs):
+        if "artifact_markdown" in output_contract:
+            output_text = (
+                '{"artifact_markdown":"## Summary\\nGenerated coding draft",'
+                '"commit_message":"feat: implement sleep coding task",'
+                '"file_changes":[{"path":"tests/generated_test.py","content":"print(\\"ok\\")","description":"generated test"}]}'
+            )
+        else:
+            output_text = (
+                '{"summary":"LLM generated plan","scope":["Update service code","Add tests"],'
+                '"validation":["python -m unittest discover -s tests"],'
+                '"risks":["Issue details may still need clarification."]}'
+            )
+        return type(
+            "LLMResponseStub",
+            (),
+            {
+                "output_text": output_text,
+                "usage": TokenUsage(
+                    prompt_tokens=22,
+                    completion_tokens=8,
+                    total_tokens=30,
+                    provider="openai",
+                    model_name="gpt-4.1-mini",
+                    cost_usd=0.001,
+                ),
+            },
+        )()
+
+
 def build_settings(database_path: Path, review_runs_dir: Path) -> Settings:
     platform_config_path = database_path.parent / "platform.json"
     models_config_path = database_path.parent / "models.json"
@@ -334,7 +474,7 @@ def build_settings(database_path: Path, review_runs_dir: Path) -> Settings:
         review_runs_dir=str(review_runs_dir),
         github_repository="tiezhuli001/youmeng-gateway",
         langsmith_tracing=False,
-        openai_api_key=None,
+        openai_api_key="test-key",
         minimax_api_key=None,
     )
 
@@ -348,13 +488,14 @@ def build_sleep_coding_service(settings: Settings, ledger: TokenLedgerService | 
         git_workspace=FakeGitWorkspaceService(),
         validator=FakeValidationRunner(),
         ledger=ledger or TokenLedgerService(settings),
+        agent_runtime=FakeRalphAgentRuntime(),
         mcp_client=mcp_client,
     )
     return sleep_coding, mcp_client
 
 
 class ReviewServiceTests(unittest.TestCase):
-    def test_review_skill_falls_back_when_llm_call_fails(self) -> None:
+    def test_review_skill_fails_when_builtin_review_runtime_fails(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             settings = Settings(
@@ -372,17 +513,14 @@ class ReviewServiceTests(unittest.TestCase):
                 mcp_client=MCPClient(),
             )
 
-            result = skill.run(
-                ReviewTarget(
-                    task_id="task-fallback",
-                    workspace_path=str(root),
-                ),
-                "dummy context",
-            )
-
-            self.assertEqual(result.output.run_mode, "real_run")
-            self.assertFalse(result.output.blocking)
-            self.assertIn("LLM provider is unreachable", result.output.review_markdown)
+            with self.assertRaisesRegex(RuntimeError, "LLM provider is unreachable"):
+                skill.run(
+                    ReviewTarget(
+                        task_id="task-fallback",
+                        workspace_path=str(root),
+                    ),
+                    "dummy context",
+                )
 
     def test_trigger_for_task_records_review_and_comment(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -477,6 +615,147 @@ class ReviewServiceTests(unittest.TestCase):
             self.assertEqual(review_returned.payload["review_round"], 1)
             self.assertIn("Review for sleep coding task", review_returned.payload["review_summary"])
             self.assertTrue(review_returned.payload["repair_strategy"])
+
+    def test_review_context_prioritizes_worktree_and_validation_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = build_settings(root / "review.db", root / "review-runs")
+            sleep_coding, mcp_client = build_sleep_coding_service(settings)
+            task = sleep_coding.start_task(SleepCodingTaskRequest(issue_number=12))
+            task = sleep_coding.apply_action(
+                task.task_id,
+                SleepCodingTaskActionRequest(action="approve_plan"),
+            )
+            skill = CapturingReviewSkillService()
+            review_service = ReviewService(
+                settings=settings,
+                sleep_coding=sleep_coding,
+                skill=skill,
+                mcp_client=mcp_client,
+            )
+
+            review_service.start_review(ReviewStartRequest(task_id=task.task_id), write_comment=False)
+
+            context = skill.contexts[-1]
+            self.assertIn("Changed Files Evidence:", context)
+            self.assertIn("tests/generated_test.py", context)
+            self.assertIn("Validation Workspace:", context)
+            self.assertIn("diff", context.lower())
+
+    def test_review_context_keeps_task_evidence_when_workspace_snapshot_is_available(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = build_settings(root / "review.db", root / "review-runs")
+            sleep_coding, mcp_client = build_sleep_coding_service(settings)
+            task = sleep_coding.start_task(SleepCodingTaskRequest(issue_number=13))
+            task = sleep_coding.apply_action(
+                task.task_id,
+                SleepCodingTaskActionRequest(action="approve_plan"),
+            )
+            with sleep_coding._connect() as connection:
+                sleep_coding.store.update_task_payloads(
+                    connection,
+                    task.task_id,
+                    status=task.status,
+                    git_execution=task.git_execution.model_copy(
+                        update={
+                            "is_dry_run": False,
+                            "worktree_path": str(root / "fake-worktree"),
+                        }
+                    ),
+                )
+                connection.commit()
+            skill = CapturingReviewSkillService()
+            review_service = ReviewService(
+                settings=settings,
+                sleep_coding=sleep_coding,
+                skill=skill,
+                mcp_client=mcp_client,
+            )
+            review_service.context_builder.workspace_support = type(
+                "WorkspaceSupportStub",
+                (),
+                {
+                    "build_workspace_context": staticmethod(
+                        lambda target: "## Diff Stat\n1 file changed\n\n## Diff\n+live marker"
+                    )
+                },
+            )()
+
+            review_service.start_review(ReviewStartRequest(task_id=task.task_id), write_comment=False)
+
+            context = skill.contexts[-1]
+            self.assertIn("Changed Files Evidence:", context)
+            self.assertIn("tests/generated_test.py", context)
+            self.assertIn("Workspace Snapshot:", context)
+            self.assertIn("+live marker", context)
+
+    def test_review_requires_execution_evidence_before_starting(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = build_settings(root / "review.db", root / "review-runs")
+            sleep_coding, mcp_client = build_sleep_coding_service(settings)
+            task = sleep_coding.start_task(SleepCodingTaskRequest(issue_number=12))
+            task = sleep_coding.apply_action(
+                task.task_id,
+                SleepCodingTaskActionRequest(action="approve_plan"),
+            )
+            with sleep_coding._connect() as connection:
+                sleep_coding.store.update_task_payloads(
+                    connection,
+                    task.task_id,
+                    status="in_review",
+                    git_execution=GitExecutionResult(
+                        status="prepared",
+                        worktree_path=task.git_execution.worktree_path,
+                        artifact_path=task.git_execution.artifact_path,
+                        output="artifact ready",
+                        is_dry_run=True,
+                        changed_files=[],
+                        file_changes=[],
+                        diff_summary="",
+                        diff_excerpt="",
+                    ),
+                )
+                connection.commit()
+            review_service = ReviewService(
+                settings=settings,
+                sleep_coding=sleep_coding,
+                skill=FakeReviewSkillService(),
+                mcp_client=mcp_client,
+            )
+
+            with self.assertRaisesRegex(ValueError, "execution evidence"):
+                review_service.start_review(ReviewStartRequest(task_id=task.task_id))
+
+    def test_review_control_task_persists_evidence_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = build_settings(root / "review.db", root / "review-runs")
+            sleep_coding, mcp_client = build_sleep_coding_service(settings)
+            task = sleep_coding.start_task(SleepCodingTaskRequest(issue_number=12))
+            task = sleep_coding.apply_action(
+                task.task_id,
+                SleepCodingTaskActionRequest(action="approve_plan"),
+            )
+            review_service = ReviewService(
+                settings=settings,
+                sleep_coding=sleep_coding,
+                skill=FakeReviewSkillService(),
+                mcp_client=mcp_client,
+            )
+
+            review = review_service.start_review(
+                ReviewStartRequest(task_id=task.task_id),
+                write_comment=False,
+            )
+            control_task = review_service.tasks.get_task(review.control_task_id)
+            evidence = control_task.payload.get("review_evidence")
+
+            self.assertIsInstance(evidence, dict)
+            self.assertEqual(evidence["validation_status"], "passed")
+            self.assertIn("tests/generated_test.py", evidence["changed_files"])
+            self.assertTrue(evidence["diff_summary"])
 
     def test_count_blocking_reviews_tracks_task_reviews(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -613,30 +892,32 @@ class ReviewServiceTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "task_id"):
                 review_service.start_review(ReviewStartRequest(task_id=""))
 
-    def test_command_output_json_is_parsed_into_structured_findings(self) -> None:
+    def test_review_skill_runs_through_builtin_runtime_only(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             settings = build_settings(root / "review.db", root / "review-runs")
-            skill = ReviewSkillService(settings)
-
-            structured = skill._parse_command_output(
-                '{"summary":"Blocking review","findings":[{"severity":"P1","title":"Bug","detail":"Important bug","file_path":"app/main.py","line":9}],"repair_strategy":["Fix the bug"],"blocking":true,"review_markdown":"## Review"}'
+            runtime = FlakyAgentRuntime(
+                failures=0,
+                output_text='{"summary":"Blocking review","findings":[{"severity":"P1","title":"Bug","detail":"Important bug","file_path":"app/main.py","line":9}],"repair_strategy":["Fix the bug"],"blocking":true,"review_markdown":"## Review"}',
+            )
+            skill = ReviewSkillService(
+                settings,
+                agent_runtime=runtime,
+                mcp_client=MCPClient(),
             )
 
-            self.assertEqual(structured.summary, "Blocking review")
-            self.assertEqual(structured.findings[0].severity, "P1")
-            self.assertTrue(structured.blocking)
+            result = skill.run(
+                ReviewTarget(task_id="task-runtime-only", workspace_path=str(root)),
+                "diff context",
+            )
 
-    def test_command_output_requires_strict_json(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            settings = build_settings(root / "review.db", root / "review-runs")
-            skill = ReviewSkillService(settings)
+            self.assertEqual(result.output.summary, "Blocking review")
+            self.assertEqual(result.output.findings[0].severity, "P1")
+            self.assertTrue(result.output.blocking)
+            self.assertEqual(runtime.calls, 1)
+            self.assertFalse(hasattr(skill, "_parse_command_output"))
 
-            with self.assertRaisesRegex(RuntimeError, "strict JSON"):
-                skill._parse_command_output("### Summary\nthis is not json")
-
-    def test_agent_runtime_falls_back_when_structured_review_output_is_invalid(self) -> None:
+    def test_agent_runtime_fails_when_structured_review_output_is_invalid(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             settings = build_settings(root / "review.db", root / "review-runs").model_copy(
@@ -648,14 +929,57 @@ class ReviewServiceTests(unittest.TestCase):
                 mcp_client=MCPClient(),
             )
 
+            with self.assertRaisesRegex(RuntimeError, "invalid structured review output"):
+                skill.run(
+                    ReviewTarget(task_id="task-agent-runtime"),
+                    "diff context",
+                )
+
+    def test_review_skill_retries_once_after_invalid_structured_review_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = build_settings(root / "review.db", root / "review-runs").model_copy(
+                update={"openai_api_key": "test-key"}
+            )
+            runtime = RecoveringReviewAgentRuntime()
+            skill = ReviewSkillService(
+                settings,
+                agent_runtime=runtime,
+                mcp_client=MCPClient(),
+            )
+
             result = skill.run(
-                ReviewTarget(task_id="task-agent-runtime"),
+                ReviewTarget(task_id="task-runtime-retry", workspace_path=str(root)),
                 "diff context",
             )
 
-            self.assertEqual(result.output.run_mode, "real_run")
-            self.assertFalse(result.output.blocking)
-            self.assertIn("non-contract output", result.output.summary)
+            self.assertEqual(runtime.calls, 2)
+            self.assertEqual(result.output.summary, "Recovered review")
+
+    def test_review_skill_normalizes_scalar_repair_strategy_from_builtin_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = build_settings(root / "review.db", root / "review-runs").model_copy(
+                update={"openai_api_key": "test-key"}
+            )
+            runtime = ScalarRepairStrategyReviewAgentRuntime()
+            skill = ReviewSkillService(
+                settings,
+                agent_runtime=runtime,
+                mcp_client=MCPClient(),
+            )
+
+            result = skill.run(
+                ReviewTarget(task_id="task-runtime-normalize", workspace_path=str(root)),
+                "diff context",
+            )
+
+            self.assertEqual(runtime.calls, 1)
+            self.assertEqual(
+                result.output.repair_strategy,
+                ["Fix the branch edge case and rerun review."],
+            )
+            self.assertTrue(result.output.blocking)
 
     def test_review_skill_retries_runtime_failures_before_succeeding(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -686,24 +1010,25 @@ class ReviewServiceTests(unittest.TestCase):
             self.assertEqual(result.output.summary, "Recovered review")
             self.assertEqual(result.output.run_mode, "real_run")
 
-    def test_review_skill_command_timeout_raises_clear_error(self) -> None:
+    def test_review_skill_requires_builtin_runtime_when_llm_credentials_are_missing(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
+            models_config_path = root / "models.json"
+            models_config_path.write_text("{}", encoding="utf-8")
             settings = build_settings(root / "review.db", root / "review-runs").model_copy(
-                update={"review_command_timeout_seconds": 11}
+                update={
+                    "openai_api_key": None,
+                    "minimax_api_key": None,
+                    "models_config_path": str(models_config_path),
+                }
             )
             skill = ReviewSkillService(settings)
 
-            with self.assertRaisesRegex(RuntimeError, "timed out after 11.0s"):
-                with patch(
-                    "app.agents.code_review_agent.skill.subprocess.run",
-                    side_effect=subprocess.TimeoutExpired(cmd=["reviewer"], timeout=11),
-                ):
-                    skill._run_with_command(
-                        ["reviewer"],
-                        ReviewTarget(task_id="task-timeout", workspace_path=str(root)),
-                        "review context",
-                    )
+            with self.assertRaisesRegex(RuntimeError, "Builtin code-review-agent runtime is unavailable"):
+                skill.run(
+                    ReviewTarget(task_id="task-timeout", workspace_path=str(root)),
+                    "review context",
+                )
 
 
 if __name__ == "__main__":

@@ -12,6 +12,7 @@ from app.models.schemas import (
     SleepCodingTaskActionRequest,
     SleepCodingTaskRequest,
     SleepCodingWorkerPollRequest,
+    TokenUsage,
     ValidationResult,
     WorkerDiscoveredIssue,
 )
@@ -192,6 +193,26 @@ class FakeGitWorkspaceService:
             is_dry_run=True,
         )
 
+    def capture_worktree_evidence(self, branch: str) -> GitExecutionResult:
+        worktree_path = f"/tmp/{branch.replace('/', '__')}"
+        changed_files = [
+            ".sleep_coding/issue-artifact.md",
+            "tests/generated_test.py",
+        ]
+        return GitExecutionResult(
+            status="prepared",
+            worktree_path=worktree_path,
+            output="captured worktree evidence",
+            is_dry_run=True,
+            changed_files=changed_files,
+            file_changes=[
+                {"path": path, "diff_excerpt": f"new file: {path}"}
+                for path in changed_files
+            ],
+            diff_summary="2 files changed in worktree.",
+            diff_excerpt="new file: tests/generated_test.py",
+        )
+
     def commit_changes(self, branch: str, message: str) -> GitExecutionResult:
         return GitExecutionResult(
             status="skipped",
@@ -249,6 +270,40 @@ class FailOnApproveSleepCodingService:
         return self.base.get_task(task_id)
 
 
+class FakeRalphAgentRuntime:
+    def __init__(self) -> None:
+        self.mcp = MCPClient()
+
+    def generate_structured_output(self, agent, *, output_contract, **kwargs):
+        if "artifact_markdown" in output_contract:
+            output_text = (
+                '{"artifact_markdown":"## Summary\\nGenerated coding draft",'
+                '"commit_message":"feat: implement sleep coding task",'
+                '"file_changes":[{"path":"tests/generated_test.py","content":"print(\\"ok\\")","description":"generated test"}]}'
+            )
+        else:
+            output_text = (
+                '{"summary":"LLM generated plan","scope":["Update service code","Add tests"],'
+                '"validation":["python -m unittest discover -s tests"],'
+                '"risks":["Issue details may still need clarification."]}'
+            )
+        return type(
+            "LLMResponseStub",
+            (),
+            {
+                "output_text": output_text,
+                "usage": TokenUsage(
+                    prompt_tokens=22,
+                    completion_tokens=8,
+                    total_tokens=30,
+                    provider="openai",
+                    model_name="gpt-4.1-mini",
+                    cost_usd=0.001,
+                ),
+            },
+        )()
+
+
 def build_settings(database_path: Path, *, auto_approve_plan: bool = False) -> Settings:
     platform_path = database_path.parent / "platform.json"
     models_path = database_path.parent / "models.json"
@@ -271,8 +326,20 @@ def build_settings(database_path: Path, *, auto_approve_plan: bool = False) -> S
         platform_config_path=str(platform_path),
         models_config_path=str(models_path),
         langsmith_tracing=False,
-        openai_api_key=None,
+        openai_api_key="test-key",
         minimax_api_key=None,
+    )
+
+
+def build_sleep_coding_service(settings: Settings, mcp_client: MCPClient) -> SleepCodingService:
+    return SleepCodingService(
+        settings=settings,
+        channel=FakeChannelService(),
+        git_workspace=FakeGitWorkspaceService(),
+        validator=FakeValidationRunner(),
+        ledger=TokenLedgerService(settings),
+        agent_runtime=FakeRalphAgentRuntime(),
+        mcp_client=mcp_client,
     )
 
 
@@ -282,14 +349,7 @@ class SleepCodingWorkerServiceTests(unittest.TestCase):
             settings = build_settings(Path(temp_dir) / "worker.db")
             github = FakeGitHubService()
             mcp_client = build_github_mcp(github)
-            sleep_coding = SleepCodingService(
-                settings=settings,
-                channel=FakeChannelService(),
-                git_workspace=FakeGitWorkspaceService(),
-                validator=FakeValidationRunner(),
-                ledger=TokenLedgerService(settings),
-                mcp_client=mcp_client,
-            )
+            sleep_coding = build_sleep_coding_service(settings, mcp_client)
             worker = SleepCodingWorkerService(
                 settings=settings,
                 mcp_client=mcp_client,
@@ -323,14 +383,7 @@ class SleepCodingWorkerServiceTests(unittest.TestCase):
             settings = build_settings(Path(temp_dir) / "worker.db")
             github = FakeGitHubService()
             mcp_client = build_github_mcp(github)
-            sleep_coding = SleepCodingService(
-                settings=settings,
-                channel=FakeChannelService(),
-                git_workspace=FakeGitWorkspaceService(),
-                validator=FakeValidationRunner(),
-                ledger=TokenLedgerService(settings),
-                mcp_client=mcp_client,
-            )
+            sleep_coding = build_sleep_coding_service(settings, mcp_client)
             worker = SleepCodingWorkerService(
                 settings=settings,
                 mcp_client=mcp_client,
@@ -350,14 +403,7 @@ class SleepCodingWorkerServiceTests(unittest.TestCase):
             settings = build_settings(Path(temp_dir) / "worker.db")
             github = FakeGitHubService()
             mcp_client = build_github_mcp(github)
-            sleep_coding = SleepCodingService(
-                settings=settings,
-                channel=FakeChannelService(),
-                git_workspace=FakeGitWorkspaceService(),
-                validator=FakeValidationRunner(),
-                ledger=TokenLedgerService(settings),
-                mcp_client=mcp_client,
-            )
+            sleep_coding = build_sleep_coding_service(settings, mcp_client)
             sleep_coding.start_task(
                 SleepCodingTaskRequest(
                     issue_number=55,
@@ -460,14 +506,7 @@ class SleepCodingWorkerServiceTests(unittest.TestCase):
             settings = build_settings(Path(temp_dir) / "worker.db")
             github = FakeGitHubService()
             mcp_client = build_github_mcp(github)
-            base_sleep_coding = SleepCodingService(
-                settings=settings,
-                channel=FakeChannelService(),
-                git_workspace=FakeGitWorkspaceService(),
-                validator=FakeValidationRunner(),
-                ledger=TokenLedgerService(settings),
-                mcp_client=mcp_client,
-            )
+            base_sleep_coding = build_sleep_coding_service(settings, mcp_client)
             worker = SleepCodingWorkerService(
                 settings=settings,
                 mcp_client=mcp_client,
@@ -504,13 +543,9 @@ class SleepCodingWorkerServiceTests(unittest.TestCase):
                 server="github",
             )
             mcp_client.register_adapter("github", server)
-            sleep_coding = SleepCodingService(
-                settings=settings,
-                channel=FakeChannelService(),
-                git_workspace=FakeGitWorkspaceService(),
-                validator=FakeValidationRunner(),
-                ledger=TokenLedgerService(settings),
-                mcp_client=build_github_mcp(FakeGitHubService()),
+            sleep_coding = build_sleep_coding_service(
+                settings,
+                build_github_mcp(FakeGitHubService()),
             )
             worker = SleepCodingWorkerService(
                 settings=settings,
@@ -528,14 +563,7 @@ class SleepCodingWorkerServiceTests(unittest.TestCase):
             settings = build_settings(Path(temp_dir) / "worker.db")
             github = FakeGitHubService()
             mcp_client = build_github_mcp(github)
-            sleep_coding = SleepCodingService(
-                settings=settings,
-                channel=FakeChannelService(),
-                git_workspace=FakeGitWorkspaceService(),
-                validator=FakeValidationRunner(),
-                ledger=TokenLedgerService(settings),
-                mcp_client=mcp_client,
-            )
+            sleep_coding = build_sleep_coding_service(settings, mcp_client)
             worker = SleepCodingWorkerService(
                 settings=settings,
                 mcp_client=mcp_client,
@@ -569,6 +597,7 @@ class SleepCodingWorkerServiceTests(unittest.TestCase):
                 git_workspace=FakeGitWorkspaceService(),
                 validator=FakeValidationRunner("failed"),
                 ledger=TokenLedgerService(settings),
+                agent_runtime=FakeRalphAgentRuntime(),
                 mcp_client=mcp_client,
             )
             worker = SleepCodingWorkerService(
@@ -600,6 +629,7 @@ class SleepCodingWorkerServiceTests(unittest.TestCase):
                 git_workspace=FakeGitWorkspaceService(),
                 validator=FakeValidationRunner("failed"),
                 ledger=TokenLedgerService(settings),
+                agent_runtime=FakeRalphAgentRuntime(),
                 mcp_client=mcp_client,
             )
             worker = SleepCodingWorkerService(

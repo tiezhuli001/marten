@@ -56,6 +56,12 @@
 - `severity=degraded`：主链可继续，但该组件存在降级
 - `delivery_status=degraded`：任务可能已完成，但消息投递没有真实送达
 
+额外规则：
+
+- builtin `ralph` coding capability 缺失：按 `blocking` 处理
+- builtin `code-review-agent` review capability 缺失：按 `blocking` 处理
+- review runtime failure 不是 degraded success，而是主链失败或 `needs_attention`
+
 ## 4. Control Task 字段怎么读
 
 重点字段：
@@ -109,6 +115,7 @@
 
 - 这是确定性失败，不应伪装成 `needs_attention`
 - 优先修验证或执行前置，不要强行推进到 review/delivery
+- 如果失败原因是 builtin coding/review/runtime capability 缺失，先恢复 runtime 能力，不要试图用宽松 fallback 继续推进
 
 ### 场景 C：task `needs_attention`
 
@@ -123,6 +130,7 @@
 
 - 如果是 review 三轮阻塞，按 repair context 人工接手
 - 如果是 `follow_up.failed`，优先看根因事件，而不是只看终态
+- 如果是 runtime/context/structured-output 失败，优先确认 builtin agent 是否还能构造真实 coding/review truth
 
 ### 场景 D：task `completed`，但 delivery degraded
 
@@ -148,6 +156,11 @@ Ralph 现在应从 persisted facts 恢复，不应重新推导整条链。重点
 - validation 是否已存在
 - PR / review handoff 是否已存在
 - `changes_requested` 是否已有 persisted repair context
+
+前提：
+
+- resume 依赖 builtin Ralph runtime 仍然可用
+- 若 builtin runtime 不可用，应显式停止，不做“伪恢复”
 
 ### Review re-entry
 
@@ -196,3 +209,8 @@ Ralph 现在应从 persisted facts 恢复，不应重新推导整条链。重点
 这条 runbook 的前提仍然是：
 
 `LLM + MCP + skill first`，控制面只收 deterministic gate、状态投影和 operator evidence。
+
+补充前提：
+
+- builtin `ralph` 和 builtin `code-review-agent` 是标准主链执行 owner
+- 外部 command 不应作为默认成功路径掩盖 coding/review runtime 缺口

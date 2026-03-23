@@ -137,11 +137,15 @@ class LiveChainIntegrationTests(unittest.TestCase):
         self.assertEqual(gateway_chain_request_id, intake_request_id)
         self.assertNotEqual(gateway_request_id, intake_request_id)
         task_id = self._extract_task_id(automation_follow_up)
-        if not automation_follow_up.get("triggered", False):
+        current_task = sleep_coding.get_task(task_id)
+        if (
+            not automation_follow_up.get("triggered", False)
+            or current_task.status == "awaiting_confirmation"
+        ):
             task = automation.handle_sleep_coding_action_async(task_id, "approve_plan")
             task_id = task.task_id
 
-        task = self._wait_for_terminal_task(sleep_coding, task_id)
+        task = self._wait_for_terminal_task(sleep_coding, automation, task_id)
         self.assertEqual(task.status, "approved", task.model_dump_json(indent=2))
         self.assertEqual(task.background_follow_up_status, "completed", task.model_dump_json(indent=2))
         self.assertEqual(task.kickoff_request_id, gateway_chain_request_id)
@@ -236,16 +240,23 @@ class LiveChainIntegrationTests(unittest.TestCase):
     def _wait_for_terminal_task(
         self,
         sleep_coding: SleepCodingService,
+        automation: AutomationService,
         task_id: str,
     ) -> SleepCodingTask:
         timeout_seconds = int(self.live_config.get("timeout_seconds", 900))
         poll_interval_seconds = max(int(self.live_config.get("poll_interval_seconds", 1)), 1)
         deadline = time.time() + timeout_seconds
         latest = sleep_coding.get_task(task_id)
+        approval_requested = False
         while time.time() < deadline:
             latest = sleep_coding.get_task(task_id)
-            if latest.status in {"failed", "cancelled"}:
+            if latest.status in {"failed", "cancelled", "needs_attention"}:
                 return latest
+            if latest.status == "awaiting_confirmation" and not approval_requested:
+                latest = automation.handle_sleep_coding_action_async(task_id, "approve_plan")
+                approval_requested = True
+                if latest.status in {"failed", "cancelled"}:
+                    return latest
             if latest.status == "approved" and latest.background_follow_up_status == "completed":
                 return latest
             time.sleep(poll_interval_seconds)

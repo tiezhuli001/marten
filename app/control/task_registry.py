@@ -332,6 +332,12 @@ class TaskRegistryService:
         if task.status in {"approved", "completed", "cancelled", "failed"}:
             return "none"
         if task.status in {"needs_attention", "timed_out"}:
+            last_error = self._coerce_string(task.payload, "last_error") or ""
+            normalized = last_error.lower()
+            if "execution evidence" in normalized:
+                return "repair_execution_evidence"
+            if "review evidence" in normalized:
+                return "repair_review_evidence"
             return "operator_attention"
         if task.status == "changes_requested":
             return "rerun_coding"

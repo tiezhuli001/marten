@@ -277,6 +277,8 @@ class RalphCodingArtifact(BaseModel):
     commit_message: str
     generated_files: list[str] = Field(default_factory=list)
     file_changes: list[dict[str, str]] = Field(default_factory=list)
+    diff_summary: str = ""
+    diff_excerpt: str = ""
 
 
 class RalphReviewHandoff(BaseModel):
@@ -314,6 +316,7 @@ class ValidationResult(BaseModel):
     command: str = "python scripts/run_sleep_coding_validation.py"
     exit_code: int | None = None
     output: str = ""
+    workspace_path: str | None = None
 
 
 class SleepCodingPullRequest(BaseModel):
@@ -334,6 +337,10 @@ class GitExecutionResult(BaseModel):
     push_remote: str | None = None
     output: str = ""
     is_dry_run: bool = True
+    changed_files: list[str] = Field(default_factory=list)
+    file_changes: list[dict[str, str]] = Field(default_factory=list)
+    diff_summary: str = ""
+    diff_excerpt: str = ""
 
 
 class SleepCodingTaskEvent(BaseModel):

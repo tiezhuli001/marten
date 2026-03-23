@@ -76,8 +76,6 @@ class Settings(BaseSettings):
     sleep_coding_enable_git_push: bool = False
     git_remote_name: str = "origin"
     sleep_coding_validation_command: str = "python scripts/run_sleep_coding_validation.py"
-    sleep_coding_execution_command: str | None = None
-    sleep_coding_execution_allow_llm_fallback: bool = True
     sleep_coding_execution_timeout_seconds: float = 600.0
     sleep_coding_validation_timeout_seconds: float = 600.0
     review_runs_dir: str = "data/review-runs"
@@ -85,7 +83,6 @@ class Settings(BaseSettings):
     review_skills: str = "code-review"
     review_mcp_servers: str = "github"
     review_skill_name: str = "code-review"
-    review_skill_command: str | None = None
     review_command_timeout_seconds: float = 600.0
     review_force_blocking_first_pass: bool = False
     review_writeback_final_only: bool = True
@@ -147,24 +144,6 @@ class Settings(BaseSettings):
     @property
     def resolved_review_runs_dir(self) -> Path:
         return self._resolve_project_path(self.review_runs_dir)
-
-    @property
-    def resolved_sleep_coding_execution_command(self) -> str | None:
-        value = self._get_platform_setting(
-            ("sleep_coding", "execution", "command"),
-            self.sleep_coding_execution_command,
-        )
-        if value is None:
-            return None
-        text = str(value).strip()
-        return text or None
-
-    @property
-    def resolved_sleep_coding_execution_allow_llm_fallback(self) -> bool:
-        return self._resolve_platform_bool(
-            ("sleep_coding", "execution", "allow_llm_fallback"),
-            self.sleep_coding_execution_allow_llm_fallback,
-        )
 
     @property
     def resolved_sleep_coding_execution_timeout_seconds(self) -> float:
@@ -388,17 +367,6 @@ class Settings(BaseSettings):
                 self.review_skill_name,
             )
         )
-
-    @property
-    def resolved_review_skill_command(self) -> str | None:
-        value = self._get_platform_setting(
-            ("review", "skill_command"),
-            self.review_skill_command,
-        )
-        if value is None:
-            return None
-        text = str(value).strip()
-        return text or None
 
     @property
     def resolved_mcp_config_path(self) -> Path:

@@ -128,9 +128,9 @@ GitHub 的 open/closed 不再直接充当业务状态真相。
 
 在上一轮状态收口之后，主链又补完了一轮运行时防卡死加固。
 
-### 1. 外部执行超时已补齐
+### 1. 执行路径超时已补齐
 
-当前主链上最容易卡死的 3 条外部执行路径已经补上超时控制：
+当前主链上最容易卡死的 3 条执行路径已经补上超时控制：
 
 - `sleep_coding.validation.timeout_seconds`
 - `sleep_coding.execution.timeout_seconds`
@@ -139,18 +139,18 @@ GitHub 的 open/closed 不再直接充当业务状态真相。
 覆盖范围包括：
 
 - Ralph validation command
-- Ralph 本地 execution command
-- Code Review 外部 command
+- Ralph 本地执行路径
+- Code Review 执行路径
 
 这些超时都会把“无限等待”收敛成明确失败，不再让任务无界卡住。
 
-### 2. repair loop 约束与外部执行约束已经形成闭环
+### 2. repair loop 约束与执行约束已经形成闭环
 
 当前主链已经同时具备两层防钻牛角尖保护：
 
 - LLM 请求有单次超时和最大重试次数
 - review repair loop 有最大轮次，达到上限后 handoff
-- 外部命令执行也有超时，不会因为本地 command 卡死而绕过编排层约束
+- 执行路径也有超时，不会因为本地执行卡死而绕过编排层约束
 
 ### 3. 当前测试状态
 
@@ -247,18 +247,18 @@ GitHub 的 open/closed 不再直接充当业务状态真相。
 - `models.json` 的 provider 元数据已经收口到 canonical snake_case
 - README 示例与运行时解析口径一致
 
-### 5. 外部执行路径已补统一超时
+### 5. 执行路径已补统一超时
 
 代码事实：
 
-- `app/core/config.py` 新增 execution / validation / review command timeout 配置解析
+- `app/core/config.py` 新增 execution / validation / review timeout 配置解析
 - `app/agents/ralph/validation.py` 的 validation subprocess 现在带 timeout
 - `app/agents/ralph/drafting.py` 的本地 execution subprocess 现在带 timeout
-- `app/agents/code_review_agent/skill.py` 的 review command subprocess 现在带 timeout
+- `app/agents/code_review_agent/skill.py` 的 review 执行路径现在带 timeout
 
 结论：
 
-- 主链不再只防 LLM HTTP 死等，也同时防本地外部命令无界阻塞
+- 主链不再只防 LLM HTTP 死等，也同时防执行路径无界阻塞
 
 ## 七、当前阶段的红线
 
@@ -268,7 +268,7 @@ GitHub 的 open/closed 不再直接充当业务状态真相。
 - 不要把 `sleep_coding_tasks` 或 `review_runs` 提升回与 `control_tasks` 并列的主编排真相
 - 不要把内部 handoff / 临时计划文档重新暴露为公开架构入口
 - 不要把当前单条主链稀释成功能拼盘
-- 不要重新把 validation / execution / review command 放回无超时状态
+- 不要重新把 validation / execution / review 执行路径放回无超时状态
 
 ## 八、继续阅读
 

@@ -1,5 +1,5 @@
-import tempfile
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -193,6 +193,31 @@ class FakeGitWorkspaceService:
             is_dry_run=True,
         )
 
+    def capture_worktree_evidence(self, branch: str) -> GitExecutionResult:
+        worktree_path = self._worktree_path(branch)
+        changed_files: list[str] = []
+        file_changes: list[dict[str, str]] = []
+        if worktree_path.exists():
+            for file_path in sorted(path for path in worktree_path.rglob("*") if path.is_file()):
+                relative_path = str(file_path.relative_to(worktree_path))
+                changed_files.append(relative_path)
+                file_changes.append(
+                    {
+                        "path": relative_path,
+                        "diff_excerpt": f"new file: {relative_path}",
+                    }
+                )
+        return GitExecutionResult(
+            status="prepared",
+            worktree_path=str(worktree_path),
+            output="captured worktree evidence",
+            is_dry_run=True,
+            changed_files=changed_files,
+            file_changes=file_changes,
+            diff_summary=f"{len(changed_files)} files changed in worktree." if changed_files else "",
+            diff_excerpt="\n\n".join(item["diff_excerpt"] for item in file_changes),
+        )
+
     def commit_changes(self, branch: str, message: str) -> GitExecutionResult:
         self.committed_branches.append(branch)
         return GitExecutionResult(
@@ -229,6 +254,16 @@ class FakeValidationRunner:
             exit_code=0 if self.status == "passed" else 1,
             output="validation output",
         )
+
+
+class RecordingValidationRunner(FakeValidationRunner):
+    def __init__(self, status: str) -> None:
+        super().__init__(status)
+        self.repo_paths: list[Path] = []
+
+    def run(self, repo_path: Path) -> ValidationResult:
+        self.repo_paths.append(repo_path)
+        return super().run(repo_path)
 
 
 class FakeAgentRuntime:
@@ -461,6 +496,56 @@ class InvalidExecutionAgentRuntime(FakeAgentRuntime):
         )()
 
 
+class RecoveringExecutionAgentRuntime(FakeAgentRuntime):
+    def __init__(self) -> None:
+        super().__init__()
+        self.execution_attempts = 0
+
+    def generate_structured_output(self, agent, *, user_prompt, output_contract, **kwargs):
+        self.calls.append(output_contract)
+        if "artifact_markdown" in output_contract:
+            self.execution_attempts += 1
+            output_text = (
+                "Draft: touch docs and keep the change minimal."
+                if self.execution_attempts == 1
+                else '{"artifact_markdown":"## Summary\\nRecovered coding draft",'
+                '"commit_message":"feat: recover execution output",'
+                '"file_changes":[{"path":"tests/recovered_test.py","content":"print(\\"ok\\")","description":"recovered test"}]}'
+            )
+        else:
+            output_text = (
+                '{"summary":"LLM generated plan","scope":["Update docs"],'
+                '"validation":["python -m unittest discover -s tests"],'
+                '"risks":["Issue details may still need clarification."]}'
+            )
+        return type(
+            "FakeLLMResponse",
+            (),
+            {
+                "output_text": output_text,
+                "usage": type(
+                    "FakeUsage",
+                    (),
+                    {
+                        "prompt_tokens": 11,
+                        "completion_tokens": 13,
+                        "total_tokens": 24,
+                        "cache_read_tokens": 0,
+                        "cache_write_tokens": 0,
+                        "reasoning_tokens": 0,
+                        "message_count": 2,
+                        "duration_seconds": 0.0,
+                        "model_name": "test-model",
+                        "provider": "openai",
+                        "cost_usd": 0.0,
+                        "step_name": None,
+                        "model_copy": lambda self, update=None: self,
+                    },
+                )(),
+            },
+        )()
+
+
 def build_settings(database_path: Path, **kwargs) -> Settings:
     platform_config_path = database_path.parent / "platform.json"
     if not platform_config_path.exists():
@@ -508,6 +593,128 @@ class SleepCodingServiceTests(unittest.TestCase):
             coding_event = next(event for event in task.events if event.event_type == "coding_draft_generated")
             event_artifact = RalphCodingArtifact.model_validate(coding_event.payload["artifact"])
             self.assertTrue(event_artifact.file_changes)
+
+    def test_approve_plan_projects_coding_artifact_from_worktree_evidence(self) -> None:
+        class WorktreeEvidenceGitWorkspace(FakeGitWorkspaceService):
+            def capture_worktree_evidence(self, branch: str) -> GitExecutionResult:
+                result = super().capture_worktree_evidence(branch)
+                return result.model_copy(
+                    update={
+                        "changed_files": [
+                            ".sleep_coding/issue-12.md",
+                            "src/runtime_change.py",
+                        ],
+                        "file_changes": [
+                            {
+                                "path": ".sleep_coding/issue-12.md",
+                                "diff_excerpt": "new file: .sleep_coding/issue-12.md",
+                            },
+                            {
+                                "path": "src/runtime_change.py",
+                                "diff_excerpt": "diff --git a/src/runtime_change.py b/src/runtime_change.py",
+                            },
+                        ],
+                        "diff_excerpt": "diff --git a/src/runtime_change.py b/src/runtime_change.py",
+                        "diff_summary": "2 files changed, 4 insertions(+)",
+                    }
+                )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = build_settings(root / "sleep_coding.db")
+            github = FakeGitHubService()
+            service = SleepCodingService(
+                settings=settings,
+                channel=FakeChannelService(),
+                git_workspace=WorktreeEvidenceGitWorkspace(root=root / "worktrees"),
+                validator=FakeValidationRunner("passed"),
+                ledger=TokenLedgerService(settings),
+                agent_runtime=FakeAgentRuntime(),
+                mcp_client=build_github_mcp(github),
+            )
+
+            task = service.start_task(SleepCodingTaskRequest(issue_number=12))
+            task = service.apply_action(
+                task.task_id,
+                SleepCodingTaskActionRequest(action="approve_plan"),
+            )
+            control_task = service.tasks.get_task(task.control_task_id)
+            artifact = RalphCodingArtifact.model_validate(control_task.payload["coding_artifact"])
+
+            self.assertEqual(
+                artifact.generated_files,
+                [".sleep_coding/issue-12.md", "src/runtime_change.py"],
+            )
+            self.assertEqual(task.git_execution.changed_files, artifact.generated_files)
+            self.assertEqual(
+                artifact.file_changes[1]["path"],
+                "src/runtime_change.py",
+            )
+            self.assertEqual(
+                artifact.file_changes[1]["diff_excerpt"],
+                "diff --git a/src/runtime_change.py b/src/runtime_change.py",
+            )
+
+    def test_approve_plan_records_validation_workspace_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = build_settings(root / "sleep_coding.db")
+            github = FakeGitHubService()
+            validator = RecordingValidationRunner("passed")
+            git_workspace = FakeGitWorkspaceService(root / "worktrees")
+            service = SleepCodingService(
+                settings=settings,
+                channel=FakeChannelService(),
+                git_workspace=git_workspace,
+                validator=validator,
+                ledger=TokenLedgerService(settings),
+                agent_runtime=FakeAgentRuntime(),
+                mcp_client=build_github_mcp(github),
+            )
+
+            task = service.start_task(SleepCodingTaskRequest(issue_number=12))
+            updated = service.apply_action(
+                task.task_id,
+                SleepCodingTaskActionRequest(action="approve_plan"),
+            )
+
+            expected_worktree = git_workspace._worktree_path(updated.head_branch)
+            self.assertEqual(validator.repo_paths, [expected_worktree])
+            self.assertEqual(updated.validation.workspace_path, str(expected_worktree))
+            self.assertIn(str(expected_worktree), updated.validation.output)
+
+    def test_approve_plan_requires_real_worktree_change_evidence(self) -> None:
+        class MissingEvidenceGitWorkspace(FakeGitWorkspaceService):
+            def capture_worktree_evidence(self, branch: str) -> GitExecutionResult:
+                result = super().capture_worktree_evidence(branch)
+                return result.model_copy(
+                    update={
+                        "changed_files": [],
+                        "diff_excerpt": "",
+                        "diff_summary": "",
+                    }
+                )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = build_settings(root / "sleep_coding.db")
+            github = FakeGitHubService()
+            service = SleepCodingService(
+                settings=settings,
+                channel=FakeChannelService(),
+                git_workspace=MissingEvidenceGitWorkspace(root / "worktrees"),
+                validator=FakeValidationRunner("passed"),
+                ledger=TokenLedgerService(settings),
+                agent_runtime=FakeAgentRuntime(),
+                mcp_client=build_github_mcp(github),
+            )
+            task = service.start_task(SleepCodingTaskRequest(issue_number=77))
+
+            with self.assertRaisesRegex(ValueError, "worktree change evidence"):
+                service.apply_action(
+                    task.task_id,
+                    SleepCodingTaskActionRequest(action="approve_plan"),
+                )
 
     def test_build_plan_normalizes_summary_list_from_llm_output(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -736,7 +943,7 @@ class SleepCodingServiceTests(unittest.TestCase):
 
             self.assertEqual(updated.status, "in_review")
 
-    def test_approve_plan_falls_back_to_heuristic_execution_when_provider_output_is_not_json(self) -> None:
+    def test_approve_plan_fails_when_builtin_execution_output_is_not_json(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             database_path = Path(temp_dir) / "sleep_coding.db"
             settings = build_settings(database_path)
@@ -754,40 +961,42 @@ class SleepCodingServiceTests(unittest.TestCase):
             )
             task = service.start_task(SleepCodingTaskRequest(issue_number=66))
 
+            with self.assertRaisesRegex(RuntimeError, "invalid structured execution output"):
+                service.apply_action(
+                    task.task_id,
+                    SleepCodingTaskActionRequest(action="approve_plan"),
+                )
+
+    def test_approve_plan_retries_builtin_execution_once_after_invalid_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database_path = Path(temp_dir) / "sleep_coding.db"
+            settings = build_settings(database_path)
+            github = FakeGitHubService()
+            runtime = RecoveringExecutionAgentRuntime()
+            service = SleepCodingService(
+                settings=settings,
+                channel=FakeChannelService(),
+                git_workspace=FakeGitWorkspaceService(),
+                validator=FakeValidationRunner("passed"),
+                ledger=TokenLedgerService(settings),
+                agent_runtime=runtime,
+                mcp_client=build_github_mcp(github),
+            )
+            task = service.start_task(SleepCodingTaskRequest(issue_number=67))
+
             updated = service.apply_action(
                 task.task_id,
                 SleepCodingTaskActionRequest(action="approve_plan"),
             )
 
             self.assertEqual(updated.status, "in_review")
-            self.assertIsNotNone(updated.pull_request)
+            self.assertEqual(runtime.execution_attempts, 2)
 
-    def test_approve_plan_prefers_local_execution_command_when_configured(self) -> None:
+    def test_approve_plan_uses_builtin_ralph_runtime_only(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             database_path = root / "sleep_coding.db"
-            runner = root / "fake_coding_runner.py"
-            runner.write_text(
-                "\n".join(
-                    [
-                        "import json",
-                        "import pathlib",
-                        "import sys",
-                        "",
-                        "repo = pathlib.Path.cwd()",
-                        "(repo / 'generated.txt').write_text('local-first execution\\n', encoding='utf-8')",
-                        "print(json.dumps({",
-                        "  'artifact_markdown': '## Summary\\nExecuted local coding command',",
-                        "  'commit_message': 'feat: local-first coding command'",
-                        "}))",
-                    ]
-                ),
-                encoding="utf-8",
-            )
-            settings = build_settings(
-                database_path,
-                sleep_coding_execution_command=f"python {runner}",
-            )
+            settings = build_settings(database_path)
             github = FakeGitHubService()
             git_workspace = FakeGitWorkspaceService(root / "worktrees")
             agent_runtime = FakeAgentRuntime()
@@ -808,9 +1017,9 @@ class SleepCodingServiceTests(unittest.TestCase):
             )
 
             self.assertEqual(updated.status, "in_review")
-            worktree = root / "worktrees" / "codex__issue-20-sleep-coding"
-            self.assertTrue((worktree / "generated.txt").exists())
-            self.assertEqual(len(agent_runtime.calls), 1)
+            self.assertGreaterEqual(len(agent_runtime.calls), 2)
+            self.assertFalse(hasattr(service.drafting, "_run_local_execution_command"))
+            self.assertFalse(hasattr(service.drafting, "_resolve_execution_command"))
     
     def test_start_and_approve_plan_append_usage_to_kickoff_request(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -926,8 +1135,6 @@ class SleepCodingServiceTests(unittest.TestCase):
                 langsmith_tracing=False,
                 minimax_api_key="test-key",
                 openai_api_key=None,
-                sleep_coding_execution_command=None,
-                sleep_coding_execution_allow_llm_fallback=False,
             )
             github = FakeGitHubService()
             service = SleepCodingService(
@@ -959,8 +1166,6 @@ class SleepCodingServiceTests(unittest.TestCase):
                 langsmith_tracing=False,
                 minimax_api_key="test-key",
                 openai_api_key=None,
-                sleep_coding_execution_command=None,
-                sleep_coding_execution_allow_llm_fallback=False,
             )
             github = FakeGitHubService()
             service = SleepCodingService(
@@ -982,21 +1187,22 @@ class SleepCodingServiceTests(unittest.TestCase):
                     SleepCodingTaskActionRequest(action="approve_plan"),
                 )
 
-    def test_apply_action_requires_local_execution_command_when_llm_fallback_disabled(self) -> None:
+    def test_apply_action_requires_builtin_ralph_runtime_when_llm_credentials_are_missing(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             database_path = Path(temp_dir) / "sleep_coding.db"
             platform_config_path = Path(temp_dir) / "platform.json"
+            models_config_path = Path(temp_dir) / "models.json"
             platform_config_path.write_text("{}", encoding="utf-8")
+            models_config_path.write_text("{}", encoding="utf-8")
             settings = Settings(
                 app_env="development",
                 database_url=f"sqlite:///{database_path}",
                 platform_config_path=str(platform_config_path),
+                models_config_path=str(models_config_path),
                 github_repository="tiezhuli001/youmeng-gateway",
                 langsmith_tracing=False,
-                minimax_api_key="test-key",
+                minimax_api_key=None,
                 openai_api_key=None,
-                sleep_coding_execution_command=None,
-                sleep_coding_execution_allow_llm_fallback=False,
             )
             github = FakeGitHubService()
             service = SleepCodingService(
@@ -1010,7 +1216,7 @@ class SleepCodingServiceTests(unittest.TestCase):
             )
             task = service.start_task(SleepCodingTaskRequest(issue_number=23))
 
-            with self.assertRaisesRegex(RuntimeError, "Local sleep coding execution command is required"):
+            with self.assertRaisesRegex(RuntimeError, "Builtin Ralph runtime is unavailable"):
                 service.apply_action(
                     task.task_id,
                     SleepCodingTaskActionRequest(action="approve_plan"),
@@ -1129,13 +1335,10 @@ class SleepCodingServiceTests(unittest.TestCase):
             self.assertEqual(result.exit_code, 124)
             self.assertIn("timed out after 12.0s", result.output)
 
-    def test_local_execution_command_timeout_raises_clear_error(self) -> None:
+    def test_drafting_service_no_longer_exposes_local_command_helpers(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             repo_path = Path(temp_dir)
-            settings = Settings(
-                app_env="test",
-                sleep_coding_execution_timeout_seconds=9,
-            )
+            settings = Settings(app_env="test")
             service = RalphDraftingService(
                 settings=settings,
                 repo_path=repo_path,
@@ -1144,19 +1347,8 @@ class SleepCodingServiceTests(unittest.TestCase):
                 agent_runtime=Mock(),
             )
 
-            with self.assertRaisesRegex(RuntimeError, "timed out after 9.0s"):
-                with patch(
-                    "app.agents.ralph.drafting.subprocess.run",
-                    side_effect=subprocess.TimeoutExpired(cmd=["runner"], timeout=9),
-                ):
-                    service._run_local_execution_command(
-                        command=["runner"],
-                        prompt="do work",
-                        worktree_path=repo_path,
-                        issue=SleepCodingIssue(issue_number=1, title="Timeout", body="Test"),
-                        plan=SleepCodingPlan(summary="s", scope=[], validation=[], risks=[]),
-                        head_branch="codex/test-timeout",
-                    )
+            self.assertFalse(hasattr(service, "_run_local_execution_command"))
+            self.assertFalse(hasattr(service, "_resolve_execution_command"))
 
     def test_github_bridge_coerces_string_url_payload(self) -> None:
         settings = Settings(app_env="test", github_repository="tiezhuli001/youmeng-gateway")
@@ -1290,6 +1482,19 @@ class SleepCodingServiceTests(unittest.TestCase):
                         artifact_path=f"/tmp/{task.head_branch.replace('/', '__')}/.sleep_coding/issue-32.md",
                         output="artifact ready",
                         is_dry_run=True,
+                        changed_files=[".sleep_coding/issue-32.md", "tests/generated_test.py"],
+                        file_changes=[
+                            {
+                                "path": ".sleep_coding/issue-32.md",
+                                "diff_excerpt": "new file: .sleep_coding/issue-32.md",
+                            },
+                            {
+                                "path": "tests/generated_test.py",
+                                "diff_excerpt": "new file: tests/generated_test.py",
+                            },
+                        ],
+                        diff_summary="2 files changed in worktree.",
+                        diff_excerpt="new file: .sleep_coding/issue-32.md",
                     ),
                     validation=ValidationResult(
                         status="passed",

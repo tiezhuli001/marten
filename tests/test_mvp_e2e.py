@@ -20,6 +20,7 @@ from app.main import app
 from app.core.config import Settings
 from app.ledger.service import TokenLedgerService
 from app.models.schemas import (
+    GitExecutionResult,
     GitHubIssueDraft,
     GitHubIssueResult,
     MainAgentIntakeRequest,
@@ -27,6 +28,8 @@ from app.models.schemas import (
     ReviewSkillOutput,
     SleepCodingIssue,
     SleepCodingPullRequest,
+    SleepCodingTaskActionRequest,
+    SleepCodingTaskRequest,
     SleepCodingWorkerPollRequest,
     TokenUsage,
     ValidationResult,
@@ -308,6 +311,27 @@ class FakeGitWorkspaceService:
             is_dry_run=True,
         )
 
+    def capture_worktree_evidence(self, branch):
+        from app.models.schemas import GitExecutionResult
+
+        changed_files = [
+            ".sleep_coding/issue-artifact.md",
+            "tests/generated_test.py",
+        ]
+        return GitExecutionResult(
+            status="prepared",
+            worktree_path=f"/tmp/{branch.replace('/', '__')}",
+            output="captured worktree evidence",
+            is_dry_run=True,
+            changed_files=changed_files,
+            file_changes=[
+                {"path": path, "diff_excerpt": f"new file: {path}"}
+                for path in changed_files
+            ],
+            diff_summary="2 files changed in worktree.",
+            diff_excerpt="new file: tests/generated_test.py",
+        )
+
     def commit_changes(self, branch, message):
         from app.models.schemas import GitExecutionResult
 
@@ -341,6 +365,40 @@ class FakeValidationRunner:
             exit_code=0,
             output="ok",
         )
+
+
+class FakeRalphAgentRuntime:
+    def __init__(self) -> None:
+        self.mcp = MCPClient()
+
+    def generate_structured_output(self, agent, *, output_contract, **kwargs):
+        if "artifact_markdown" in output_contract:
+            output_text = (
+                '{"artifact_markdown":"## Summary\\nGenerated coding draft",'
+                '"commit_message":"feat: implement sleep coding task",'
+                '"file_changes":[{"path":"tests/generated_test.py","content":"print(\\"ok\\")","description":"generated test"}]}'
+            )
+        else:
+            output_text = (
+                '{"summary":"LLM generated plan","scope":["Update service code","Add tests"],'
+                '"validation":["python -m unittest discover -s tests"],'
+                '"risks":["Issue details may still need clarification."]}'
+            )
+        return type(
+            "LLMResponseStub",
+            (),
+            {
+                "output_text": output_text,
+                "usage": TokenUsage(
+                    prompt_tokens=22,
+                    completion_tokens=8,
+                    total_tokens=30,
+                    provider="openai",
+                    model_name="gpt-4.1-mini",
+                    cost_usd=0.001,
+                ),
+            },
+        )()
 
 
 class FakeReviewSkillService:
@@ -418,11 +476,29 @@ def build_settings(database_path: Path) -> Settings:
         platform_config_path=str(database_path.parent / "platform.json"),
         models_config_path=str(models_config_path),
         sleep_coding_worker_auto_approve_plan=True,
-        openai_api_key=None,
+        openai_api_key="test-key",
         minimax_api_key=None,
         feishu_verification_token="token-1",
         feishu_encrypt_key="encrypt-key",
         langsmith_tracing=False,
+    )
+
+
+def build_sleep_coding_service(
+    *,
+    settings: Settings,
+    channel: FakeChannelService,
+    ledger: TokenLedgerService,
+    github_mcp: MCPClient,
+) -> SleepCodingService:
+    return SleepCodingService(
+        settings=settings,
+        channel=channel,
+        git_workspace=FakeGitWorkspaceService(),
+        validator=FakeValidationRunner(),
+        ledger=ledger,
+        agent_runtime=FakeRalphAgentRuntime(),
+        mcp_client=github_mcp,
     )
 
 
@@ -455,13 +531,11 @@ class MVPE2ETests(unittest.TestCase):
             channel = FakeChannelService()
             ledger = TokenLedgerService(settings)
             github_mcp = build_github_mcp(github)
-            sleep_coding = SleepCodingService(
+            sleep_coding = build_sleep_coding_service(
                 settings=settings,
                 channel=channel,
-                git_workspace=FakeGitWorkspaceService(),
-                validator=FakeValidationRunner(),
                 ledger=ledger,
-                mcp_client=github_mcp,
+                github_mcp=github_mcp,
             )
             worker = SleepCodingWorkerService(
                 settings=settings,
@@ -568,13 +642,11 @@ class MVPE2ETests(unittest.TestCase):
             channel = FakeChannelService()
             ledger = TokenLedgerService(settings)
             github_mcp = build_github_mcp(github)
-            sleep_coding = SleepCodingService(
+            sleep_coding = build_sleep_coding_service(
                 settings=settings,
                 channel=channel,
-                git_workspace=FakeGitWorkspaceService(),
-                validator=FakeValidationRunner(),
                 ledger=ledger,
-                mcp_client=github_mcp,
+                github_mcp=github_mcp,
             )
             worker = SleepCodingWorkerService(
                 settings=settings,
@@ -668,6 +740,66 @@ class MVPE2ETests(unittest.TestCase):
             self.assertTrue(any(event.event_type == "review_returned" for event in child_events))
             self.assertTrue(any(event.event_type == "review_approved" for event in review_events))
 
+    def test_pipeline_stops_when_execution_truth_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = build_settings(Path(temp_dir) / "mvp-e2e-missing-truth.db")
+            github = FakeGitHubService()
+            channel = FakeChannelService()
+            ledger = TokenLedgerService(settings)
+            github_mcp = build_github_mcp(github)
+            sleep_coding = build_sleep_coding_service(
+                settings=settings,
+                channel=channel,
+                ledger=ledger,
+                github_mcp=github_mcp,
+            )
+            review = ReviewService(
+                settings=settings,
+                sleep_coding=sleep_coding,
+                skill=FakeReviewSkillService(),
+                mcp_client=github_mcp,
+            )
+            automation = AutomationService(
+                settings=settings,
+                sleep_coding=sleep_coding,
+                review=review,
+                channel=channel,
+                ledger=ledger,
+                background_jobs=ImmediateBackgroundJobs(),
+            )
+
+            task = sleep_coding.start_task(SleepCodingTaskRequest(issue_number=57))
+            task = sleep_coding.apply_action(
+                task.task_id,
+                SleepCodingTaskActionRequest(action="approve_plan"),
+            )
+            with sleep_coding._connect() as connection:
+                sleep_coding.store.update_task_payloads(
+                    connection,
+                    task.task_id,
+                    status="in_review",
+                    git_execution=GitExecutionResult(
+                        status="prepared",
+                        worktree_path=task.git_execution.worktree_path,
+                        artifact_path=task.git_execution.artifact_path,
+                        output="artifact ready",
+                        is_dry_run=True,
+                        changed_files=[],
+                        file_changes=[],
+                        diff_summary="",
+                        diff_excerpt="",
+                    ),
+                )
+                connection.commit()
+
+            with self.assertRaisesRegex(ValueError, "execution evidence"):
+                automation.run_review_loop(task.task_id)
+
+            control_task = sleep_coding.tasks.get_task(task.control_task_id)
+            self.assertEqual(control_task.status, "in_review")
+            self.assertNotIn("final_evidence", control_task.payload)
+            self.assertFalse(any("任务完成" in title for title, _, _ in channel.notifications))
+
     def test_existing_issue_to_worker_to_review_to_final_delivery_without_duplicate_issue_creation(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             settings = build_settings(Path(temp_dir) / "mvp-e2e-existing-issue.db")
@@ -689,13 +821,11 @@ class MVPE2ETests(unittest.TestCase):
             channel = FakeChannelService()
             ledger = TokenLedgerService(settings)
             github_mcp = build_github_mcp(github)
-            sleep_coding = SleepCodingService(
+            sleep_coding = build_sleep_coding_service(
                 settings=settings,
                 channel=channel,
-                git_workspace=FakeGitWorkspaceService(),
-                validator=FakeValidationRunner(),
                 ledger=ledger,
-                mcp_client=github_mcp,
+                github_mcp=github_mcp,
             )
             worker = SleepCodingWorkerService(
                 settings=settings,
@@ -747,13 +877,11 @@ class MVPE2ETests(unittest.TestCase):
             channel = FakeChannelService()
             ledger = TokenLedgerService(settings)
             github_mcp = build_github_mcp(github)
-            sleep_coding = SleepCodingService(
+            sleep_coding = build_sleep_coding_service(
                 settings=settings,
                 channel=channel,
-                git_workspace=FakeGitWorkspaceService(),
-                validator=FakeValidationRunner(),
                 ledger=ledger,
-                mcp_client=github_mcp,
+                github_mcp=github_mcp,
             )
             worker = SleepCodingWorkerService(
                 settings=settings,
@@ -842,13 +970,11 @@ class MVPE2ETests(unittest.TestCase):
             channel = FakeChannelService()
             ledger = TokenLedgerService(settings)
             github_mcp = build_github_mcp(github)
-            sleep_coding = SleepCodingService(
+            sleep_coding = build_sleep_coding_service(
                 settings=settings,
                 channel=channel,
-                git_workspace=FakeGitWorkspaceService(),
-                validator=FakeValidationRunner(),
                 ledger=ledger,
-                mcp_client=github_mcp,
+                github_mcp=github_mcp,
             )
             worker = SleepCodingWorkerService(
                 settings=settings,
@@ -1023,13 +1149,11 @@ class MVPE2ETests(unittest.TestCase):
             channel = FakeChannelService()
             ledger = TokenLedgerService(settings)
             github_mcp = build_github_mcp(github)
-            sleep_coding = SleepCodingService(
+            sleep_coding = build_sleep_coding_service(
                 settings=settings,
                 channel=channel,
-                git_workspace=FakeGitWorkspaceService(),
-                validator=FakeValidationRunner(),
                 ledger=ledger,
-                mcp_client=github_mcp,
+                github_mcp=github_mcp,
             )
             worker = SleepCodingWorkerService(
                 settings=settings,

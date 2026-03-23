@@ -5,7 +5,10 @@ from pathlib import Path
 from app.core.config import Settings
 from app.ledger.service import TokenLedgerService
 from app.models.schemas import (
+    GitExecutionResult,
     ReviewActionRequest,
+    ReviewFinding,
+    ReviewSkillOutput,
     ReviewRun,
     ReviewTarget,
     SleepCodingIssue,
@@ -17,7 +20,7 @@ from app.models.schemas import (
     ValidationResult,
 )
 from app.runtime.mcp import InMemoryMCPServer, MCPClient
-from app.agents.code_review_agent import ReviewService
+from app.agents.code_review_agent import ReviewService, ReviewSkillRunResult
 from app.control.automation import AutomationService
 from app.channel.notifications import ChannelNotificationResult
 from app.agents.ralph import SleepCodingService
@@ -191,6 +194,27 @@ class FakeGitWorkspaceService:
             is_dry_run=True,
         )
 
+    def capture_worktree_evidence(self, branch):
+        from app.models.schemas import GitExecutionResult
+
+        changed_files = [
+            ".sleep_coding/issue-artifact.md",
+            "tests/generated_test.py",
+        ]
+        return GitExecutionResult(
+            status="prepared",
+            worktree_path=f"/tmp/{branch.replace('/', '__')}",
+            output="captured worktree evidence",
+            is_dry_run=True,
+            changed_files=changed_files,
+            file_changes=[
+                {"path": path, "diff_excerpt": f"new file: {path}"}
+                for path in changed_files
+            ],
+            diff_summary="2 files changed in worktree.",
+            diff_excerpt="new file: tests/generated_test.py",
+        )
+
     def commit_changes(self, branch, message):
         from app.models.schemas import GitExecutionResult
 
@@ -233,6 +257,69 @@ class FailingValidationRunner:
             command="python -m unittest discover -s tests",
             exit_code=1,
             output="validation failed",
+        )
+
+
+class FakeRalphAgentRuntime:
+    def __init__(self) -> None:
+        self.mcp = MCPClient()
+
+    def generate_structured_output(self, agent, *, output_contract, **kwargs):
+        if "artifact_markdown" in output_contract:
+            output_text = (
+                '{"artifact_markdown":"## Summary\\nGenerated coding draft",'
+                '"commit_message":"feat: implement sleep coding task",'
+                '"file_changes":[{"path":"tests/generated_test.py","content":"print(\\"ok\\")","description":"generated test"}]}'
+            )
+        else:
+            output_text = (
+                '{"summary":"LLM generated plan","scope":["Update service code","Add tests"],'
+                '"validation":["python -m unittest discover -s tests"],'
+                '"risks":["Issue details may still need clarification."]}'
+            )
+        return type(
+            "LLMResponseStub",
+            (),
+            {
+                "output_text": output_text,
+                "usage": TokenUsage(
+                    prompt_tokens=22,
+                    completion_tokens=8,
+                    total_tokens=30,
+                    provider="openai",
+                    model_name="gpt-4.1-mini",
+                    cost_usd=0.001,
+                ),
+            },
+        )()
+
+
+class FakeReviewSkillService:
+    def run(self, source, context: str) -> ReviewSkillRunResult:  # noqa: ANN001
+        return ReviewSkillRunResult(
+            output=ReviewSkillOutput(
+                summary="Review for sleep coding task",
+                findings=[
+                    ReviewFinding(
+                        severity="P2",
+                        title="Minor follow-up",
+                        detail="Add one more assertion if needed.",
+                        file_path="tests/generated_test.py",
+                        line=1,
+                    )
+                ],
+                repair_strategy=["Tighten the regression test if the diff expands."],
+                blocking=False,
+                run_mode="real_run",
+                review_markdown="## Code Review Agent\n\nLooks acceptable.",
+            ),
+            token_usage=TokenUsage(
+                prompt_tokens=18,
+                completion_tokens=7,
+                total_tokens=25,
+                cost_usd=0.001,
+                step_name="code_review",
+            ),
         )
 
 
@@ -317,6 +404,20 @@ class FakeReviewService:
         return review
 
 
+class MissingReviewEvidenceService(FakeReviewService):
+    def trigger_for_task(self, task_id: str, *, write_comment: bool = True) -> ReviewRun:
+        review = super().trigger_for_task(task_id, write_comment=write_comment)
+        review.comment_url = None
+        review.artifact_path = None
+        return review
+
+    def publish_final_result(self, review_id: str, action: str) -> ReviewRun:
+        review = next(review for review in self.reviews if review.review_id == review_id)
+        review.comment_url = None
+        review.artifact_path = None
+        return review
+
+
 def build_settings(database_path: Path) -> Settings:
     platform_config_path = database_path.parent / "platform.json"
     models_config_path = database_path.parent / "models.json"
@@ -331,10 +432,29 @@ def build_settings(database_path: Path) -> Settings:
         models_config_path=str(models_config_path),
         review_runs_dir=str(database_path.parent / "review-runs"),
         github_repository="tiezhuli001/youmeng-gateway",
-        openai_api_key=None,
+        openai_api_key="test-key",
         minimax_api_key=None,
         review_max_repair_rounds=3,
         langsmith_tracing=False,
+    )
+
+
+def build_sleep_coding_service(
+    *,
+    settings: Settings,
+    channel: FakeChannelService,
+    github: FakeGitHubService,
+    validator: FakeValidationRunner | FailingValidationRunner,
+    ledger: TokenLedgerService,
+) -> SleepCodingService:
+    return SleepCodingService(
+        settings=settings,
+        channel=channel,
+        git_workspace=FakeGitWorkspaceService(),
+        validator=validator,
+        ledger=ledger,
+        agent_runtime=FakeRalphAgentRuntime(),
+        mcp_client=build_github_mcp(github),
     )
 
 
@@ -345,13 +465,12 @@ class AutomationServiceTests(unittest.TestCase):
             github = FakeGitHubService()
             channel = FakeChannelService()
             background = FakeBackgroundJobs()
-            sleep_coding = SleepCodingService(
+            sleep_coding = build_sleep_coding_service(
                 settings=settings,
                 channel=channel,
-                git_workspace=FakeGitWorkspaceService(),
+                github=github,
                 validator=FakeValidationRunner(),
                 ledger=TokenLedgerService(settings),
-                mcp_client=build_github_mcp(github),
             )
             automation = AutomationService(
                 settings=settings,
@@ -394,13 +513,12 @@ class AutomationServiceTests(unittest.TestCase):
                     step_name="sleep_coding_plan",
                 ),
             )
-            sleep_coding = SleepCodingService(
+            sleep_coding = build_sleep_coding_service(
                 settings=settings,
                 channel=channel,
-                git_workspace=FakeGitWorkspaceService(),
+                github=github,
                 validator=FakeValidationRunner(),
                 ledger=ledger,
-                mcp_client=build_github_mcp(github),
             )
             automation = AutomationService(
                 settings=settings,
@@ -449,13 +567,12 @@ class AutomationServiceTests(unittest.TestCase):
             settings = build_settings(Path(temp_dir) / "automation.db")
             github = FakeGitHubService()
             channel = FakeChannelService()
-            sleep_coding = SleepCodingService(
+            sleep_coding = build_sleep_coding_service(
                 settings=settings,
                 channel=channel,
-                git_workspace=FakeGitWorkspaceService(),
+                github=github,
                 validator=FakeValidationRunner(),
                 ledger=TokenLedgerService(settings),
-                mcp_client=build_github_mcp(github),
             )
             automation = AutomationService(
                 settings=settings,
@@ -507,13 +624,12 @@ class AutomationServiceTests(unittest.TestCase):
                     step_name="sleep_coding_plan",
                 ),
             )
-            sleep_coding = SleepCodingService(
+            sleep_coding = build_sleep_coding_service(
                 settings=settings,
                 channel=channel,
-                git_workspace=FakeGitWorkspaceService(),
+                github=github,
                 validator=FailingValidationRunner(),
                 ledger=ledger,
-                mcp_client=build_github_mcp(github),
             )
             automation = AutomationService(
                 settings=settings,
@@ -545,13 +661,12 @@ class AutomationServiceTests(unittest.TestCase):
             github = FakeGitHubService()
             channel = FakeChannelService()
             ledger = TokenLedgerService(settings)
-            sleep_coding = SleepCodingService(
+            sleep_coding = build_sleep_coding_service(
                 settings=settings,
                 channel=channel,
-                git_workspace=FakeGitWorkspaceService(),
+                github=github,
                 validator=FakeValidationRunner(),
                 ledger=ledger,
-                mcp_client=build_github_mcp(github),
             )
             automation = AutomationService(
                 settings=settings,
@@ -577,13 +692,12 @@ class AutomationServiceTests(unittest.TestCase):
             settings = build_settings(Path(temp_dir) / "automation.db")
             github = FakeGitHubService()
             channel = FakeChannelService()
-            sleep_coding = SleepCodingService(
+            sleep_coding = build_sleep_coding_service(
                 settings=settings,
                 channel=channel,
-                git_workspace=FakeGitWorkspaceService(),
+                github=github,
                 validator=FakeValidationRunner(),
                 ledger=TokenLedgerService(settings),
-                mcp_client=build_github_mcp(github),
             )
             review = FakeReviewService(sleep_coding, blocking_sequence=[False])
             automation = AutomationService(
@@ -609,6 +723,96 @@ class AutomationServiceTests(unittest.TestCase):
             self.assertEqual(len(review.reviews), 1)
             self.assertTrue(any("任务完成" in title for title, _, _ in channel.notifications))
 
+    def test_final_delivery_requires_execution_truth(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = build_settings(Path(temp_dir) / "automation.db")
+            github = FakeGitHubService()
+            channel = FakeChannelService()
+            sleep_coding = build_sleep_coding_service(
+                settings=settings,
+                channel=channel,
+                github=github,
+                validator=FakeValidationRunner(),
+                ledger=TokenLedgerService(settings),
+            )
+            review = FakeReviewService(sleep_coding, blocking_sequence=[False])
+            automation = AutomationService(
+                settings=settings,
+                sleep_coding=sleep_coding,
+                review=review,
+                channel=channel,
+                ledger=TokenLedgerService(settings),
+            )
+            task = sleep_coding.start_task(SleepCodingTaskRequest(issue_number=79))
+            task = sleep_coding.apply_action(
+                task.task_id,
+                SleepCodingTaskActionRequest(action="approve_plan"),
+            )
+            with sleep_coding._connect() as connection:
+                sleep_coding.store.update_task_payloads(
+                    connection,
+                    task.task_id,
+                    status="in_review",
+                    git_execution=GitExecutionResult(
+                        status="prepared",
+                        worktree_path=task.git_execution.worktree_path,
+                        artifact_path=task.git_execution.artifact_path,
+                        output="artifact ready",
+                        is_dry_run=True,
+                        changed_files=[],
+                        file_changes=[],
+                        diff_summary="",
+                        diff_excerpt="",
+                    ),
+                )
+                connection.commit()
+
+            updated = automation.run_review_loop(task.task_id)
+            control_task = automation.tasks.get_task(updated.control_task_id)
+            recovery = automation.tasks.build_recovery_snapshot(control_task.task_id)
+
+            self.assertEqual(updated.status, "needs_attention")
+            self.assertEqual(control_task.status, "needs_attention")
+            self.assertIn("execution evidence", control_task.payload["last_error"].lower())
+            self.assertEqual(recovery["next_action"], "repair_execution_evidence")
+            self.assertNotIn("final_evidence", control_task.payload)
+            self.assertFalse(any("任务完成" in title for title, _, _ in channel.notifications))
+
+    def test_final_delivery_requires_review_truth(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = build_settings(Path(temp_dir) / "automation.db")
+            github = FakeGitHubService()
+            channel = FakeChannelService()
+            sleep_coding = build_sleep_coding_service(
+                settings=settings,
+                channel=channel,
+                github=github,
+                validator=FakeValidationRunner(),
+                ledger=TokenLedgerService(settings),
+            )
+            review = MissingReviewEvidenceService(sleep_coding, blocking_sequence=[False])
+            automation = AutomationService(
+                settings=settings,
+                sleep_coding=sleep_coding,
+                review=review,
+                channel=channel,
+                ledger=TokenLedgerService(settings),
+            )
+            task = sleep_coding.start_task(SleepCodingTaskRequest(issue_number=80))
+            task = sleep_coding.apply_action(
+                task.task_id,
+                SleepCodingTaskActionRequest(action="approve_plan"),
+            )
+
+            updated = automation.run_review_loop(task.task_id)
+            control_task = automation.tasks.get_task(updated.control_task_id)
+            recovery = automation.tasks.build_recovery_snapshot(control_task.task_id)
+
+            self.assertEqual(updated.status, "needs_attention")
+            self.assertIn("review evidence", control_task.payload["last_error"].lower())
+            self.assertEqual(recovery["next_action"], "repair_review_evidence")
+            self.assertNotIn("final_evidence", control_task.payload)
+
     def test_real_review_service_can_force_one_blocking_pass_then_approve(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             settings = build_settings(Path(temp_dir) / "automation.db").model_copy(
@@ -616,17 +820,17 @@ class AutomationServiceTests(unittest.TestCase):
             )
             github = FakeGitHubService()
             channel = FakeChannelService()
-            sleep_coding = SleepCodingService(
+            sleep_coding = build_sleep_coding_service(
                 settings=settings,
                 channel=channel,
-                git_workspace=FakeGitWorkspaceService(),
+                github=github,
                 validator=FakeValidationRunner(),
                 ledger=TokenLedgerService(settings),
-                mcp_client=build_github_mcp(github),
             )
             review = ReviewService(
                 settings=settings,
                 sleep_coding=sleep_coding,
+                skill=FakeReviewSkillService(),
                 mcp_client=build_github_mcp(github),
             )
             automation = AutomationService(
@@ -654,17 +858,17 @@ class AutomationServiceTests(unittest.TestCase):
             )
             github = FakeGitHubService()
             channel = FakeChannelService()
-            sleep_coding = SleepCodingService(
+            sleep_coding = build_sleep_coding_service(
                 settings=settings,
                 channel=channel,
-                git_workspace=FakeGitWorkspaceService(),
+                github=github,
                 validator=FakeValidationRunner(),
                 ledger=TokenLedgerService(settings),
-                mcp_client=build_github_mcp(github),
             )
             review = ReviewService(
                 settings=settings,
                 sleep_coding=sleep_coding,
+                skill=FakeReviewSkillService(),
                 mcp_client=build_github_mcp(github),
             )
             task = sleep_coding.start_task(SleepCodingTaskRequest(issue_number=73))
@@ -738,13 +942,12 @@ class AutomationServiceTests(unittest.TestCase):
             github = FakeGitHubService()
             channel = FakeChannelService()
             background = FakeBackgroundJobs()
-            sleep_coding = SleepCodingService(
+            sleep_coding = build_sleep_coding_service(
                 settings=settings,
                 channel=channel,
-                git_workspace=FakeGitWorkspaceService(),
+                github=github,
                 validator=FakeValidationRunner(),
                 ledger=TokenLedgerService(settings),
-                mcp_client=build_github_mcp(github),
             )
             task = sleep_coding.start_task(SleepCodingTaskRequest(issue_number=74))
             task = sleep_coding.apply_action(
@@ -787,13 +990,12 @@ class AutomationServiceTests(unittest.TestCase):
             settings = build_settings(Path(temp_dir) / "automation.db")
             github = FakeGitHubService()
             channel = FakeChannelService()
-            sleep_coding = SleepCodingService(
+            sleep_coding = build_sleep_coding_service(
                 settings=settings,
                 channel=channel,
-                git_workspace=FakeGitWorkspaceService(),
+                github=github,
                 validator=FakeValidationRunner(),
                 ledger=TokenLedgerService(settings),
-                mcp_client=build_github_mcp(github),
             )
             automation = AutomationService(
                 settings=settings,
@@ -827,13 +1029,12 @@ class AutomationServiceTests(unittest.TestCase):
             settings = build_settings(Path(temp_dir) / "automation.db")
             github = FakeGitHubService()
             channel = FakeChannelService()
-            sleep_coding = SleepCodingService(
+            sleep_coding = build_sleep_coding_service(
                 settings=settings,
                 channel=channel,
-                git_workspace=FakeGitWorkspaceService(),
+                github=github,
                 validator=FakeValidationRunner(),
                 ledger=TokenLedgerService(settings),
-                mcp_client=build_github_mcp(github),
             )
 
             class ExplodingAutomationService(AutomationService):

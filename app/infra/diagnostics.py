@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from shutil import which
 from typing import Any
 
 from app.core.config import Settings, get_settings
@@ -113,35 +112,19 @@ class IntegrationDiagnosticsService:
             return {"status": "error", "detail": str(exc)}
 
     def _review_skill_status(self) -> dict[str, Any]:
-        if self.settings.resolved_review_skill_command:
-            command = self.settings.resolved_review_skill_command.split()[0]
-            if which(command) is None:
-                return {"status": "error", "detail": f"Command not found: {command}"}
-            return {"status": "ok", "mode": "command", "command": self.settings.resolved_review_skill_command}
         if self.settings.has_runtime_llm_credentials:
             return {"status": "ok", "mode": "runtime_llm"}
-        return {"status": "not_configured", "detail": "No review skill command or model credentials configured"}
+        return {
+            "status": "not_configured",
+            "detail": "Builtin code-review-agent runtime is unavailable: missing model credentials.",
+        }
 
     def _ralph_execution_status(self) -> dict[str, Any]:
-        if self.settings.resolved_sleep_coding_execution_command:
-            command = self.settings.resolved_sleep_coding_execution_command.split()[0]
-            if which(command) is None:
-                return {"status": "error", "detail": f"Command not found: {command}"}
-            return {
-                "status": "ok",
-                "mode": "command",
-                "command": self.settings.resolved_sleep_coding_execution_command,
-            }
-        if self.settings.resolved_sleep_coding_execution_allow_llm_fallback:
-            if self.settings.has_runtime_llm_credentials:
-                return {"status": "ok", "mode": "runtime_llm"}
-            return {
-                "status": "error",
-                "detail": "No coding runtime configured. Add model credentials or define `sleep_coding.execution.command`.",
-            }
+        if self.settings.has_runtime_llm_credentials:
+            return {"status": "ok", "mode": "runtime_llm"}
         return {
             "status": "error",
-            "detail": "No local coding command configured. Define `sleep_coding.execution.command` or explicitly enable LLM fallback.",
+            "detail": "Builtin Ralph runtime is unavailable: missing model credentials.",
         }
 
     def _feishu_status(self) -> dict[str, Any]:

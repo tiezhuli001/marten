@@ -186,6 +186,8 @@ class RuntimeComponentTests(unittest.TestCase):
             self.assertIn("review_skill", report["main_chain"]["live_blocking_components"])
             self.assertEqual(report["main_chain"]["acceptance_status"], "blocked")
             self.assertIn("github_mcp", report["main_chain"]["acceptance_summary"])
+            self.assertNotEqual(report["ralph_execution"].get("mode"), "command")
+            self.assertNotEqual(report["review_skill"].get("mode"), "command")
 
     def test_diagnostics_reports_live_acceptance_summary_when_chain_is_ready(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -383,7 +385,8 @@ class RuntimeComponentTests(unittest.TestCase):
             self.assertTrue(settings.resolved_sleep_coding_enable_git_push)
             self.assertEqual(settings.resolved_git_remote_name, "upstream")
             self.assertEqual(settings.resolved_review_skill_name, "code-review")
-            self.assertIsNone(settings.resolved_review_skill_command)
+            self.assertFalse(hasattr(settings, "review_skill_command"))
+            self.assertFalse(hasattr(settings, "resolved_review_skill_command"))
             self.assertEqual(settings.resolved_github_repository, "demo/repo")
             self.assertEqual(settings.resolved_channel_provider, "feishu")
 
@@ -393,8 +396,10 @@ class RuntimeComponentTests(unittest.TestCase):
             (root / "platform.json").write_text("{}", encoding="utf-8")
             settings = Settings(platform_config_path=str(root / "platform.json"))
 
-            self.assertIsNone(settings.resolved_sleep_coding_execution_command)
-            self.assertTrue(settings.resolved_sleep_coding_execution_allow_llm_fallback)
+            self.assertFalse(hasattr(settings, "sleep_coding_execution_command"))
+            self.assertFalse(hasattr(settings, "sleep_coding_execution_allow_llm_fallback"))
+            self.assertFalse(hasattr(settings, "resolved_sleep_coding_execution_command"))
+            self.assertFalse(hasattr(settings, "resolved_sleep_coding_execution_allow_llm_fallback"))
             self.assertEqual(settings.resolved_sleep_coding_execution_timeout_seconds, 600.0)
             self.assertEqual(settings.resolved_sleep_coding_validation_timeout_seconds, 600.0)
             self.assertTrue(settings.resolved_review_writeback_final_only)
@@ -485,19 +490,17 @@ class RuntimeComponentTests(unittest.TestCase):
 
             self.assertFalse(settings.resolved_review_writeback_final_only)
 
-    def test_settings_allow_platform_json_to_disable_llm_fallback(self) -> None:
+    def test_legacy_platform_json_fallback_key_no_longer_changes_runtime_surface(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             (root / "platform.json").write_text(
                 json.dumps({"sleep_coding": {"execution": {"allow_llm_fallback": False}}}),
                 encoding="utf-8",
             )
-            settings = Settings(
-                platform_config_path=str(root / "platform.json"),
-                sleep_coding_execution_allow_llm_fallback=True,
-            )
+            settings = Settings(platform_config_path=str(root / "platform.json"))
 
-            self.assertFalse(settings.resolved_sleep_coding_execution_allow_llm_fallback)
+            self.assertFalse(hasattr(settings, "sleep_coding_execution_allow_llm_fallback"))
+            self.assertFalse(hasattr(settings, "resolved_sleep_coding_execution_allow_llm_fallback"))
 
     def test_settings_allow_platform_json_to_disable_forced_first_pass(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

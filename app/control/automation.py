@@ -205,10 +205,10 @@ class AutomationService:
                         "approve_review",
                     )
                 current_task = self.sleep_coding.get_task(current_task.task_id)
-                self._publish_final_delivery(current_task, last_review)
+                current_task = self._publish_final_delivery(current_task, last_review)
                 return current_task
             if decision.action == "deliver":
-                self._publish_final_delivery(current_task)
+                current_task = self._publish_final_delivery(current_task)
             return current_task
 
     def _get_blocking_review_count(self, task: SleepCodingTask) -> int:
@@ -555,10 +555,13 @@ class AutomationService:
         self,
         task: SleepCodingTask,
         review: ReviewRun | None = None,
-    ) -> None:
+    ) -> SleepCodingTask:
         review = review or self._resolve_final_review(task)
+        truth_error = self._validate_delivery_truth(task, review)
+        if truth_error is not None:
+            return self._escalate_truth_gap(task, truth_error)
         if not self._can_publish_final_delivery(task, review):
-            return
+            return task
         assert review is not None
         evidence = self._build_final_evidence(task, review)
         title, lines = self.delivery.build_final_delivery(task, review)
@@ -586,6 +589,7 @@ class AutomationService:
         status = "completed" if task.status == "approved" else task.status
         self._record_parent_result(task, event_type="child_completed", status=status, payload=payload)
         self._record_parent_result(task, event_type=ControlEventType.DELIVERY_COMPLETED, status=status, payload=payload)
+        return self.sleep_coding.get_task(task.task_id)
 
     def _resolve_final_review(self, task: SleepCodingTask) -> ReviewRun | None:
         reviews = self.review.list_task_reviews(task.task_id)
@@ -603,6 +607,57 @@ class AutomationService:
         if review is None or review.is_blocking:
             return False
         return review.status in {"approved", "completed"}
+
+    def _validate_delivery_truth(
+        self,
+        task: SleepCodingTask,
+        review: ReviewRun | None,
+    ) -> str | None:
+        if task.status != "approved":
+            return None
+        if task.validation.status != "passed":
+            return "Missing passed validation evidence for final delivery."
+        if not task.validation.workspace_path:
+            return "Missing validation workspace evidence for final delivery."
+        if not task.git_execution.changed_files or not (
+            task.git_execution.diff_summary or task.git_execution.diff_excerpt
+        ):
+            return "Missing execution evidence for final delivery."
+        if review is None:
+            return "Missing review evidence for final delivery."
+        if not (review.comment_url or review.artifact_path):
+            return "Missing review evidence for final delivery."
+        return None
+
+    def _escalate_truth_gap(
+        self,
+        task: SleepCodingTask,
+        reason: str,
+    ) -> SleepCodingTask:
+        updated_task = self.sleep_coding.mark_needs_attention(task.task_id, reason=reason)
+        payload = {
+            "task_status": updated_task.status,
+            "last_error": reason,
+            "terminal_evidence": self._build_terminal_evidence(
+                terminal_state="needs_attention",
+                task=updated_task,
+                review=self._resolve_final_review(updated_task),
+                last_error=reason,
+            ).model_dump(mode="json"),
+        }
+        self._record_parent_result(
+            updated_task,
+            event_type="child_handed_off",
+            status="needs_attention",
+            payload=payload,
+        )
+        self._record_parent_result(
+            updated_task,
+            event_type="delivery.handed_off",
+            status="needs_attention",
+            payload=payload,
+        )
+        return updated_task
 
     def _build_final_evidence(
         self,

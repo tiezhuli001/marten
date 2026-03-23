@@ -1,15 +1,17 @@
 # Live Chain Validation
 
-## Overview
-
-This document tracks live chain validation activities for the Marten project.
+This document tracks the live validation status for the Marten framework.
 
 ## Validation Status
 
-Last validation completed: 2026-03-15
+Last validation: 20260322T120000Z
+
+## Notes
+
+- Framework validation completed successfully
+- All builtin agents preserved
+- Multi-endpoint configuration verified
 
 ---
 
-## Verification Notes
-
-Verification conducted: 20260323T153748Z
+live-validation-marker: 20260323T153748Z

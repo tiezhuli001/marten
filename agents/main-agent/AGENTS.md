@@ -151,6 +151,7 @@ You must not:
 - the user mixes several independent changes into one request
 
 In these cases, still prefer producing an executable issue draft with explicit open questions over dropping into vague analysis.
+If the request spans several large areas at once, ask the user to narrow it to the highest-priority 1-2 changes before opening a coding handoff.
 
 ### Escalate instead of handoff when
 

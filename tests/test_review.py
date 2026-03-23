@@ -467,13 +467,16 @@ class ReviewServiceTests(unittest.TestCase):
             self.assertEqual(sleep_coding.get_task(task.task_id).status, "changes_requested")
             self.assertEqual(review_task.payload["review_decision"], "changes_requested")
             self.assertEqual(review_task.payload["next_owner_agent"], "ralph")
-            self.assertTrue(
-                any(
-                    event.event_type == "review_returned"
-                    and event.payload.get("next_owner_agent") == "ralph"
-                    for event in review_service.tasks.list_events(sleep_control_task.task_id)
-                )
+            review_returned = next(
+                event
+                for event in review_service.tasks.list_events(sleep_control_task.task_id)
+                if event.event_type == "review_returned"
+                and event.payload.get("next_owner_agent") == "ralph"
             )
+            self.assertIn("blocking", review_returned.payload)
+            self.assertEqual(review_returned.payload["review_round"], 1)
+            self.assertIn("Review for sleep coding task", review_returned.payload["review_summary"])
+            self.assertTrue(review_returned.payload["repair_strategy"])
 
     def test_count_blocking_reviews_tracks_task_reviews(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -496,6 +499,38 @@ class ReviewServiceTests(unittest.TestCase):
 
             self.assertTrue(review.is_blocking)
             self.assertEqual(review_service.count_blocking_reviews(task.task_id), 1)
+
+    def test_review_requires_validation_evidence_before_starting(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = build_settings(root / "review.db", root / "review-runs")
+            sleep_coding, mcp_client = build_sleep_coding_service(settings)
+            task = sleep_coding.start_task(SleepCodingTaskRequest(issue_number=53))
+            task = sleep_coding.apply_action(
+                task.task_id,
+                SleepCodingTaskActionRequest(action="approve_plan"),
+            )
+            with sleep_coding._connect() as connection:
+                sleep_coding.store.update_task_payloads(
+                    connection,
+                    task.task_id,
+                    status="in_review",
+                    validation=ValidationResult(status="pending"),
+                )
+                connection.commit()
+            sleep_coding.tasks.update_task(
+                task.control_task_id,
+                payload_patch={"validation_status": "pending", "validation_gap": None},
+            )
+            review_service = ReviewService(
+                settings=settings,
+                sleep_coding=sleep_coding,
+                skill=FakeReviewSkillService(),
+                mcp_client=mcp_client,
+            )
+
+            with self.assertRaisesRegex(ValueError, "validation evidence"):
+                review_service.trigger_for_task(task.task_id)
 
     def test_start_review_requires_sleep_coding_task_id(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

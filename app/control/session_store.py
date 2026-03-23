@@ -9,6 +9,12 @@ from app.models.schemas import ControlSession, ControlSessionType
 
 
 class SessionStore:
+    def serialize_json_payload(self, payload: dict[str, Any]) -> str:
+        return json.dumps(payload, ensure_ascii=True)
+
+    def deserialize_json_payload(self, payload: str | None) -> dict[str, Any]:
+        return json.loads(payload or "{}")
+
     def get_or_create_session(
         self,
         connection: sqlite3.Connection,
@@ -44,7 +50,7 @@ class SessionStore:
                 source,
                 parent_session_id,
                 external_ref,
-                json.dumps(payload or {}, ensure_ascii=True),
+                self.serialize_json_payload(payload or {}),
             ),
         )
         created = connection.execute(
@@ -84,7 +90,7 @@ class SessionStore:
                 source,
                 parent_session_id,
                 external_ref,
-                json.dumps(payload or {}, ensure_ascii=True),
+                self.serialize_json_payload(payload or {}),
             ),
         )
         row = connection.execute(
@@ -127,7 +133,7 @@ class SessionStore:
         ).fetchone()
         if row is None:
             raise ValueError(f"Control session not found: {session_id}")
-        current_payload = json.loads(row["payload"] or "{}")
+        current_payload = self.deserialize_json_payload(row["payload"])
         updated_payload = {**current_payload, **payload_patch}
         connection.execute(
             """
@@ -135,7 +141,7 @@ class SessionStore:
             SET payload = ?, updated_at = CURRENT_TIMESTAMP
             WHERE session_id = ?
             """,
-            (json.dumps(updated_payload, ensure_ascii=True), session_id),
+            (self.serialize_json_payload(updated_payload), session_id),
         )
         return self.get_session(connection, session_id)
 
@@ -163,7 +169,7 @@ class SessionStore:
             parent_session_id=row["parent_session_id"],
             external_ref=row["external_ref"],
             status=row["status"],
-            payload=json.loads(row["payload"] or "{}"),
+            payload=self.deserialize_json_payload(row["payload"]),
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )

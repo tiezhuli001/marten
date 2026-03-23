@@ -1,6 +1,8 @@
 import unittest
 import json
 import tempfile
+import threading
+import time
 from pathlib import Path
 
 from app.core.config import Settings
@@ -15,7 +17,11 @@ from app.models.schemas import (
 
 
 class FakeMainAgentService:
+    def __init__(self) -> None:
+        self.calls = 0
+
     def intake(self, payload):  # noqa: ANN001
+        self.calls += 1
         return MainAgentIntakeResponse(
             mode="coding_handoff",
             issue=GitHubIssueResult(
@@ -40,13 +46,70 @@ class FakeMainAgentService:
 class FakeSessionRegistryService:
     def __init__(self) -> None:
         self.payload_updates = []
+        self.get_or_create_calls = []
+        self.run_parent_session_ids = []
+        self.sessions_by_id = {}
+        self.receipts = {}
 
     def get_or_create_session(self, **kwargs):  # noqa: ANN003
-        return type("SessionStub", (), {"session_id": kwargs.get("external_ref", "session-1")})()
+        self.get_or_create_calls.append(kwargs)
+        session_id = kwargs.get("external_ref", "session-1")
+        parent_session_id = kwargs.get("parent_session_id")
+        if kwargs.get("session_type") == "run_session":
+            self.run_parent_session_ids.append(parent_session_id)
+        session = type(
+            "SessionStub",
+            (),
+            {
+                "session_id": session_id,
+                "payload": kwargs.get("payload", {}),
+                "parent_session_id": parent_session_id,
+                "external_ref": kwargs.get("external_ref"),
+            },
+        )()
+        self.sessions_by_id[session_id] = session
+        return session
 
     def set_active_agent(self, session_id: str, agent_id: str):  # noqa: ANN001
         self.payload_updates.append((session_id, agent_id))
         return type("SessionStub", (), {"session_id": session_id, "payload": {"active_agent": agent_id}})()
+
+    def update_session_payload(self, session_id: str, payload_patch: dict):  # noqa: ANN001
+        session = self.sessions_by_id[session_id]
+        updated_payload = {**getattr(session, "payload", {}), **payload_patch}
+        updated = type(
+            "SessionStub",
+            (),
+            {
+                "session_id": session_id,
+                "payload": updated_payload,
+                "parent_session_id": getattr(session, "parent_session_id", None),
+                "external_ref": getattr(session, "external_ref", None),
+            },
+        )()
+        self.sessions_by_id[session_id] = updated
+        return updated
+
+    def get_session(self, session_id: str):  # noqa: ANN001
+        if session_id not in self.sessions_by_id:
+            self.sessions_by_id[session_id] = type(
+                "SessionStub",
+                (),
+                {
+                    "session_id": session_id,
+                    "payload": {},
+                    "parent_session_id": None,
+                    "external_ref": session_id,
+                },
+            )()
+        return self.sessions_by_id[session_id]
+
+    def find_inbound_receipt(self, dedupe_key: str):  # noqa: ANN001
+        return self.receipts.get(dedupe_key)
+
+    def record_inbound_receipt(self, dedupe_key: str, response_payload: dict):  # noqa: ANN001
+        self.receipts[dedupe_key] = response_payload
+        return response_payload
 
 
 class FakeLedgerService:
@@ -131,6 +194,26 @@ class GatewayRoutingTests(unittest.TestCase):
         self.assertIsNotNone(response.run_session_id)
         self.assertEqual(sessions.payload_updates[-1][1], "main-agent")
 
+    def test_gateway_prefers_explicit_session_key_for_canonical_user_session_ref(self) -> None:
+        sessions = FakeSessionRegistryService()
+        service = GatewayControlPlaneService(
+            settings=Settings(app_env="test", database_url="sqlite:////tmp/test-gateway.db"),
+            main_agent=FakeMainAgentService(),
+            sessions=sessions,
+            ledger=FakeLedgerService(),
+        )
+
+        service.run(
+            GatewayMessageRequest(
+                user_id="feishu:test-user",
+                source="feishu",
+                session_key="feishu:chat:oc_123",
+                content="请帮我整理这个需求并创建一个 issue：补一条真实链路验证测试。",
+            )
+        )
+
+        self.assertEqual(sessions.get_or_create_calls[0]["external_ref"], "feishu:chat:oc_123")
+
     def test_sleep_coding_request_inherits_chain_request_id_from_parent_issue(self) -> None:
         sleep_coding = FakeSleepCodingService()
         service = GatewayControlPlaneService(
@@ -153,6 +236,27 @@ class GatewayRoutingTests(unittest.TestCase):
         self.assertEqual(response.request_id != response.chain_request_id, True)
         self.assertEqual(response.chain_request_id, "req-parent-55")
         self.assertEqual(sleep_coding.requests[0].request_id, "req-parent-55")
+
+    def test_sleep_coding_request_reuses_linked_user_session_as_run_parent(self) -> None:
+        sleep_coding = FakeSleepCodingService()
+        sessions = FakeSessionRegistryService()
+        service = GatewayControlPlaneService(
+            settings=Settings(app_env="test", database_url="sqlite:////tmp/test-gateway.db"),
+            sleep_coding=sleep_coding,
+            sessions=sessions,
+            ledger=FakeLedgerService(),
+            tasks=FakeTaskRegistryService(parent_request_id="req-parent-55"),
+        )
+
+        service.run(
+            GatewayMessageRequest(
+                user_id="feishu:test-user",
+                source="feishu",
+                content="写代码 issue #55",
+            )
+        )
+
+        self.assertEqual(sessions.run_parent_session_ids[-1], "user-session-55")
 
     def test_explicit_ralph_mention_starts_sleep_coding_even_without_keyword(self) -> None:
         sleep_coding = FakeSleepCodingService()
@@ -233,6 +337,96 @@ class GatewayRoutingTests(unittest.TestCase):
             self.assertEqual(tasks.events[0][1], "routing_failure")
             self.assertEqual(tasks.events[0][2]["requested_agent"], "ralph")
             self.assertEqual(tasks.events[0][2]["reason"], "handoff_not_allowed")
+
+    def test_duplicate_message_id_reuses_recorded_gateway_response(self) -> None:
+        sessions = FakeSessionRegistryService()
+        main_agent = FakeMainAgentService()
+        service = GatewayControlPlaneService(
+            settings=Settings(app_env="test", database_url="sqlite:////tmp/test-gateway.db"),
+            main_agent=main_agent,
+            sessions=sessions,
+            ledger=FakeLedgerService(),
+        )
+
+        first = service.run(
+            GatewayMessageRequest(
+                user_id="feishu:test-user",
+                source="feishu",
+                message_id="om_123",
+                session_key="feishu:chat:oc_123",
+                content="请帮我整理这个需求并创建一个 issue：补一条真实链路验证测试。",
+            )
+        )
+        second = service.run(
+            GatewayMessageRequest(
+                user_id="feishu:test-user",
+                source="feishu",
+                message_id="om_123",
+                session_key="feishu:chat:oc_123",
+                content="请帮我整理这个需求并创建一个 issue：补一条真实链路验证测试。",
+            )
+        )
+
+        self.assertEqual(main_agent.calls, 1)
+        self.assertEqual(second.request_id, first.request_id)
+        self.assertEqual(second.chain_request_id, first.chain_request_id)
+        self.assertEqual(second.task_id, first.task_id)
+
+    def test_same_session_requests_are_serialized_by_lane(self) -> None:
+        class BlockingMainAgentService(FakeMainAgentService):
+            def __init__(self) -> None:
+                super().__init__()
+                self.started = []
+                self.release_first = threading.Event()
+                self.first_started = threading.Event()
+                self._lock = threading.Lock()
+
+            def intake(self, payload):  # noqa: ANN001
+                with self._lock:
+                    self.started.append(time.time())
+                    current_call = len(self.started)
+                    if current_call == 1:
+                        self.first_started.set()
+                if current_call == 1:
+                    self.release_first.wait(timeout=2)
+                return super().intake(payload)
+
+        sessions = FakeSessionRegistryService()
+        main_agent = BlockingMainAgentService()
+        service = GatewayControlPlaneService(
+            settings=Settings(app_env="test", database_url="sqlite:////tmp/test-gateway.db"),
+            main_agent=main_agent,
+            sessions=sessions,
+            ledger=FakeLedgerService(),
+        )
+        results = []
+
+        def _run_request(content: str) -> None:
+            results.append(
+                service.run(
+                    GatewayMessageRequest(
+                        user_id="feishu:test-user",
+                        source="feishu",
+                        session_key="feishu:chat:oc_123",
+                        content=content,
+                    )
+                )
+            )
+
+        first = threading.Thread(target=_run_request, args=("请创建一个 issue：任务一",))
+        second = threading.Thread(target=_run_request, args=("请创建一个 issue：任务二",))
+
+        first.start()
+        self.assertTrue(main_agent.first_started.wait(timeout=1))
+        second.start()
+        time.sleep(0.2)
+        self.assertEqual(len(main_agent.started), 1)
+        main_agent.release_first.set()
+        first.join(timeout=2)
+        second.join(timeout=2)
+
+        self.assertEqual(len(results), 2)
+        self.assertEqual(len(main_agent.started), 2)
 
 
 if __name__ == "__main__":

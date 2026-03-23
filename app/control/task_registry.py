@@ -63,7 +63,10 @@ class TaskRegistryService:
                     current_connection,
                     created.task_id,
                     "task_created",
-                    {"status": status, **(payload or {})},
+                    self._build_event_payload(
+                        created,
+                        {"status": status, **(payload or {})},
+                    ),
                 )
                 return created
 
@@ -118,8 +121,14 @@ class TaskRegistryService:
         owned_connection = connection is None
         current_connection = connection or self._connect()
         try:
+            task = self.tasks.get_task(current_connection, task_id)
             event = self._with_locked_retry(
-                lambda: self.events.append(current_connection, task_id, event_type, payload)
+                lambda: self.events.append(
+                    current_connection,
+                    task_id,
+                    event_type,
+                    self._build_event_payload(task, payload),
+                )
             )
             if owned_connection:
                 current_connection.commit()
@@ -139,8 +148,14 @@ class TaskRegistryService:
         owned_connection = connection is None
         current_connection = connection or self._connect()
         try:
+            task = self.tasks.get_task(current_connection, task_id)
             event = self._with_locked_retry(
-                lambda: self.events.append_domain(current_connection, task_id, event_type, payload)
+                lambda: self.events.append_domain(
+                    current_connection,
+                    task_id,
+                    event_type,
+                    self._build_event_payload(task, payload),
+                )
             )
             if owned_connection:
                 current_connection.commit()
@@ -199,6 +214,37 @@ class TaskRegistryService:
                 task_type=task_type,
                 statuses=statuses,
             )
+
+    def build_recovery_snapshot(self, task_id: str) -> dict[str, Any]:
+        with closing(self._connect()) as connection:
+            task = self.tasks.get_task(connection, task_id)
+            events = self.events.list_events(connection, task_id)
+        latest_event = events[-1] if events else None
+        recovery_event = self._select_recovery_event(task, events)
+        latest_payload = recovery_event.payload if recovery_event is not None else {}
+        latest_domain_event = next(
+            (event for event in reversed(events) if event.payload.get("domain_event") is True),
+            None,
+        )
+        next_action = self._infer_next_action(task, latest_event_type=recovery_event.event_type if recovery_event else None)
+        return {
+            "task_id": task.task_id,
+            "task_type": task.task_type,
+            "status": task.status,
+            "owner_agent": self._coerce_string(task.payload, "owner_agent") or task.agent_id,
+            "next_owner_agent": (
+                self._coerce_string(latest_payload, "next_owner_agent")
+                or self._coerce_string(task.payload, "next_owner_agent")
+            ),
+            "latest_event_type": recovery_event.event_type if recovery_event else None,
+            "latest_domain_event_type": latest_domain_event.event_type if latest_domain_event else None,
+            "next_action": next_action,
+            "domain_task_id": self._coerce_string(latest_payload, "domain_task_id"),
+            "child_control_task_id": self._coerce_string(latest_payload, "child_control_task_id"),
+            "review_id": self._coerce_string(latest_payload, "review_id"),
+            "delivery_endpoint_id": self._coerce_string(task.payload, "delivery_endpoint_id"),
+            "last_event_type": latest_event.event_type if latest_event else None,
+        }
 
     def _ensure_parent_dir(self) -> None:
         self.database_path = ensure_writable_parent(self.database_path)
@@ -259,3 +305,62 @@ class TaskRegistryService:
 
     def _deserialize_event(self, row: sqlite3.Row) -> ControlTaskEvent:
         return self.events.deserialize_event(row)
+
+    def _build_event_payload(
+        self,
+        task: ControlTask,
+        payload: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        base_payload = dict(payload or {})
+        metadata = {
+            "task_id": task.task_id,
+            "task_type": task.task_type,
+            "task_status": task.status,
+            "agent_id": task.agent_id,
+            "parent_task_id": task.parent_task_id,
+            "root_task_id": task.root_task_id,
+            "task_external_ref": task.external_ref,
+        }
+        return {**metadata, **base_payload}
+
+    def _infer_next_action(
+        self,
+        task: ControlTask,
+        *,
+        latest_event_type: str | None,
+    ) -> str:
+        if task.status in {"approved", "completed", "cancelled", "failed"}:
+            return "none"
+        if task.status in {"needs_attention", "timed_out"}:
+            return "operator_attention"
+        if task.status == "changes_requested":
+            return "rerun_coding"
+        if task.status == "in_review":
+            return "resume_review"
+        if task.status in {"planning", "awaiting_confirmation", "coding", "validating", "pr_opened"}:
+            return "resume_ralph"
+        if task.status == "issue_created":
+            if latest_event_type == "delivery.completed":
+                return "none"
+            return "resume_child_workflow"
+        return "resume_task"
+
+    def _coerce_string(self, payload: dict[str, Any], key: str) -> str | None:
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+        return None
+
+    def _select_recovery_event(
+        self,
+        task: ControlTask,
+        events: list[ControlTaskEvent],
+    ) -> ControlTaskEvent | None:
+        if not events:
+            return None
+        if task.status in {"needs_attention", "timed_out"}:
+            for preferred in ("follow_up.failed", "worker_timed_out", "needs_attention"):
+                for event in reversed(events):
+                    if event.event_type == preferred:
+                        return event
+        return events[-1]

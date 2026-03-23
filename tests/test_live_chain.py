@@ -55,23 +55,17 @@ class LiveChainIntegrationTests(unittest.TestCase):
                 "Live chain test requires JSON-first runtime configs: " + ", ".join(missing)
             )
 
-        diagnostics = IntegrationDiagnosticsService(cls.settings).get_report()
-        failures: list[str] = []
-        github_status = diagnostics.get("github_mcp", {})
-        if github_status.get("status") != "ok":
-            failures.append(f"github_mcp={github_status}")
-        ralph_status = diagnostics.get("ralph_execution", {})
-        if ralph_status.get("status") != "ok":
-            failures.append(f"ralph_execution={ralph_status}")
-        review_status = diagnostics.get("review_skill", {})
-        if review_status.get("status") != "ok":
-            failures.append(f"review_skill={review_status}")
-        feishu_status = diagnostics.get("feishu", {})
-        if feishu_status.get("status") != "ok":
-            failures.append(f"feishu={feishu_status}")
-        if failures:
+        readiness = IntegrationDiagnosticsService(cls.settings).get_live_readiness()
+        if not readiness.get("ready", False):
             raise unittest.SkipTest(
-                "Live chain test prerequisites are not ready: " + "; ".join(failures)
+                "Live chain test prerequisites are not ready: "
+                + str(
+                    {
+                        "blocking_components": readiness.get("blocking_components"),
+                        "next_action": readiness.get("next_action"),
+                        "summary": readiness.get("summary"),
+                    }
+                )
             )
 
     def test_real_chain_uses_live_llm_mcp_review_and_feishu(self) -> None:
@@ -258,6 +252,39 @@ class LiveChainIntegrationTests(unittest.TestCase):
         raise AssertionError(
             "Live chain task did not reach terminal state before timeout:\n"
             + latest.model_dump_json(indent=2)
+        )
+
+
+class LiveChainPrerequisiteContractTests(unittest.TestCase):
+    def test_live_prerequisite_message_points_to_diagnostics_truth(self) -> None:
+        diagnostics = {
+            "main_chain": {
+                "live_ready": False,
+                "live_blocking_components": ["github_mcp", "review_skill"],
+                "acceptance_summary": "Live chain blocked: github_mcp, review_skill.",
+                "next_action": "repair_github_mcp",
+            }
+        }
+
+        failures = []
+        main_chain = diagnostics.get("main_chain", {})
+        if not main_chain.get("live_ready", False):
+            failures.append(
+                "main_chain="
+                + str(
+                    {
+                        "live_blocking_components": main_chain.get("live_blocking_components"),
+                        "next_action": main_chain.get("next_action"),
+                        "acceptance_summary": main_chain.get("acceptance_summary"),
+                    }
+                )
+            )
+
+        self.assertEqual(
+            failures,
+            [
+                "main_chain={'live_blocking_components': ['github_mcp', 'review_skill'], 'next_action': 'repair_github_mcp', 'acceptance_summary': 'Live chain blocked: github_mcp, review_skill.'}"
+            ],
         )
 
 

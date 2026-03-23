@@ -226,6 +226,16 @@ class FakeValidationRunner:
         )
 
 
+class FailingValidationRunner:
+    def run(self, repo_path: Path) -> ValidationResult:
+        return ValidationResult(
+            status="failed",
+            command="python -m unittest discover -s tests",
+            exit_code=1,
+            output="validation failed",
+        )
+
+
 class FakeReviewService:
     def __init__(self, sleep_coding: SleepCodingService, blocking_sequence: list[bool]) -> None:
         self.sleep_coding = sleep_coding
@@ -422,6 +432,17 @@ class AutomationServiceTests(unittest.TestCase):
             self.assertTrue(any(line.startswith("Review: 输入") for line in final_lines))
             self.assertTrue(any("缓存读取 Token:" in line for line in final_lines))
             self.assertTrue(any("推理 Token:" in line for line in final_lines))
+            control_task = automation.tasks.get_task(updated.control_task_id)
+            final_evidence = control_task.payload.get("final_evidence")
+            terminal_evidence = control_task.payload.get("terminal_evidence")
+            self.assertIsInstance(final_evidence, dict)
+            self.assertIsInstance(terminal_evidence, dict)
+            self.assertEqual(final_evidence["task_status"], "approved")
+            self.assertEqual(final_evidence["validation_status"], "passed")
+            self.assertEqual(final_evidence["review_status"], "approved")
+            self.assertEqual(final_evidence["review_id"], "review-1")
+            self.assertGreater(final_evidence["token_usage"]["total_tokens"], 0)
+            self.assertEqual(terminal_evidence["terminal_state"], "completed")
 
     def test_auto_review_stops_after_three_blocking_rounds_and_hands_off(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -456,6 +477,100 @@ class AutomationServiceTests(unittest.TestCase):
             )
             control_task = automation.tasks.get_task(updated.control_task_id)
             self.assertEqual(control_task.status, "needs_attention")
+            self.assertEqual(control_task.payload["review_id"], "review-3")
+            self.assertEqual(control_task.payload["review_round"], 3)
+            self.assertIn("review", control_task.payload["review_summary"].lower())
+            self.assertTrue(control_task.payload["repair_strategy"])
+            self.assertEqual(control_task.payload["terminal_evidence"]["terminal_state"], "needs_attention")
+            recovery = automation.tasks.build_recovery_snapshot(control_task.task_id)
+            self.assertEqual(recovery["next_action"], "operator_attention")
+            self.assertEqual(recovery["latest_event_type"], "needs_attention")
+
+    def test_validation_failure_keeps_truthful_terminal_evidence_for_operator_reentry(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = build_settings(Path(temp_dir) / "automation.db")
+            github = FakeGitHubService()
+            channel = FakeChannelService()
+            ledger = TokenLedgerService(settings)
+            ledger.record_request(
+                request_id="req-validation-fail",
+                run_id="run-validation-fail",
+                user_id="user-1",
+                source="manual",
+                intent="sleep_coding",
+                content="Run failing validation test",
+                usage=TokenUsage(
+                    prompt_tokens=9,
+                    completion_tokens=3,
+                    total_tokens=12,
+                    cost_usd=0.001,
+                    step_name="sleep_coding_plan",
+                ),
+            )
+            sleep_coding = SleepCodingService(
+                settings=settings,
+                channel=channel,
+                git_workspace=FakeGitWorkspaceService(),
+                validator=FailingValidationRunner(),
+                ledger=ledger,
+                mcp_client=build_github_mcp(github),
+            )
+            automation = AutomationService(
+                settings=settings,
+                sleep_coding=sleep_coding,
+                review=FakeReviewService(sleep_coding, blocking_sequence=[]),
+                channel=channel,
+                ledger=ledger,
+            )
+            task = sleep_coding.start_task(
+                SleepCodingTaskRequest(issue_number=77, request_id="req-validation-fail")
+            )
+
+            updated = automation.handle_sleep_coding_action(task.task_id, "approve_plan")
+
+            self.assertEqual(updated.status, "failed")
+            self.assertFalse(any("任务完成" in title for title, _, _ in channel.notifications))
+            control_task = automation.tasks.get_task(updated.control_task_id)
+            terminal_evidence = control_task.payload.get("terminal_evidence")
+            self.assertEqual(control_task.status, "failed")
+            self.assertIsInstance(terminal_evidence, dict)
+            self.assertEqual(terminal_evidence["terminal_state"], "failed")
+            self.assertEqual(terminal_evidence["validation_status"], "failed")
+            self.assertEqual(terminal_evidence["last_error"], "Local validation failed.")
+            self.assertGreater(terminal_evidence["token_usage"]["total_tokens"], 0)
+
+    def test_completed_task_with_dry_run_delivery_records_degraded_delivery_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = build_settings(Path(temp_dir) / "automation.db")
+            github = FakeGitHubService()
+            channel = FakeChannelService()
+            ledger = TokenLedgerService(settings)
+            sleep_coding = SleepCodingService(
+                settings=settings,
+                channel=channel,
+                git_workspace=FakeGitWorkspaceService(),
+                validator=FakeValidationRunner(),
+                ledger=ledger,
+                mcp_client=build_github_mcp(github),
+            )
+            automation = AutomationService(
+                settings=settings,
+                sleep_coding=sleep_coding,
+                review=FakeReviewService(sleep_coding, blocking_sequence=[False]),
+                channel=channel,
+                ledger=ledger,
+            )
+            task = sleep_coding.start_task(SleepCodingTaskRequest(issue_number=78))
+
+            updated = automation.handle_sleep_coding_action(task.task_id, "approve_plan")
+
+            self.assertEqual(updated.status, "approved")
+            control_task = automation.tasks.get_task(updated.control_task_id)
+            self.assertEqual(control_task.status, "completed")
+            self.assertEqual(control_task.payload["terminal_evidence"]["terminal_state"], "completed")
+            self.assertEqual(control_task.payload["delivery_status"], "degraded")
+            self.assertFalse(control_task.payload["delivery_delivered"])
+            self.assertEqual(control_task.payload["delivery_stage"], "final_delivery")
 
     def test_approved_task_without_review_does_not_skip_review_gate(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -706,6 +821,55 @@ class AutomationServiceTests(unittest.TestCase):
             ]
             self.assertIn("follow_up.processing", control_events)
             self.assertIn("follow_up.completed", control_events)
+
+    def test_background_follow_up_failure_escalates_control_task_with_recovery_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = build_settings(Path(temp_dir) / "automation.db")
+            github = FakeGitHubService()
+            channel = FakeChannelService()
+            sleep_coding = SleepCodingService(
+                settings=settings,
+                channel=channel,
+                git_workspace=FakeGitWorkspaceService(),
+                validator=FakeValidationRunner(),
+                ledger=TokenLedgerService(settings),
+                mcp_client=build_github_mcp(github),
+            )
+
+            class ExplodingAutomationService(AutomationService):
+                def run_review_loop(self, task_id: str):  # type: ignore[override]
+                    raise RuntimeError("simulated review follow-up timeout")
+
+            automation = ExplodingAutomationService(
+                settings=settings,
+                sleep_coding=sleep_coding,
+                review=FakeReviewService(sleep_coding, blocking_sequence=[False]),
+                channel=channel,
+                ledger=TokenLedgerService(settings),
+                background_jobs=ImmediateBackgroundJobs(),
+            )
+            task = sleep_coding.start_task(SleepCodingTaskRequest(issue_number=76))
+
+            automation.handle_sleep_coding_action_async(task.task_id, "approve_plan")
+
+            updated_task = sleep_coding.get_task(task.task_id)
+            control_task = automation.tasks.get_task(updated_task.control_task_id)
+            recovery = automation.tasks.build_recovery_snapshot(control_task.task_id)
+            control_events = automation.tasks.list_events(control_task.task_id)
+
+            self.assertEqual(updated_task.background_follow_up_status, "failed")
+            self.assertEqual(control_task.status, "needs_attention")
+            self.assertEqual(control_task.payload["background_follow_up_status"], "failed")
+            self.assertIn("simulated review follow-up timeout", control_task.payload["last_error"])
+            self.assertEqual(control_task.payload["terminal_evidence"]["terminal_state"], "needs_attention")
+            self.assertEqual(recovery["next_action"], "operator_attention")
+            self.assertEqual(recovery["latest_event_type"], "follow_up.failed")
+            self.assertTrue(
+                any(event.event_type == "follow_up.failed" for event in control_events)
+            )
+            self.assertTrue(
+                any(event.event_type == "delivery.handed_off" for event in control_events)
+            )
 
 
 if __name__ == "__main__":

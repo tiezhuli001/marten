@@ -163,6 +163,61 @@ class MainAgentServiceTests(unittest.TestCase):
             self.assertIsNotNone(response.chat_response)
             self.assertEqual(channel.notifications, [])
 
+    def test_intake_does_not_swallow_coding_request_that_also_asks_for_explanation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            service = MainAgentService(
+                build_settings(Path(temp_dir) / "main-agent.db"),
+                channel=FakeChannelService(),
+                mcp_client=build_github_mcp(),
+            )
+
+            response = service.intake(
+                MainAgentIntakeRequest(
+                    user_id="user-1",
+                    content="先解释一下 session lane 为什么会串，再直接修复它并补测试。",
+                )
+            )
+
+            self.assertEqual(response.mode, "coding_handoff")
+            self.assertIsNotNone(response.issue)
+
+    def test_intake_keeps_status_question_in_chat_mode_even_with_github_mcp_keywords(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            service = MainAgentService(
+                build_settings(Path(temp_dir) / "main-agent.db"),
+                channel=FakeChannelService(),
+                mcp_client=build_github_mcp(),
+            )
+
+            response = service.intake(
+                MainAgentIntakeRequest(
+                    user_id="user-1",
+                    content="GitHub MCP 为什么现在不可用，帮我解释一下当前链路状态。",
+                )
+            )
+
+            self.assertEqual(response.mode, "chat")
+            self.assertIsNone(response.issue)
+
+    def test_intake_requests_clarification_before_oversized_multi_area_change(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            service = MainAgentService(
+                build_settings(Path(temp_dir) / "main-agent.db"),
+                channel=FakeChannelService(),
+                mcp_client=build_github_mcp(),
+            )
+
+            response = service.intake(
+                MainAgentIntakeRequest(
+                    user_id="user-1",
+                    content="把主链、RAG、Milvus、监控和部署全部重构掉，一次性做完。",
+                )
+            )
+
+            self.assertEqual(response.mode, "chat")
+            self.assertIsNone(response.issue)
+            self.assertIn("拆成", response.message)
+
     def test_intake_records_request_usage_and_persists_request_id_on_control_task(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             settings = build_settings(Path(temp_dir) / "main-agent.db")

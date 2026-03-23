@@ -4,6 +4,7 @@ import json
 import sqlite3
 from contextlib import closing
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 from app.agents.code_review_agent.bridge import ReviewCommentBridge
@@ -72,6 +73,7 @@ class ReviewService:
         target = self._build_review_target(payload.task_id)
         parent_control_task = self._resolve_parent_control_task(target.task_id)
         sleep_task = self.sleep_coding.get_task(target.task_id)
+        self._ensure_validation_evidence_ready(sleep_task, parent_control_task)
         parent_run_session_id = (
             parent_control_task.payload.get("run_session_id")
             if parent_control_task
@@ -245,6 +247,7 @@ class ReviewService:
             review_round=self.count_task_reviews(target.task_id),
             status="completed",
             summary=structured.summary,
+            repair_strategy=list(structured.repair_strategy),
         )
         self._record_review_usage(target, review_usage)
         self.tasks.append_event(
@@ -351,6 +354,7 @@ class ReviewService:
 
         review = self.get_review(review_id)
         review_target = review.target
+        review_return_payload = self._build_review_return_payload(review)
         if review.control_task_id:
             next_owner_agent = "ralph" if new_status == "changes_requested" else None
             self.tasks.update_task(
@@ -388,6 +392,7 @@ class ReviewService:
                         "task_id": review.task_id,
                         "decision": new_status,
                         "next_owner_agent": next_owner_agent,
+                        **review_return_payload,
                     },
                 )
             self._sync_parent_review_projection(
@@ -397,6 +402,7 @@ class ReviewService:
                 review_round=self.count_task_reviews(review.task_id),
                 status=new_status,
                 summary=review.summary,
+                repair_strategy=review_return_payload.get("repair_strategy", []),
             )
             if write_remote and review_target.repo and review_target.pr_number:
                 if payload.action == "request_changes":
@@ -518,6 +524,7 @@ class ReviewService:
         review_round: int,
         status: str,
         summary: str,
+        repair_strategy: list[str],
     ) -> None:
         parent_control_task = self._resolve_parent_control_task(task_id)
         if parent_control_task is None:
@@ -530,7 +537,38 @@ class ReviewService:
                 "latest_review_blocking": is_blocking,
                 "latest_review_status": status,
                 "latest_review_summary": summary,
+                "latest_repair_strategy": repair_strategy,
                 "review_round": review_round,
                 "blocking_review_count": blocking_count,
             },
         )
+
+    def _ensure_validation_evidence_ready(
+        self,
+        sleep_task,
+        parent_control_task,
+    ) -> None:
+        validation_status = sleep_task.validation.status
+        if validation_status != "pending":
+            return
+        if parent_control_task is not None:
+            validation_gap = parent_control_task.payload.get("validation_gap")
+            if isinstance(validation_gap, str) and validation_gap.strip():
+                return
+        raise ValueError("Review requires validation evidence or an explicit validation gap.")
+
+    def _build_review_return_payload(self, review: ReviewRun) -> dict[str, Any]:
+        repair_strategy: list[str] = []
+        if review.control_task_id:
+            control_task = self.tasks.get_task(review.control_task_id)
+            machine_output = control_task.payload.get("machine_output")
+            if isinstance(machine_output, dict):
+                candidate = machine_output.get("repair_strategy")
+                if isinstance(candidate, list):
+                    repair_strategy = [str(item).strip() for item in candidate if str(item).strip()]
+        return {
+            "blocking": review.is_blocking,
+            "review_summary": review.summary,
+            "repair_strategy": repair_strategy,
+            "review_round": self.count_task_reviews(review.task_id) if review.task_id else 0,
+        }

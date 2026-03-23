@@ -130,6 +130,48 @@ class SleepCodingService:
     def get_task(self, task_id: str) -> SleepCodingTask:
         return self.store.load_task(task_id)
 
+    def resume_task(self, task_id: str) -> SleepCodingTask:
+        pending_usage: tuple[str, str, TokenUsage] | None = None
+        pending_memories: list[tuple[str, str]] = []
+        follow_up_action: str | None = None
+        with closing(self._connect()) as connection:
+            task = self._get_task_row(connection, task_id)
+            if task["status"] == "awaiting_confirmation":
+                return self.get_task(task_id)
+            if task["status"] == "validating":
+                pending_usage = self.workflow.resume_after_validation(
+                    connection,
+                    task,
+                    pending_memories,
+                )
+            elif task["status"] == "changes_requested":
+                self.store.append_event(
+                    connection,
+                    task_id,
+                    "coding_resumed",
+                    self._build_resume_repair_context(task, connection),
+                )
+                follow_up_action = "approve_plan"
+            else:
+                return self.get_task(task_id)
+            connection.commit()
+        if pending_usage is not None:
+            request_id, step_name, usage = pending_usage
+            self._record_task_usage(
+                request_id=request_id,
+                step_name=step_name,
+                usage=usage,
+            )
+            self._refresh_task_tokens(task_id)
+        for session_id, summary in pending_memories:
+            self.context.record_short_memory(session_id, summary)
+        if follow_up_action is not None:
+            return self.apply_action(
+                task_id,
+                SleepCodingTaskActionRequest(action=follow_up_action),
+            )
+        return self.get_task(task_id)
+
     def set_background_follow_up_state(
         self,
         task_id: str,
@@ -199,6 +241,13 @@ class SleepCodingService:
                 payload_patch={"last_error": reason},
                 connection=connection,
             )
+            if task["control_task_id"]:
+                self.tasks.append_domain_event(
+                    task["control_task_id"],
+                    "needs_attention",
+                    {"domain_task_id": task_id, "reason": reason},
+                    connection=connection,
+                )
             self.store.append_event(
                 connection,
                 task_id,
@@ -334,6 +383,46 @@ class SleepCodingService:
             labels=self.sleep_coding_labels,
             is_dry_run=False,
         )
+
+    def _build_resume_repair_context(
+        self,
+        task: sqlite3.Row,
+        connection: sqlite3.Connection,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {}
+        control_task_id = task["control_task_id"]
+        if not control_task_id:
+            return payload
+        control_task = self.tasks.get_task(control_task_id, connection=connection)
+        latest_review_id = control_task.payload.get("latest_review_id")
+        latest_review_summary = control_task.payload.get("latest_review_summary")
+        latest_review_status = control_task.payload.get("latest_review_status")
+        review_round = control_task.payload.get("review_round")
+        if isinstance(latest_review_id, str) and latest_review_id.strip():
+            payload["review_id"] = latest_review_id
+        if isinstance(latest_review_summary, str) and latest_review_summary.strip():
+            payload["review_summary"] = latest_review_summary
+        if isinstance(latest_review_status, str) and latest_review_status.strip():
+            payload["review_status"] = latest_review_status
+        if isinstance(review_round, int) and review_round >= 1:
+            payload["review_round"] = review_round
+        return payload
+
+    def ensure_review_handoff_validation_evidence(
+        self,
+        task: sqlite3.Row,
+        validation: ValidationResult,
+        connection: sqlite3.Connection,
+    ) -> None:
+        if validation.status != "pending":
+            return
+        control_task_id = task["control_task_id"]
+        if control_task_id:
+            control_task = self.tasks.get_task(control_task_id, connection=connection)
+            validation_gap = control_task.payload.get("validation_gap")
+            if isinstance(validation_gap, str) and validation_gap.strip():
+                return
+        raise ValueError("Cannot enter review without validation evidence or an explicit validation gap.")
 
     def _build_plan(
         self,

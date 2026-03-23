@@ -4,7 +4,7 @@ import sqlite3
 from typing import TYPE_CHECKING
 
 from app.control.events import ControlEventType
-from app.models.schemas import GitExecutionResult, RalphReviewHandoff, SleepCodingPullRequest, TokenUsage, ValidationResult
+from app.models.schemas import GitExecutionResult, RalphReviewHandoff, SleepCodingPullRequest, TerminalTaskEvidence, TokenUsage, ValidationResult
 
 if TYPE_CHECKING:
     from app.agents.ralph.application import SleepCodingService
@@ -67,6 +67,11 @@ class RalphTaskProgress:
         git_execution: GitExecutionResult,
         validation: ValidationResult,
     ) -> None:
+        token_usage = (
+            self.service.ledger.get_request_usage(task["kickoff_request_id"])
+            if task["kickoff_request_id"]
+            else TokenUsage()
+        )
         self.service.store.update_task_payloads(
             connection,
             task["task_id"],
@@ -87,6 +92,13 @@ class RalphTaskProgress:
             payload_patch={
                 "validation_status": validation.status,
                 "last_error": "Local validation failed.",
+                "terminal_evidence": TerminalTaskEvidence(
+                    terminal_state="failed",
+                    task_status="failed",
+                    validation_status=validation.status,
+                    last_error="Local validation failed.",
+                    token_usage=token_usage,
+                ).model_dump(mode="json"),
             },
             connection=connection,
         )

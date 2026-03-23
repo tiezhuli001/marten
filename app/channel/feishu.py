@@ -54,6 +54,13 @@ class FeishuWebhookService:
                 user_id=message.user_id,
                 content=message.content,
                 source="feishu",
+                session_key=(
+                    f"feishu:chat:{message.chat_id}"
+                    if message.chat_id
+                    else f"feishu:user:{message.user_id}"
+                ),
+                message_id=message.message_id,
+                chat_id=message.chat_id,
                 endpoint_id=self.endpoints.resolve_endpoint_id(
                     provider="feishu",
                     external_ref=message.chat_id,
@@ -168,6 +175,9 @@ class FeishuWebhookService:
         return {
             "code": 0,
             "msg": "ok",
+            "accepted": True,
+            "started": True,
+            "completed": False,
             "event_type": event_type,
             "user_id": message.user_id,
             "chat_id": message.chat_id,

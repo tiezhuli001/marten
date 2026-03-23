@@ -8,6 +8,26 @@ from app.control.session_registry import SessionRegistryService
 
 
 class SessionRegistryServiceTests(unittest.TestCase):
+    def test_can_record_and_lookup_inbound_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings(database_url=f"sqlite:///{Path(temp_dir) / 'sessions.db'}")
+            service = SessionRegistryService(settings)
+
+            recorded = service.record_inbound_receipt(
+                "feishu:chat:oc_123:message:om_123",
+                {
+                    "request_id": "req-1",
+                    "chain_request_id": "chain-1",
+                    "intent": "general",
+                    "message": "processed",
+                    "token_usage": {"total_tokens": 1},
+                },
+            )
+            fetched = service.find_inbound_receipt("feishu:chat:oc_123:message:om_123")
+
+            self.assertEqual(recorded["request_id"], "req-1")
+            self.assertEqual(fetched["chain_request_id"], "chain-1")
+
     def test_user_agent_and_run_sessions_can_chain(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             settings = Settings(database_url=f"sqlite:///{Path(temp_dir) / 'sessions.db'}")

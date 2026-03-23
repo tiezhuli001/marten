@@ -19,12 +19,14 @@ from app.infra.background_jobs import (
 )
 from app.ledger.service import TokenLedgerService
 from app.models.schemas import (
+    FinalDeliveryEvidence,
     ReviewActionRequest,
     ReviewRun,
     SleepCodingTask,
     SleepCodingTaskActionRequest,
     SleepCodingWorkerPollRequest,
     SleepCodingWorkerPollResponse,
+    TerminalTaskEvidence,
     TokenUsage,
 )
 
@@ -105,7 +107,8 @@ class AutomationService:
                 continue
             if claim.status not in {"changes_requested", "in_review"}:
                 continue
-            self._process_task(self.sleep_coding.get_task(claim.task_id))
+            resumed = self.sleep_coding.resume_task(claim.task_id)
+            self._process_task(resumed)
         return response.model_copy(update={"tasks": processed_tasks})
 
     def process_worker_poll_async(
@@ -121,7 +124,7 @@ class AutomationService:
                 continue
             if claim.status not in {"changes_requested", "in_review"}:
                 continue
-            self._schedule_follow_up(self.sleep_coding.get_task(claim.task_id))
+            self._schedule_follow_up(self.sleep_coding.resume_task(claim.task_id))
         return response
 
     def run_review_loop(self, task_id: str) -> SleepCodingTask:
@@ -319,7 +322,7 @@ class AutomationService:
                 "failed",
                 error=str(exc),
             )
-            raise
+            return self._escalate_follow_up_failure(task_id, str(exc))
         self._mark_follow_up_state(
             task_id,
             "completed",
@@ -456,6 +459,41 @@ class AutomationService:
             )
         return task
 
+    def _escalate_follow_up_failure(
+        self,
+        task_id: str,
+        reason: str,
+    ) -> SleepCodingTask:
+        task = self.sleep_coding.get_task(task_id)
+        if task.status not in {"approved", "failed", "cancelled", "needs_attention"}:
+            task = self.sleep_coding.mark_needs_attention(
+                task_id,
+                reason=f"Background follow-up failed: {reason}",
+            )
+        payload = {
+            "task_status": task.status,
+            "last_error": f"Background follow-up failed: {reason}",
+            "escalation_reason": "follow_up_failed",
+            "terminal_evidence": self._build_terminal_evidence(
+                terminal_state="needs_attention",
+                task=task,
+                last_error=f"Background follow-up failed: {reason}",
+            ).model_dump(mode="json"),
+        }
+        self._record_parent_result(
+            task,
+            event_type="child_handed_off",
+            status="needs_attention",
+            payload=payload,
+        )
+        self._record_parent_result(
+            task,
+            event_type="delivery.handed_off",
+            status="needs_attention",
+            payload=payload,
+        )
+        return task
+
     def _publish_review_feedback(
         self,
         task: SleepCodingTask,
@@ -495,8 +533,20 @@ class AutomationService:
         self._record_notification(task, stage="manual_handoff", notification=notification)
         payload = {
             "review_id": review.review_id,
+            "latest_review_id": review.review_id,
+            "latest_review_status": review.status,
+            "latest_review_summary": review.summary,
             "blocking_reviews": blocking_reviews,
             "task_status": task.status,
+            "review_round": self._get_review_round(task, fallback_review=review),
+            "review_summary": review.summary,
+            "repair_strategy": self._extract_review_repair_strategy(task, review),
+            "terminal_evidence": self._build_terminal_evidence(
+                terminal_state="needs_attention",
+                task=task,
+                review=review,
+                last_error="Reached maximum blocking review rounds.",
+            ).model_dump(mode="json"),
         }
         self._record_parent_result(task, event_type="child_handed_off", status="needs_attention", payload=payload)
         self._record_parent_result(task, event_type="delivery.handed_off", status="needs_attention", payload=payload)
@@ -506,6 +556,11 @@ class AutomationService:
         task: SleepCodingTask,
         review: ReviewRun | None = None,
     ) -> None:
+        review = review or self._resolve_final_review(task)
+        if not self._can_publish_final_delivery(task, review):
+            return
+        assert review is not None
+        evidence = self._build_final_evidence(task, review)
         title, lines = self.delivery.build_final_delivery(task, review)
         notification = self.channel.notify(
             title=title,
@@ -515,12 +570,100 @@ class AutomationService:
         self._record_notification(task, stage="final_delivery", notification=notification)
         payload = {
             "task_status": task.status,
-            "review_id": review.review_id if review else None,
+            "review_id": review.review_id,
+            "latest_review_id": review.review_id,
+            "latest_review_status": review.status,
+            "latest_review_summary": review.summary,
+            "review_round": self._get_review_round(task, fallback_review=review),
             "pr_url": task.pull_request.html_url if task.pull_request else None,
+            "final_evidence": evidence.model_dump(mode="json"),
+            "terminal_evidence": self._build_terminal_evidence(
+                terminal_state="completed",
+                task=task,
+                review=review,
+            ).model_dump(mode="json"),
         }
         status = "completed" if task.status == "approved" else task.status
         self._record_parent_result(task, event_type="child_completed", status=status, payload=payload)
         self._record_parent_result(task, event_type=ControlEventType.DELIVERY_COMPLETED, status=status, payload=payload)
+
+    def _resolve_final_review(self, task: SleepCodingTask) -> ReviewRun | None:
+        reviews = self.review.list_task_reviews(task.task_id)
+        if not reviews:
+            return None
+        return reviews[-1]
+
+    def _can_publish_final_delivery(
+        self,
+        task: SleepCodingTask,
+        review: ReviewRun | None,
+    ) -> bool:
+        if task.status != "approved":
+            return False
+        if review is None or review.is_blocking:
+            return False
+        return review.status in {"approved", "completed"}
+
+    def _build_final_evidence(
+        self,
+        task: SleepCodingTask,
+        review: ReviewRun,
+    ) -> FinalDeliveryEvidence:
+        if task.kickoff_request_id:
+            token_usage = self.ledger.get_request_usage(task.kickoff_request_id)
+        else:
+            token_usage = task.token_usage
+        return FinalDeliveryEvidence(
+            task_status=task.status,
+            validation_status=task.validation.status,
+            review_status=review.status,
+            review_id=review.review_id,
+            review_url=review.comment_url or review.artifact_path,
+            pr_url=task.pull_request.html_url if task.pull_request else None,
+            token_usage=token_usage,
+        )
+
+    def _build_terminal_evidence(
+        self,
+        *,
+        terminal_state: str,
+        task: SleepCodingTask,
+        review: ReviewRun | None = None,
+        last_error: str | None = None,
+    ) -> TerminalTaskEvidence:
+        if task.kickoff_request_id:
+            token_usage = self.ledger.get_request_usage(task.kickoff_request_id)
+        else:
+            token_usage = task.token_usage
+        return TerminalTaskEvidence(
+            terminal_state=terminal_state,  # type: ignore[arg-type]
+            task_status=task.status,
+            validation_status=task.validation.status,
+            review_status=review.status if review is not None else None,
+            review_id=review.review_id if review is not None else None,
+            review_url=(review.comment_url or review.artifact_path) if review is not None else None,
+            pr_url=task.pull_request.html_url if task.pull_request else None,
+            last_error=last_error,
+            token_usage=token_usage,
+        )
+
+    def _extract_review_repair_strategy(
+        self,
+        task: SleepCodingTask,
+        review: ReviewRun,
+    ) -> list[str]:
+        control_task = self._get_control_task(task)
+        if control_task is not None:
+            strategy = control_task.payload.get("latest_repair_strategy")
+            if isinstance(strategy, list):
+                normalized = [str(item).strip() for item in strategy if str(item).strip()]
+                if normalized:
+                    return normalized
+        if review.summary.strip():
+            return [review.summary.strip()]
+        if review.content.strip():
+            return [review.content.strip()]
+        return []
 
     def _record_parent_result(
         self,
@@ -569,6 +712,16 @@ class AutomationService:
             )
             connection.commit()
         if task.control_task_id:
+            payload_patch = {
+                "delivery_stage": stage,
+                "delivery_provider": notification.provider,
+                "delivery_delivered": notification.delivered,
+                "delivery_status": "delivered" if notification.delivered else "degraded",
+            }
+            self.tasks.update_task(
+                task.control_task_id,
+                payload_patch=payload_patch,
+            )
             self.tasks.append_event(
                 task.control_task_id,
                 "channel_notified",
@@ -581,6 +734,24 @@ class AutomationService:
                     "domain_task_id": task.task_id,
                 },
             )
+            control_task = self.tasks.get_task(task.control_task_id)
+            if control_task.parent_task_id:
+                self.tasks.update_task(
+                    control_task.parent_task_id,
+                    payload_patch=payload_patch,
+                )
+                self.tasks.append_event(
+                    control_task.parent_task_id,
+                    "child_channel_notified",
+                    {
+                        "child_control_task_id": task.control_task_id,
+                        "provider": notification.provider,
+                        "delivered": notification.delivered,
+                        "is_dry_run": notification.is_dry_run,
+                        "endpoint_id": notification.endpoint_id,
+                        "stage": stage,
+                    },
+                )
 
     def _resolve_delivery_endpoint_id(self, task: SleepCodingTask) -> str | None:
         control_task = self._get_control_task(task)

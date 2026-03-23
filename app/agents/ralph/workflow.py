@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from contextlib import closing
 from pathlib import Path
@@ -346,10 +347,63 @@ class RalphTaskWorkflow:
                 title=title,
                 lines=lines,
             )
+        self._finalize_review_candidate(
+            connection=connection,
+            task=task,
+            issue=issue,
+            plan=plan,
+            git_execution=git_execution,
+            validation=validation,
+        )
+        if task["kickoff_request_id"]:
+            return (task["kickoff_request_id"], "sleep_coding_execution", execution_usage)
+        return None
 
+    def resume_after_validation(
+        self,
+        connection: sqlite3.Connection,
+        task: sqlite3.Row,
+        pending_memories: list[tuple[str, str]],
+    ) -> tuple[str, str, TokenUsage] | None:
+        del pending_memories
+        issue = SleepCodingIssue.model_validate_json(task["issue_payload"])
+        if not task["plan_payload"]:
+            raise ValueError(f"Cannot resume validated task without plan payload: {task['task_id']}")
+        plan = SleepCodingPlan.model_validate_json(task["plan_payload"])
+        git_execution = GitExecutionResult.model_validate_json(task["git_execution_payload"])
+        validation = ValidationResult.model_validate_json(task["validation_payload"])
+        if validation.status != "passed":
+            raise ValueError(
+                f"Resume after validation requires passed validation state, got {validation.status}"
+            )
+        self._finalize_review_candidate(
+            connection=connection,
+            task=task,
+            issue=issue,
+            plan=plan,
+            git_execution=git_execution,
+            validation=validation,
+        )
+        return None
+
+    def _finalize_review_candidate(
+        self,
+        *,
+        connection: sqlite3.Connection,
+        task: sqlite3.Row,
+        issue: SleepCodingIssue,
+        plan: SleepCodingPlan,
+        git_execution: GitExecutionResult,
+        validation: ValidationResult,
+    ) -> None:
+        self.service.ensure_review_handoff_validation_evidence(
+            task,
+            validation,
+            connection,
+        )
         commit_result = self.service.git_workspace.commit_changes(
             branch=task["head_branch"],
-            message=execution.commit_message,
+            message=self._resolve_commit_message(task, connection),
         )
         self.service.store.append_event(
             connection,
@@ -428,6 +482,29 @@ class RalphTaskWorkflow:
             labels_dry_run=pr_labels.is_dry_run,
             created=existing_pull_request is None,
         )
-        if task["kickoff_request_id"]:
-            return (task["kickoff_request_id"], "sleep_coding_execution", execution_usage)
-        return None
+
+    def _resolve_commit_message(
+        self,
+        task: sqlite3.Row,
+        connection: sqlite3.Connection,
+    ) -> str:
+        events = self.service.store.list_events(connection, task["task_id"])
+        for event in reversed(events):
+            if event["event_type"] != "coding_draft_generated":
+                continue
+            try:
+                payload = json.loads(event["payload"] or "{}")
+            except json.JSONDecodeError:
+                continue
+            commit_message = payload.get("commit_message")
+            if isinstance(commit_message, str) and commit_message.strip():
+                return commit_message.strip()
+        control_task_id = task["control_task_id"]
+        if control_task_id:
+            control_task = self.service.tasks.get_task(control_task_id, connection=connection)
+            coding_artifact = control_task.payload.get("coding_artifact")
+            if isinstance(coding_artifact, dict):
+                commit_message = coding_artifact.get("commit_message")
+                if isinstance(commit_message, str) and commit_message.strip():
+                    return commit_message.strip()
+        return f"feat: resume sleep coding task {task['task_id']}"

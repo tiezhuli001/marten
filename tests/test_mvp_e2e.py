@@ -9,8 +9,10 @@ from app.api.routes import (
     get_automation_service,
     get_feishu_webhook_service,
     get_gateway_control_plane_service,
+    get_main_agent_service,
     get_review_service,
     get_sleep_coding_service,
+    get_task_registry_service,
 )
 from app.control.gateway import GatewayControlPlaneService
 from app.control.workflow import GatewayWorkflowService
@@ -370,6 +372,40 @@ class FakeReviewSkillService:
         )
 
 
+class BlockingThenPassingReviewSkillService:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def run(self, source, context: str) -> ReviewSkillRunResult:  # noqa: ANN001
+        self.calls += 1
+        blocking = self.calls == 1
+        return ReviewSkillRunResult(
+            output=ReviewSkillOutput(
+                summary="Blocking change requested" if blocking else "Approved after repair",
+                findings=[
+                    ReviewFinding(
+                        severity="P1" if blocking else "P2",
+                        title="Repair required" if blocking else "Minor note",
+                        detail="First pass requests repair." if blocking else "Repair loop is complete.",
+                        file_path="tests/example_test.py",
+                        line=1,
+                    )
+                ],
+                repair_strategy=["Apply the requested repair and rerun validation."],
+                blocking=blocking,
+                run_mode="dry_run",
+                review_markdown=f"## Review\n\nSource: sleep_coding_task\n\n{context}",
+            ),
+            token_usage=TokenUsage(
+                prompt_tokens=12,
+                completion_tokens=6,
+                total_tokens=18,
+                cost_usd=0.001,
+                step_name="code_review",
+            ),
+        )
+
+
 def build_settings(database_path: Path) -> Settings:
     models_config_path = database_path.parent / "models.json"
     if not models_config_path.exists():
@@ -411,6 +447,119 @@ class MVPE2ETests(unittest.TestCase):
         get_feishu_webhook_service.cache_clear()
         get_review_service.cache_clear()
         get_sleep_coding_service.cache_clear()
+
+    def test_public_api_exposes_typed_main_chain_schema_surfaces(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = build_settings(Path(temp_dir) / "mvp-api-surface.db")
+            github = FakeGitHubService()
+            channel = FakeChannelService()
+            ledger = TokenLedgerService(settings)
+            github_mcp = build_github_mcp(github)
+            sleep_coding = SleepCodingService(
+                settings=settings,
+                channel=channel,
+                git_workspace=FakeGitWorkspaceService(),
+                validator=FakeValidationRunner(),
+                ledger=ledger,
+                mcp_client=github_mcp,
+            )
+            worker = SleepCodingWorkerService(
+                settings=settings,
+                sleep_coding=sleep_coding,
+                mcp_client=github_mcp,
+            )
+            review = ReviewService(
+                settings=settings,
+                sleep_coding=sleep_coding,
+                skill=FakeReviewSkillService(),
+                mcp_client=github_mcp,
+            )
+            automation = AutomationService(
+                settings=settings,
+                sleep_coding=sleep_coding,
+                review=review,
+                worker=worker,
+                channel=channel,
+                ledger=ledger,
+                background_jobs=ImmediateBackgroundJobs(),
+            )
+            main_agent = MainAgentService(
+                settings,
+                channel=channel,
+                ledger=ledger,
+                mcp_client=github_mcp,
+            )
+            control_plane = GatewayControlPlaneService(
+                settings=settings,
+                ledger=ledger,
+                main_agent=main_agent,
+                sleep_coding=sleep_coding,
+            )
+
+            app.dependency_overrides[get_gateway_control_plane_service] = lambda: control_plane
+            app.dependency_overrides[get_automation_service] = lambda: automation
+            app.dependency_overrides[get_main_agent_service] = lambda: main_agent
+            app.dependency_overrides[get_sleep_coding_service] = lambda: sleep_coding
+            app.dependency_overrides[get_review_service] = lambda: review
+            app.dependency_overrides[get_task_registry_service] = lambda: main_agent.tasks
+
+            with TestClient(app) as client:
+                intake_response = client.post(
+                    "/main-agent/intake",
+                    json={
+                        "user_id": "user-1",
+                        "content": "请创建一个 issue，并进入开发流程：补一条主链路 API schema 回归测试。",
+                        "source": "manual",
+                    },
+                )
+                self.assertEqual(intake_response.status_code, 200)
+                intake_payload = intake_response.json()
+
+                self.assertEqual(intake_payload["mode"], "coding_handoff")
+                self.assertEqual(intake_payload["handoff"]["next_owner_agent"], "ralph")
+                self.assertIn("acceptance", intake_payload["handoff"])
+                self.assertIn("constraints", intake_payload["handoff"])
+
+                parent_task_response = client.get(f"/control/tasks/{intake_payload['control_task_id']}")
+                self.assertEqual(parent_task_response.status_code, 200)
+                parent_task_payload = parent_task_response.json()
+
+                self.assertEqual(parent_task_payload["handoff"]["next_owner_agent"], "ralph")
+                self.assertEqual(parent_task_payload["handoff"]["title"], intake_payload["handoff"]["title"])
+
+                poll_response = client.post(
+                    "/workers/sleep-coding/poll",
+                    json={"auto_approve_plan": True},
+                )
+                self.assertEqual(poll_response.status_code, 200)
+                poll_payload = poll_response.json()
+                task_id = poll_payload["tasks"][0]["task_id"]
+                task = sleep_coding.get_task(task_id)
+                reviews = review.list_task_reviews(task_id)
+
+                sleep_task_response = client.get(f"/control/tasks/{task.control_task_id}")
+                self.assertEqual(sleep_task_response.status_code, 200)
+                sleep_task_payload = sleep_task_response.json()
+
+                self.assertIn("coding_artifact", sleep_task_payload)
+                self.assertIn("review_handoff", sleep_task_payload)
+                self.assertIn("commit_message", sleep_task_payload["coding_artifact"])
+                self.assertEqual(
+                    sleep_task_payload["review_handoff"]["next_owner_agent"],
+                    "code-review-agent",
+                )
+                self.assertEqual(sleep_task_payload["review_handoff"]["task_id"], task.task_id)
+
+                review_task_response = client.get(f"/control/tasks/{reviews[0].control_task_id}")
+                self.assertEqual(review_task_response.status_code, 200)
+                review_task_payload = review_task_response.json()
+
+                self.assertIn("machine_output", review_task_payload)
+                self.assertIn("human_output", review_task_payload)
+                self.assertIn("blocking", review_task_payload["machine_output"])
+                self.assertIn("severity_counts", review_task_payload["machine_output"])
+                self.assertIn("summary", review_task_payload["human_output"])
+                self.assertIn("review_markdown", review_task_payload["human_output"])
 
     def test_main_agent_to_worker_to_review_to_final_delivery(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -492,6 +641,9 @@ class MVPE2ETests(unittest.TestCase):
             self.assertEqual(review_task.payload["handoff"]["status"], "in_review")
             self.assertEqual(review_task.payload["review_decision"], "approved")
             self.assertIsNone(review_task.payload["next_owner_agent"])
+            self.assertEqual(parent_task.payload["final_evidence"]["task_status"], "approved")
+            self.assertEqual(parent_task.payload["final_evidence"]["review_status"], "approved")
+            self.assertEqual(parent_task.payload["final_evidence"]["validation_status"], "passed")
             self.assertEqual(user_session.payload["active_agent"], "main-agent")
             self.assertGreater(task.token_usage.total_tokens, 0)
             self.assertTrue(any("Review round 1" in title for title, _, _ in channel.notifications))
@@ -586,6 +738,87 @@ class MVPE2ETests(unittest.TestCase):
             self.assertTrue(any("Review round 1" in title for title, _, _ in channel.notifications))
             self.assertTrue(github.pr_comments)
             self.assertIn("## Ralph Review Decision", github.pr_comments[-1][1])
+            self.assertTrue(any("任务完成" in title for title, _, _ in channel.notifications))
+
+    def test_main_chain_handles_review_changes_requested_then_repair_resume_to_final_delivery(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = build_settings(Path(temp_dir) / "mvp-e2e-repair-loop.db")
+            github = FakeGitHubService()
+            channel = FakeChannelService()
+            ledger = TokenLedgerService(settings)
+            github_mcp = build_github_mcp(github)
+            sleep_coding = SleepCodingService(
+                settings=settings,
+                channel=channel,
+                git_workspace=FakeGitWorkspaceService(),
+                validator=FakeValidationRunner(),
+                ledger=ledger,
+                mcp_client=github_mcp,
+            )
+            worker = SleepCodingWorkerService(
+                settings=settings,
+                sleep_coding=sleep_coding,
+                mcp_client=github_mcp,
+            )
+            review_skill = BlockingThenPassingReviewSkillService()
+            review = ReviewService(
+                settings=settings,
+                sleep_coding=sleep_coding,
+                skill=review_skill,
+                mcp_client=github_mcp,
+            )
+            automation = AutomationService(
+                settings=settings,
+                sleep_coding=sleep_coding,
+                review=review,
+                worker=worker,
+                channel=channel,
+                ledger=ledger,
+                background_jobs=ImmediateBackgroundJobs(),
+            )
+            main_agent = MainAgentService(
+                settings,
+                channel=channel,
+                ledger=ledger,
+                mcp_client=github_mcp,
+            )
+
+            intake = main_agent.intake(
+                MainAgentIntakeRequest(
+                    user_id="user-repair",
+                    content="把这个需求转成 issue 并跑完整 repair loop",
+                    source="manual",
+                )
+            )
+            poll = automation.process_worker_poll_async(
+                SleepCodingWorkerPollRequest(auto_approve_plan=True)
+            )
+
+            self.assertEqual(poll.claimed_count, 1)
+            task_id = poll.tasks[0].task_id
+            task = sleep_coding.get_task(task_id)
+            reviews = review.list_task_reviews(task_id)
+            parent_task = main_agent.tasks.get_task(intake.control_task_id)
+            parent_events = main_agent.tasks.list_events(parent_task.task_id)
+            child_task = main_agent.tasks.get_task(task.control_task_id)
+            child_events = main_agent.tasks.list_events(child_task.task_id)
+
+            self.assertEqual(task.status, "approved")
+            self.assertEqual(task.background_follow_up_status, "completed")
+            self.assertEqual(len(reviews), 2)
+            self.assertEqual({item.status for item in reviews}, {"changes_requested", "approved"})
+            self.assertEqual(review_skill.calls, 2)
+            self.assertEqual(parent_task.status, "completed")
+            self.assertEqual(parent_task.payload["latest_review_status"], "approved")
+            self.assertEqual(parent_task.payload["review_round"], 2)
+            self.assertEqual(parent_task.payload["delivery_status"], "degraded")
+            self.assertFalse(parent_task.payload["delivery_delivered"])
+            self.assertEqual(parent_task.payload["final_evidence"]["review_status"], "approved")
+            self.assertEqual(parent_task.payload["terminal_evidence"]["terminal_state"], "completed")
+            self.assertTrue(any(event.event_type == "review_returned" for event in child_events))
+            self.assertTrue(any(event.event_type == "child_completed" for event in parent_events))
+            self.assertTrue(any("Review round 1" in title for title, _, _ in channel.notifications))
+            self.assertTrue(any("Review round 2" in title for title, _, _ in channel.notifications))
             self.assertTrue(any("任务完成" in title for title, _, _ in channel.notifications))
 
     def test_gateway_api_to_worker_to_final_delivery_keeps_single_request_usage(self) -> None:

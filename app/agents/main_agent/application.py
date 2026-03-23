@@ -27,7 +27,11 @@ from app.runtime.llm import SharedLLMRuntime
 from app.runtime.mcp import MCPClient, MCPToolCall, build_default_mcp_client
 from app.runtime.structured_output import parse_structured_object
 from app.runtime.token_counting import TokenCountingService
-from app.control.session_registry import SessionRegistryService
+from app.control.session_registry import (
+    SessionRegistryService,
+    build_agent_session_external_ref,
+    build_user_session_external_ref,
+)
 from app.control.task_registry import TaskRegistryService
 
 
@@ -62,16 +66,24 @@ class MainAgentService:
 
     def intake(self, payload: MainAgentIntakeRequest) -> MainAgentIntakeResponse:
         repo = payload.repo or self.settings.resolved_github_repository
+        user_session_ref = build_user_session_external_ref(
+            source=payload.source,
+            user_id=payload.user_id,
+            session_key=payload.session_key,
+        )
         user_session = self.sessions.get_or_create_session(
             session_type="user_session",
-            external_ref=f"{payload.source}:{payload.user_id}",
+            external_ref=user_session_ref,
             user_id=payload.user_id,
             source=payload.source,
         )
         self.sessions.set_active_agent(user_session.session_id, "main-agent")
         agent_session = self.sessions.get_or_create_session(
             session_type="agent_session",
-            external_ref=f"main-agent:{payload.source}:{payload.user_id}",
+            external_ref=build_agent_session_external_ref(
+                agent_id="main-agent",
+                user_session_ref=user_session_ref,
+            ),
             agent_id="main-agent",
             user_id=payload.user_id,
             source=payload.source,
@@ -334,6 +346,12 @@ class MainAgentService:
         *,
         repo: str | None,
     ) -> tuple[str, str | None, MainAgentCodingHandoff | None]:
+        if self._needs_scope_clarification(payload.content):
+            reply = (
+                "Main Agent needs the request narrowed before opening a coding handoff. "
+                "请先拆成 1-2 个明确改动点，并说明最优先的主链目标。"
+            )
+            return "chat", reply, None
         if self._should_route_to_coding(payload.content):
             draft = self._build_heuristic_issue_draft(payload)
             return "coding_handoff", None, self._normalize_handoff(draft.model_dump(mode="json"), payload, repo=repo)
@@ -381,21 +399,19 @@ class MainAgentService:
         normalized = " ".join(content.strip().lower().split())
         if not normalized:
             return False
-        chat_override_markers = (
+        explicit_chat_override_markers = (
             "不要创建 issue",
             "别创建 issue",
-            "just explain",
             "只解释",
-            "先解释",
-            "介绍一下",
-            "负责什么",
-            "是什么",
-            "进度怎么样",
-            "状态怎么样",
+            "不要改代码",
+            "不需要改代码",
+            "just explain",
         )
-        if any(marker in normalized for marker in chat_override_markers):
+        if any(marker in normalized for marker in explicit_chat_override_markers):
             return False
-        coding_markers = (
+        if self._looks_like_status_or_explanation_request(normalized):
+            return False
+        strong_coding_markers = (
             "实现",
             "开发",
             "修复",
@@ -409,6 +425,8 @@ class MainAgentService:
             "测试",
             "bug",
             "issue",
+        )
+        weak_coding_markers = (
             "pull request",
             "pr",
             "workflow",
@@ -421,7 +439,38 @@ class MainAgentService:
             "报错",
             "链路",
         )
-        return any(marker in normalized for marker in coding_markers)
+        if any(marker in normalized for marker in strong_coding_markers):
+            return True
+        return any(marker in normalized for marker in weak_coding_markers)
+
+    def _looks_like_status_or_explanation_request(self, normalized: str) -> bool:
+        explanation_markers = (
+            "为什么",
+            "解释一下",
+            "介绍一下",
+            "负责什么",
+            "是什么",
+            "现状",
+            "当前状态",
+            "进度怎么样",
+            "状态怎么样",
+            "可用吗",
+            "不可用",
+        )
+        action_markers = ("修复", "实现", "修改", "新增", "添加", "接入", "重构", "补测试")
+        return any(marker in normalized for marker in explanation_markers) and not any(
+            marker in normalized for marker in action_markers
+        )
+
+    def _needs_scope_clarification(self, content: str) -> bool:
+        normalized = " ".join(content.strip().lower().split())
+        if not normalized:
+            return False
+        broad_area_markers = ("主链", "rag", "milvus", "监控", "部署", "review", "gateway")
+        matched_areas = [marker for marker in broad_area_markers if marker in normalized]
+        return len(matched_areas) >= 4 or (
+            len(matched_areas) >= 3 and any(marker in normalized for marker in ("全部", "一次性", "全都"))
+        )
 
     def _coerce_string_list(self, value: Any) -> list[str]:
         if isinstance(value, list):

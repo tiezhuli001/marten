@@ -1,6 +1,6 @@
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError, computed_field
 
 IntentType = Literal["general", "stats_query", "sleep_coding"]
 MainAgentMode = Literal["chat", "coding_handoff"]
@@ -130,6 +130,9 @@ class GatewayMessageRequest(BaseModel):
     request_id: str | None = None
     chain_request_id: str | None = None
     endpoint_id: str | None = None
+    session_key: str | None = None
+    message_id: str | None = None
+    chat_id: str | None = None
 
 
 class GatewayMessageResponse(BaseModel):
@@ -178,6 +181,7 @@ class MainAgentIntakeRequest(BaseModel):
     persist_usage: bool = True
     source_endpoint_id: str | None = None
     delivery_endpoint_id: str | None = None
+    session_key: str | None = None
 
 
 class MainAgentCodingHandoff(BaseModel):
@@ -436,6 +440,38 @@ class ReviewHumanOutput(BaseModel):
     comment_url: str | None = None
 
 
+class FinalDeliveryEvidence(BaseModel):
+    task_status: str
+    validation_status: str
+    review_status: str
+    review_id: str | None = None
+    review_url: str | None = None
+    pr_url: str | None = None
+    token_usage: TokenUsage = Field(default_factory=TokenUsage)
+
+
+class TerminalTaskEvidence(BaseModel):
+    terminal_state: Literal["completed", "failed", "needs_attention"]
+    task_status: str
+    validation_status: str | None = None
+    review_status: str | None = None
+    review_id: str | None = None
+    review_url: str | None = None
+    pr_url: str | None = None
+    last_error: str | None = None
+    token_usage: TokenUsage = Field(default_factory=TokenUsage)
+
+
+def _coerce_payload_model(payload: dict[str, Any], key: str, schema: type[BaseModel]) -> BaseModel | None:
+    value = payload.get(key)
+    if value is None:
+        return None
+    try:
+        return schema.model_validate(value)
+    except ValidationError:
+        return None
+
+
 class ControlTask(BaseModel):
     task_id: str
     task_type: ControlTaskType
@@ -452,6 +488,41 @@ class ControlTask(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
     created_at: str
     updated_at: str
+
+    @computed_field
+    @property
+    def handoff(self) -> MainAgentCodingHandoff | None:
+        return _coerce_payload_model(self.payload, "handoff", MainAgentCodingHandoff)
+
+    @computed_field
+    @property
+    def coding_artifact(self) -> RalphCodingArtifact | None:
+        return _coerce_payload_model(self.payload, "coding_artifact", RalphCodingArtifact)
+
+    @computed_field
+    @property
+    def review_handoff(self) -> RalphReviewHandoff | None:
+        return _coerce_payload_model(self.payload, "review_handoff", RalphReviewHandoff)
+
+    @computed_field
+    @property
+    def machine_output(self) -> ReviewMachineOutput | None:
+        return _coerce_payload_model(self.payload, "machine_output", ReviewMachineOutput)
+
+    @computed_field
+    @property
+    def human_output(self) -> ReviewHumanOutput | None:
+        return _coerce_payload_model(self.payload, "human_output", ReviewHumanOutput)
+
+    @computed_field
+    @property
+    def final_evidence(self) -> FinalDeliveryEvidence | None:
+        return _coerce_payload_model(self.payload, "final_evidence", FinalDeliveryEvidence)
+
+    @computed_field
+    @property
+    def terminal_evidence(self) -> TerminalTaskEvidence | None:
+        return _coerce_payload_model(self.payload, "terminal_evidence", TerminalTaskEvidence)
 
 
 class ControlTaskEvent(BaseModel):

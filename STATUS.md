@@ -70,6 +70,14 @@
 - 仅在 review 已批准后触发 final delivery
 - 保持 `RAGFacade` / retrieval contract 不变；`Qdrant` / `Milvus` provider 切换相关回归仍然通过
 - 同步更新了 `tests/test_main_agent.py`、`tests/test_gateway.py`、`tests/test_sleep_coding.py`、`tests/test_review.py`、`tests/test_automation.py`
+- 已处理最新一轮 code review follow-up：
+- 修复 `app/agents/ralph/application.py` 中 `resume_task()` 的死分支，删除 `validating` 路径下永远不会命中的 `pending_usage` 后处理
+- 统一 `app/agents/main_agent/application.py` 的 scope clarification 文案为英文，避免中英混杂
+- 为 review gate / review return payload 补充直接测试，覆盖显式 `validation_gap` 放行与 `repair_strategy` / `review_round` 返回负载
+- 明确保留以下实现，不做误修：
+- `app/agents/ralph/workflow.py` 中 `json` import 仍被 `_resolve_commit_message()` 使用
+- `app/agents/ralph/progress.py` 中 `record_validation_failure()` 的 `validation` / `git_execution` 参数仍会整体写入 task payload，不是只取 `validation.status`
+- `app/agents/main_agent/application.py` 中 `broad_area_markers` 继续保持为小型启发式常量，不扩展成配置项，避免为单点 intake heuristic 引入额外配置面
 
 ## In Progress
 
@@ -80,6 +88,7 @@
 - 如需继续 README 打磨，可补实际截图、演示 GIF 或架构图资源，但当前纯 Markdown 首页已经可作为稳定开源入口
 - 如需继续深化，可把 `main-agent` chat mode 的 reply contract 接入更明确的 UI / channel 展示层
 - 如需继续深化，可补 end-to-end API 层回归，锁住 gateway -> main-agent -> ralph -> review -> delivery 全链 JSON 输出
+- 当前 review-fix 已收口；若继续推进，应优先补更高层的全链 API / live-chain 回归，而不是继续扩张局部 heuristic 配置
 
 ## Blockers
 
@@ -93,6 +102,7 @@
 - `python -m unittest tests.test_main_agent.MainAgentServiceTests.test_intake_returns_chat_mode_for_non_coding_question tests.test_automation.AutomationServiceTests.test_auto_review_stops_after_three_blocking_rounds_and_hands_off tests.test_automation.AutomationServiceTests.test_approved_task_without_review_does_not_skip_review_gate tests.test_review.ReviewServiceTests.test_trigger_for_task_records_review_and_comment tests.test_sleep_coding.SleepCodingServiceTests.test_sleep_coding_emits_structured_handoff_and_execution_artifacts -v` -> PASS
 - `python -m unittest tests.test_main_agent tests.test_gateway tests.test_sleep_coding tests.test_review tests.test_automation tests.test_rag_capability tests.test_runtime_components tests.test_framework_public_surface -v` -> PASS (`Ran 97 tests in 14.798s`)
 - `python -m unittest tests.test_main_agent tests.test_gateway tests.test_sleep_coding tests.test_review tests.test_automation tests.test_rag_capability tests.test_runtime_components tests.test_framework_public_surface -v` -> PASS (`Ran 97 tests in 16.265s`)
+- `python -m unittest tests.test_review tests.test_main_agent tests.test_sleep_coding -v` -> PASS (`Ran 60 tests in 8.109s`)
 - `rg -n "chat mode|coding handoff|needs_attention|review_handoff|machine_output|human_output|retrieval contract|provider" docs/architecture docs/evolution -g '*.md'` -> PASS（当前实现关注点仍与 runtime contract / provider surface 文档一致）
 - `rg -n "agent-first|LLM \\+ MCP \\+ skill first|实现边界|流程编排|agent runtime / contract" docs/architecture docs/handoffs -g '*.md'` -> PASS（原则文档已接入 architecture / handoff 文档链路）
 
@@ -103,3 +113,4 @@
 - `ralph` / `code-review-agent` 的结构化 artifact 已落到运行时 payload，不再只存在于 agent 描述文档
 - review loop 的 `needs_attention` 与 final delivery gate 都按架构文档要求落到了自动化控制层
 - retrieval/provider 相关测试仍通过，说明这轮 agent runtime 改动没有破坏统一 retrieval contract
+- 本轮 follow-up 仅清理死分支、补 gate 测试、统一 intake 文案，没有把主链控制逻辑重新搬回硬编码，也没有引入额外兜底分叉

@@ -423,6 +423,38 @@ class SleepCodingWorkerServiceTests(unittest.TestCase):
             self.assertEqual(failing_claim.retry_count, 1)
             self.assertIn("simulated worker failure", failing_claim.last_error or "")
 
+    def test_poll_once_stops_retrying_after_max_retries(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = build_settings(Path(temp_dir) / "worker.db").model_copy(
+                update={"sleep_coding_worker_max_retries": 1}
+            )
+            github = FakeGitHubService()
+            mcp_client = build_github_mcp(github)
+            worker = SleepCodingWorkerService(
+                settings=settings,
+                mcp_client=mcp_client,
+                sleep_coding=FailingSleepCodingService(),  # type: ignore[arg-type]
+            )
+
+            first = worker.poll_once()
+            with worker._connect() as connection:
+                connection.execute(
+                    """
+                    UPDATE sleep_coding_issue_claims
+                    SET next_retry_at = ?
+                    WHERE repo = ? AND issue_number = ?
+                    """,
+                    ((datetime.now(UTC) - timedelta(minutes=5)).isoformat(), "tiezhuli001/youmeng-gateway", 55),
+                )
+                connection.commit()
+            second = worker.poll_once()
+
+            self.assertEqual(first.claimed_count, 0)
+            failing_claim = next(claim for claim in second.claims if claim.issue_number == 55)
+            self.assertEqual(failing_claim.status, "failed")
+            self.assertEqual(failing_claim.retry_count, 2)
+            self.assertIn("simulated worker failure", failing_claim.last_error or "")
+
     def test_poll_once_binds_task_to_claim_when_auto_approve_fails(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             settings = build_settings(Path(temp_dir) / "worker.db")

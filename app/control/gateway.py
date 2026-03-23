@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import threading
 from dataclasses import dataclass
 from uuid import uuid4
 
@@ -17,7 +18,10 @@ from app.models.schemas import (
     TokenUsage,
 )
 from app.control.routing import GatewayRoute, resolve_route
-from app.control.session_registry import SessionRegistryService
+from app.control.session_registry import (
+    SessionRegistryService,
+    build_user_session_external_ref,
+)
 from app.control.task_registry import TaskRegistryService
 
 
@@ -29,6 +33,9 @@ class _GatewayChainContext:
 
 
 class GatewayControlPlaneService:
+    _LANE_GUARD = threading.Lock()
+    _LANE_LOCKS: dict[str, threading.Lock] = {}
+
     def __init__(
         self,
         settings: Settings | None = None,
@@ -47,73 +54,107 @@ class GatewayControlPlaneService:
         self.endpoints = ChannelEndpointRegistry(self.settings)
 
     def run(self, payload: GatewayMessageRequest) -> GatewayMessageResponse:
-        request_id = payload.request_id or str(uuid4())
-        run_id = str(uuid4())
-        source_endpoint_id = self.endpoints.resolve_endpoint_id(
-            endpoint_id=payload.endpoint_id,
-            provider=payload.source,
-        )
-        binding = self.endpoints.resolve_binding(source_endpoint_id)
-        route = resolve_route(payload.content, endpoint_binding=binding)
-        delivery_endpoint_id = self.endpoints.resolve_delivery_endpoint_id(
-            source_endpoint_id=source_endpoint_id,
-            workflow=route.intent,
-        )
-        chain_context = self._resolve_chain_context(
-            payload=payload,
-            request_id=request_id,
-            route=route,
-        )
-        run_session = self._ensure_sessions(
-            request_id=request_id,
-            chain_request_id=chain_context.chain_request_id,
-            user_id=payload.user_id,
+        user_session_ref = build_user_session_external_ref(
             source=payload.source,
-            intent=route.intent,
-            content=payload.content,
-            target_agent=route.target_agent,
-            direct_mention=route.direct_mention,
-            source_endpoint_id=source_endpoint_id,
-            delivery_endpoint_id=delivery_endpoint_id,
-            linked_user_session_id=chain_context.linked_user_session_id,
-            parent_task_id=chain_context.parent_task_id,
+            user_id=payload.user_id,
+            session_key=payload.session_key,
         )
-        if route.intent == "stats_query":
-            usage, message, task_id = self._handle_stats_query(payload)
-        else:
-            usage, message, task_id = self._handle_route(
-                route=route,
+        dedupe_key = self._build_dedupe_key(payload, user_session_ref)
+        if dedupe_key:
+            cached = self.sessions.find_inbound_receipt(dedupe_key)
+            if cached is not None:
+                return GatewayMessageResponse.model_validate(cached)
+        lane_lock = self._get_lane_lock(user_session_ref)
+        with lane_lock:
+            if dedupe_key:
+                cached = self.sessions.find_inbound_receipt(dedupe_key)
+                if cached is not None:
+                    return GatewayMessageResponse.model_validate(cached)
+            request_id = payload.request_id or str(uuid4())
+            run_id = str(uuid4())
+            source_endpoint_id = self.endpoints.resolve_endpoint_id(
+                endpoint_id=payload.endpoint_id,
+                provider=payload.source,
+            )
+            binding = self.endpoints.resolve_binding(source_endpoint_id)
+            route = resolve_route(payload.content, endpoint_binding=binding)
+            delivery_endpoint_id = self.endpoints.resolve_delivery_endpoint_id(
+                source_endpoint_id=source_endpoint_id,
+                workflow=route.intent,
+            )
+            chain_context = self._resolve_chain_context(
                 payload=payload,
                 request_id=request_id,
-                run_id=run_id,
+                route=route,
+            )
+            run_session = self._ensure_sessions(
+                request_id=request_id,
                 chain_request_id=chain_context.chain_request_id,
+                user_id=payload.user_id,
+                source=payload.source,
+                intent=route.intent,
+                content=payload.content,
+                target_agent=route.target_agent,
+                direct_mention=route.direct_mention,
                 source_endpoint_id=source_endpoint_id,
                 delivery_endpoint_id=delivery_endpoint_id,
+                user_session_ref=user_session_ref,
+                linked_user_session_id=chain_context.linked_user_session_id,
+                parent_task_id=chain_context.parent_task_id,
             )
-        self._record_routing_failure(
-            task_id=task_id,
-            route=route,
-            source_endpoint_id=source_endpoint_id,
-        )
-        recorded = self.ledger.record_request(
-            request_id=request_id,
-            run_id=run_id,
-            user_id=payload.user_id,
-            source=payload.source,
-            intent=route.intent,
-            content=payload.content,
-            usage=usage,
-        )
-        return GatewayMessageResponse(
-            request_id=request_id,
-            chain_request_id=chain_context.chain_request_id,
-            intent=route.intent,
-            message=message,
-            token_usage=recorded,
-            task_id=task_id,
-            run_session_id=run_session.session_id,
-            delivery_endpoint_id=delivery_endpoint_id,
-        )
+            if route.intent == "stats_query":
+                usage, message, task_id = self._handle_stats_query(payload)
+            else:
+                usage, message, task_id = self._handle_route(
+                    route=route,
+                    payload=payload,
+                    request_id=request_id,
+                    run_id=run_id,
+                    chain_request_id=chain_context.chain_request_id,
+                    source_endpoint_id=source_endpoint_id,
+                    delivery_endpoint_id=delivery_endpoint_id,
+                )
+            self._record_routing_failure(
+                task_id=task_id,
+                route=route,
+                source_endpoint_id=source_endpoint_id,
+            )
+            recorded = self.ledger.record_request(
+                request_id=request_id,
+                run_id=run_id,
+                user_id=payload.user_id,
+                source=payload.source,
+                intent=route.intent,
+                content=payload.content,
+                usage=usage,
+            )
+            response = GatewayMessageResponse(
+                request_id=request_id,
+                chain_request_id=chain_context.chain_request_id,
+                intent=route.intent,
+                message=message,
+                token_usage=recorded,
+                task_id=task_id,
+                run_session_id=run_session.session_id,
+                delivery_endpoint_id=delivery_endpoint_id,
+            )
+            if dedupe_key:
+                self.sessions.record_inbound_receipt(dedupe_key, response.model_dump(mode="json"))
+            return response
+
+    @classmethod
+    def _get_lane_lock(cls, lane_key: str) -> threading.Lock:
+        with cls._LANE_GUARD:
+            if lane_key not in cls._LANE_LOCKS:
+                cls._LANE_LOCKS[lane_key] = threading.Lock()
+            return cls._LANE_LOCKS[lane_key]
+
+    def _build_dedupe_key(self, payload: GatewayMessageRequest, user_session_ref: str) -> str | None:
+        if payload.message_id:
+            return f"{payload.source}:{user_session_ref}:message:{payload.message_id}"
+        if payload.request_id:
+            return f"{payload.source}:{user_session_ref}:request:{payload.request_id}"
+        return None
 
     def _record_routing_failure(
         self,
@@ -150,17 +191,30 @@ class GatewayControlPlaneService:
         direct_mention: bool,
         source_endpoint_id: str,
         delivery_endpoint_id: str,
+        user_session_ref: str,
         linked_user_session_id: str | None = None,
         parent_task_id: str | None = None,
     ):
-        user_session = self.sessions.get_or_create_session(
-            session_type="user_session",
-            external_ref=f"{source}:{user_id}",
-            user_id=user_id,
-            source=source,
-            payload={
+        user_session = (
+            self.sessions.get_session(linked_user_session_id)
+            if linked_user_session_id
+            else self.sessions.get_or_create_session(
+                session_type="user_session",
+                external_ref=user_session_ref,
+                user_id=user_id,
+                source=source,
+                payload={
+                    "source_endpoint_id": source_endpoint_id,
+                    "delivery_endpoint_id": delivery_endpoint_id,
+                },
+            )
+        )
+        self.sessions.update_session_payload(
+            user_session.session_id,
+            {
                 "source_endpoint_id": source_endpoint_id,
                 "delivery_endpoint_id": delivery_endpoint_id,
+                "user_session_ref": user_session_ref,
             },
         )
         self.sessions.set_active_agent(user_session.session_id, target_agent)
@@ -179,6 +233,7 @@ class GatewayControlPlaneService:
                 "chain_request_id": chain_request_id,
                 "source_endpoint_id": source_endpoint_id,
                 "delivery_endpoint_id": delivery_endpoint_id,
+                "session_lane_key": user_session_ref,
                 "linked_user_session_id": linked_user_session_id,
                 "parent_task_id": parent_task_id,
             },
@@ -265,6 +320,7 @@ class GatewayControlPlaneService:
                 persist_usage=False,
                 source_endpoint_id=source_endpoint_id,
                 delivery_endpoint_id=delivery_endpoint_id,
+                session_key=payload.session_key,
             )
         )
         if intake.mode == "chat":

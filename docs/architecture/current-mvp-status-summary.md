@@ -165,6 +165,19 @@ GitHub 的 open/closed 不再直接充当业务状态真相。
 - `python -m unittest discover -s tests -v`
   - 结果：`Ran 131 tests in 170.390s OK`
 
+### 4. 当前 operator 入口
+
+当前主链的 operator 入口已经不再只靠散落的 task event 猜状态，当前建议按下面顺序查看：
+
+- `GET /diagnostics/integrations`
+- `GET /control/tasks/{task_id}`
+- `GET /control/tasks/{task_id}/events`
+- `GET /tasks/sleep-coding/{task_id}`
+
+运行说明见：
+
+- `docs/architecture/main-chain-operator-runbook.md`
+
 ## 六、文档声明与真实代码的对照
 
 下面是本轮最关键的 4 组实现对照。

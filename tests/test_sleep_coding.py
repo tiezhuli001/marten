@@ -219,8 +219,10 @@ class FakeGitWorkspaceService:
 class FakeValidationRunner:
     def __init__(self, status: str) -> None:
         self.status = status
+        self.calls = 0
 
     def run(self, repo_path: Path) -> ValidationResult:
+        self.calls += 1
         return ValidationResult(
             status=self.status,
             command="python -m unittest discover -s tests",
@@ -1216,6 +1218,177 @@ class SleepCodingServiceTests(unittest.TestCase):
             self.assertIn("codex/issue-25-sleep-coding", git_workspace.cleaned_branches)
             self.assertEqual(len(channel.messages), 2)
             self.assertTrue(any("Ralph 执行计划" in title for title, _, _ in channel.messages))
+
+    def test_review_handoff_requires_validation_evidence_or_explicit_gap(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database_path = Path(temp_dir) / "sleep_coding.db"
+            settings = build_settings(database_path)
+            service = SleepCodingService(
+                settings=settings,
+                channel=FakeChannelService(),
+                git_workspace=FakeGitWorkspaceService(),
+                validator=FakeValidationRunner("pending"),
+                ledger=TokenLedgerService(settings),
+                agent_runtime=FakeAgentRuntime(),
+                mcp_client=build_github_mcp(FakeGitHubService()),
+            )
+            task = service.start_task(SleepCodingTaskRequest(issue_number=30))
+
+            with self.assertRaisesRegex(ValueError, "validation evidence"):
+                service.apply_action(
+                    task.task_id,
+                    SleepCodingTaskActionRequest(action="approve_plan"),
+                )
+
+    def test_resume_planned_task_reuses_persisted_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database_path = Path(temp_dir) / "sleep_coding.db"
+            settings = build_settings(database_path)
+            agent_runtime = FakeAgentRuntime()
+            service = SleepCodingService(
+                settings=settings,
+                channel=FakeChannelService(),
+                git_workspace=FakeGitWorkspaceService(),
+                validator=FakeValidationRunner("passed"),
+                ledger=TokenLedgerService(settings),
+                agent_runtime=agent_runtime,
+                mcp_client=build_github_mcp(FakeGitHubService()),
+            )
+            task = service.start_task(SleepCodingTaskRequest(issue_number=31))
+            runtime_calls_after_start = len(agent_runtime.calls)
+
+            resumed = service.resume_task(task.task_id)
+
+            self.assertEqual(resumed.status, "awaiting_confirmation")
+            self.assertEqual(resumed.plan.summary, task.plan.summary)
+            self.assertEqual(len(agent_runtime.calls), runtime_calls_after_start)
+
+    def test_resume_after_validation_reuses_validation_result(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database_path = Path(temp_dir) / "sleep_coding.db"
+            settings = build_settings(database_path)
+            github = FakeGitHubService()
+            validator = FakeValidationRunner("passed")
+            service = SleepCodingService(
+                settings=settings,
+                channel=FakeChannelService(),
+                git_workspace=FakeGitWorkspaceService(),
+                validator=validator,
+                ledger=TokenLedgerService(settings),
+                agent_runtime=FakeAgentRuntime(),
+                mcp_client=build_github_mcp(github),
+            )
+            task = service.start_task(SleepCodingTaskRequest(issue_number=32))
+            with service._connect() as connection:
+                service.store.update_task_payloads(
+                    connection,
+                    task.task_id,
+                    status="validating",
+                    git_execution=GitExecutionResult(
+                        status="prepared",
+                        worktree_path=f"/tmp/{task.head_branch.replace('/', '__')}",
+                        artifact_path=f"/tmp/{task.head_branch.replace('/', '__')}/.sleep_coding/issue-32.md",
+                        output="artifact ready",
+                        is_dry_run=True,
+                    ),
+                    validation=ValidationResult(
+                        status="passed",
+                        command="python -m unittest discover -s tests",
+                        exit_code=0,
+                        output="already passed",
+                    ),
+                )
+                connection.commit()
+            validator_calls_before_resume = validator.calls
+
+            resumed = service.resume_task(task.task_id)
+
+            self.assertEqual(resumed.status, "in_review")
+            self.assertEqual(resumed.validation.status, "passed")
+            self.assertEqual(validator.calls, validator_calls_before_resume)
+            self.assertEqual(len(github.created_prs), 1)
+
+    def test_resume_after_validation_reuses_existing_pull_request_and_review_handoff(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database_path = Path(temp_dir) / "sleep_coding.db"
+            settings = build_settings(database_path)
+            github = FakeGitHubService()
+            service = SleepCodingService(
+                settings=settings,
+                channel=FakeChannelService(),
+                git_workspace=FakeGitWorkspaceService(),
+                validator=FakeValidationRunner("passed"),
+                ledger=TokenLedgerService(settings),
+                agent_runtime=FakeAgentRuntime(),
+                mcp_client=build_github_mcp(github),
+            )
+            task = service.start_task(SleepCodingTaskRequest(issue_number=33))
+            first = service.apply_action(
+                task.task_id,
+                SleepCodingTaskActionRequest(action="approve_plan"),
+            )
+            control_before = service.tasks.get_task(first.control_task_id)
+            with service._connect() as connection:
+                service.store.update_status(connection, task.task_id, "validating")
+                connection.commit()
+
+            resumed = service.resume_task(task.task_id)
+            control_after = service.tasks.get_task(first.control_task_id)
+
+            self.assertEqual(resumed.status, "in_review")
+            self.assertEqual(resumed.pull_request.pr_number, first.pull_request.pr_number)
+            self.assertEqual(len(github.created_prs), 1)
+            self.assertEqual(
+                RalphReviewHandoff.model_validate(control_after.payload["review_handoff"]).task_id,
+                task.task_id,
+            )
+            self.assertEqual(
+                control_after.payload["review_handoff"],
+                control_before.payload["review_handoff"],
+            )
+
+    def test_resume_changes_requested_uses_persisted_review_context(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database_path = Path(temp_dir) / "sleep_coding.db"
+            settings = build_settings(database_path)
+            github = FakeGitHubService()
+            service = SleepCodingService(
+                settings=settings,
+                channel=FakeChannelService(),
+                git_workspace=FakeGitWorkspaceService(),
+                validator=FakeValidationRunner("passed"),
+                ledger=TokenLedgerService(settings),
+                agent_runtime=FakeAgentRuntime(),
+                mcp_client=build_github_mcp(github),
+            )
+            task = service.start_task(SleepCodingTaskRequest(issue_number=34))
+            service.apply_action(
+                task.task_id,
+                SleepCodingTaskActionRequest(action="approve_plan"),
+            )
+            service.apply_action(
+                task.task_id,
+                SleepCodingTaskActionRequest(action="request_changes"),
+            )
+            control_task = service.tasks.get_task(service.get_task(task.task_id).control_task_id)
+            service.tasks.update_task(
+                control_task.task_id,
+                payload_patch={
+                    "latest_review_id": "review-ctx-1",
+                    "latest_review_summary": "Need one repair pass.",
+                    "latest_review_status": "changes_requested",
+                    "review_round": 1,
+                },
+            )
+
+            resumed = service.resume_task(task.task_id)
+
+            self.assertEqual(resumed.status, "in_review")
+            resume_events = [event for event in resumed.events if event.event_type == "coding_resumed"]
+            self.assertTrue(resume_events)
+            self.assertEqual(resume_events[-1].payload["review_id"], "review-ctx-1")
+            self.assertEqual(resume_events[-1].payload["review_round"], 1)
+            self.assertIn("Need one repair pass.", resume_events[-1].payload["review_summary"])
 
     def test_repair_round_reuses_existing_pull_request(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

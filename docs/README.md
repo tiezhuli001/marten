@@ -39,6 +39,7 @@
 - [architecture/agent-first-implementation-principles.md](architecture/agent-first-implementation-principles.md)
 - [architecture/agent-system-overview.md](architecture/agent-system-overview.md)
 - [architecture/agent-runtime-contracts.md](architecture/agent-runtime-contracts.md)
+- [architecture/main-chain-operator-runbook.md](architecture/main-chain-operator-runbook.md)
 
 ### 3. 当前 RAG 正式边界
 

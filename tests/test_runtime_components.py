@@ -9,6 +9,7 @@ from app.agents.code_review_agent import ReviewService
 from app.agents.ralph import SleepCodingService
 from app.control.sleep_coding_worker import SleepCodingWorkerService
 from app.core.config import Settings
+from app.infra.diagnostics import IntegrationDiagnosticsService
 from app.models.schemas import TokenUsage
 from app.runtime.agent_runtime import AgentDescriptor, AgentRuntime
 from app.runtime import mcp as mcp_module
@@ -48,7 +49,7 @@ class CountingAdapter:
     def __init__(self) -> None:
         self.list_calls = 0
 
-    def list_tools(self):
+    def list_tools(self, server: str | None = None):
         self.list_calls += 1
         return [type("Tool", (), {"name": "issue_read", "description": ""})()]
 
@@ -139,6 +140,115 @@ class FakeStdioServerParameters:
 
 
 class RuntimeComponentTests(unittest.TestCase):
+    def test_diagnostics_reports_main_chain_blockers_with_component_readiness(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "platform.json").write_text(
+                json.dumps(
+                    {
+                        "github": {"repository": "tiezhuli001/youmeng-gateway"},
+                        "channel": {"provider": "feishu"},
+                        "review": {"command": "missing-reviewer"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (root / "models.json").write_text("{}", encoding="utf-8")
+            settings = Settings(
+                app_env="test",
+                platform_config_path=str(root / "platform.json"),
+                models_config_path=str(root / "models.json"),
+                mcp_config_path=str(root / "missing-mcp.json"),
+                openai_api_key=None,
+                minimax_api_key=None,
+                channel_webhook_url=None,
+                feishu_verification_token=None,
+                feishu_encrypt_key=None,
+            )
+
+            report = IntegrationDiagnosticsService(settings).get_report()
+
+            self.assertEqual(report["main_chain"]["status"], "blocked")
+            self.assertFalse(report["main_chain"]["ready"])
+            self.assertIn("github_mcp", report["main_chain"]["blocking_components"])
+            self.assertIn("ralph_execution", report["main_chain"]["blocking_components"])
+            self.assertIn("review_skill", report["main_chain"]["blocking_components"])
+            self.assertEqual(report["gateway"]["status"], "partial")
+            self.assertEqual(report["main_chain"]["next_action"], "repair_github_mcp")
+            self.assertIn("github_mcp", report["main_chain"]["operator_hint"])
+            self.assertFalse(report["github_mcp"]["ready"])
+            self.assertEqual(report["github_mcp"]["severity"], "blocking")
+            self.assertEqual(report["github_mcp"]["next_action"], "repair_github_mcp")
+            self.assertEqual(report["gateway"]["severity"], "degraded")
+            self.assertEqual(report["gateway"]["next_action"], "improve_gateway")
+            self.assertFalse(report["main_chain"]["live_ready"])
+            self.assertIn("github_mcp", report["main_chain"]["live_blocking_components"])
+            self.assertIn("review_skill", report["main_chain"]["live_blocking_components"])
+            self.assertEqual(report["main_chain"]["acceptance_status"], "blocked")
+            self.assertIn("github_mcp", report["main_chain"]["acceptance_summary"])
+
+    def test_diagnostics_reports_live_acceptance_summary_when_chain_is_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "platform.json").write_text(
+                json.dumps(
+                    {
+                        "github": {"repository": "tiezhuli001/youmeng-gateway"},
+                        "channel": {"provider": "feishu"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (root / "models.json").write_text(
+                json.dumps(
+                    {
+                        "providers": {
+                            "openai": {
+                                "api_key_env": "OPENAI_API_KEY",
+                                "default_model": "gpt-5-mini",
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (root / "mcp.json").write_text(
+                json.dumps(
+                    {
+                        "servers": {
+                            "github": {
+                                "transport": "stdio",
+                                "command": "echo",
+                                "args": ["ready"],
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            settings = Settings(
+                app_env="test",
+                platform_config_path=str(root / "platform.json"),
+                models_config_path=str(root / "models.json"),
+                mcp_config_path=str(root / "mcp.json"),
+                openai_api_key="test-key",
+                minimax_api_key=None,
+                channel_webhook_url="https://hooks.example.test/feishu",
+                feishu_verification_token="verification-token",
+                feishu_encrypt_key="encrypt-key",
+            )
+
+            with patch("app.infra.diagnostics.build_default_mcp_client", return_value=CountingAdapter()):
+                report = IntegrationDiagnosticsService(settings).get_report()
+
+            self.assertTrue(report["main_chain"]["ready"])
+            self.assertTrue(report["main_chain"]["live_ready"])
+            self.assertEqual(report["main_chain"]["acceptance_status"], "ready")
+            self.assertIn("ready", report["main_chain"]["acceptance_summary"].lower())
+            self.assertIsNone(report["main_chain"]["next_action"])
+            self.assertEqual(report["github_mcp"]["severity"], "ready")
+            self.assertTrue(report["github_mcp"]["required_for_live_chain"])
+
     def test_settings_prefer_agents_and_models_json_when_present(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

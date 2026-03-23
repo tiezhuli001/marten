@@ -15,7 +15,8 @@
 - `docs/architecture/agent-runtime-contracts.md`
 - `docs/architecture/agent-system-overview.md`
 - `docs/architecture/rag-provider-surface.md`
-- `docs/handoffs/2026-03-23-rag-provider-runtime-handoff.md`
+- `docs/handoffs/README.md`
+- 本地 `docs/internal/handoffs/` 下与当前任务相关的 latest handoff（若存在）
 
 ## Done Criteria
 
@@ -27,6 +28,19 @@
 
 ## Done
 
+- 当前工作已从 `main` 切到工作分支 `codex/docs-internal-handoff-boundaries`，避免继续在主分支上修改
+- README 入口已重构为更适合 GitHub 开源首页的英文主页面，并新增中文镜像 `README_CN.md`
+- 主 README 顶部已加入 `中文文档`、核心架构文档入口、badge 与主链 workflow 图
+- README 与 `README_CN.md` 中的 Mermaid workflow 已完成真实 CLI 渲染校验，确保 GitHub 可渲染
+- 明确 docs 目录边界：
+- `docs/handoffs/` 只保留规则与模板
+- 具体 handoff 统一迁回本地 `docs/internal/handoffs/`
+- `docs/internal/` 只用于本地开发，不提交远程仓库
+- 删除无长期价值的历史文档：
+- `docs/archive/plans/*.md`
+- `docs/superpowers/plans/2026-03-22-framework-implementation.md`
+- 本地过期 `docs/internal/session-handoff.md`
+- 本地过期 `docs/internal/rag-stack-baseline.md`
 - `MainAgentIntakeResponse` 扩展为显式 `mode` / `chat_response` / `handoff`，并新增 `needs_attention` task status
 - 新增 `docs/architecture/agent-first-implementation-principles.md`，明确 2026 年阶段的 `agent-first` / `LLM + MCP + skill first` 实现边界
 - 在 `docs/architecture/agent-system-overview.md`、`docs/architecture/agent-runtime-contracts.md`、`docs/handoffs/README.md` 中补充该原则的引用与落地要求
@@ -63,6 +77,7 @@
 
 ## Next
 
+- 如需继续 README 打磨，可补实际截图、演示 GIF 或架构图资源，但当前纯 Markdown 首页已经可作为稳定开源入口
 - 如需继续深化，可把 `main-agent` chat mode 的 reply contract 接入更明确的 UI / channel 展示层
 - 如需继续深化，可补 end-to-end API 层回归，锁住 gateway -> main-agent -> ralph -> review -> delivery 全链 JSON 输出
 
@@ -72,6 +87,9 @@
 
 ## Verification
 
+- `python - <<'PY' ...`（校验 `README.md` 与 `README_CN.md` 的相对 Markdown 链接） -> PASS (`OK`)
+- `python - <<'PY' ...`（提取 `README.md` / `README_CN.md` 中的 Mermaid 图并用 `@mermaid-js/mermaid-cli` 渲染） -> PASS (`README.md: block 1 OK`, `README_CN.md: block 1 OK`)
+- `python -m unittest discover -s tests -v` -> PASS (`Ran 157 tests in 145.114s`)
 - `python -m unittest tests.test_main_agent.MainAgentServiceTests.test_intake_returns_chat_mode_for_non_coding_question tests.test_automation.AutomationServiceTests.test_auto_review_stops_after_three_blocking_rounds_and_hands_off tests.test_automation.AutomationServiceTests.test_approved_task_without_review_does_not_skip_review_gate tests.test_review.ReviewServiceTests.test_trigger_for_task_records_review_and_comment tests.test_sleep_coding.SleepCodingServiceTests.test_sleep_coding_emits_structured_handoff_and_execution_artifacts -v` -> PASS
 - `python -m unittest tests.test_main_agent tests.test_gateway tests.test_sleep_coding tests.test_review tests.test_automation tests.test_rag_capability tests.test_runtime_components tests.test_framework_public_surface -v` -> PASS (`Ran 97 tests in 14.798s`)
 - `python -m unittest tests.test_main_agent tests.test_gateway tests.test_sleep_coding tests.test_review tests.test_automation tests.test_rag_capability tests.test_runtime_components tests.test_framework_public_surface -v` -> PASS (`Ran 97 tests in 16.265s`)

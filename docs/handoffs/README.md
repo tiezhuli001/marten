@@ -1,10 +1,17 @@
 # Handoffs
 
-本目录定义 `Marten` 当前正式 handoff 规则。
+本目录只定义 `Marten` 当前正式 handoff 规则与模板。
 
 目标只有一个：
 
 > 任何 agent 接手任务时，不需要额外口头上下文，也不需要回忆“上一轮是怎么聊出来的”。
+
+边界约束：
+
+- `docs/handoffs/` 只放规则文档和模板
+- 具体 handoff / 交接草稿 / 会话交接记录，统一放到 `docs/internal/`
+- `docs/internal/` 只用于本地开发，不提交远程仓库
+- 如果某份 handoff 里的内容需要长期保留，必须提炼到 `docs/architecture/`、`docs/evolution/`、`docs/plans/` 或 `STATUS.md`，而不是继续把具体 handoff 当公开真相文档
 
 ## 一、什么时候必须写 handoff
 
@@ -66,7 +73,7 @@ handoff 不是 plan 的替代。
 - relevant architecture doc
 - `agent-first-implementation-principles.md`
 - relevant plan
-- latest handoff
+- local latest handoff（若存在，位于 `docs/internal/`）
 
 ## 六、模板
 
@@ -74,12 +81,24 @@ handoff 不是 plan 的替代。
 
 - [templates/agent-handoff-template.md](templates/agent-handoff-template.md)
 
-## 七、当前最新 handoff
+## 七、当前本地 handoff 约定
 
-当前继续执行 RAG / provider 工作时，优先读取：
+具体 handoff 一律放在本地目录：
 
-- [2026-03-23-rag-provider-runtime-handoff.md](2026-03-23-rag-provider-runtime-handoff.md)
+- `docs/internal/handoffs/`
 
-当前继续执行 agent runtime / contract 工作时，优先读取：
+建议命名：
 
-- [2026-03-23-agent-runtime-output-handoff.md](2026-03-23-agent-runtime-output-handoff.md)
+- `YYYY-MM-DD-<topic>-handoff.md`
+
+接手时优先读取该目录中与当前任务最相关、日期最新的 handoff。
+
+## 八、推荐阅读顺序
+
+推荐给下一位 agent 的最小阅读顺序：
+
+1. `docs/architecture/agent-first-implementation-principles.md`
+2. `docs/architecture/agent-system-overview.md`
+3. `docs/architecture/agent-runtime-contracts.md`
+4. `docs/internal/handoffs/` 下当前任务相关的 latest handoff（若存在）
+5. 当前 continuity / status 文档

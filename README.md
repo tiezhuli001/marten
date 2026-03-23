@@ -1,90 +1,96 @@
 # Marten
 
-`Marten` 是一个面向个人自动化研发流程的 agent control plane。
+<div align="center">
 
-它把 `Feishu / GitHub / GitLab / MCP / 本地 worktree` 收口到一条可执行链路里，让 `Main Agent -> Ralph -> Review Agent` 能围绕真实 issue、真实仓库和真实 review loop 工作，而不是只做 prompt demo。
+Local-first agent control plane for issue-driven coding and review workflows.
 
-## Why This Repo
+[中文文档](./README_CN.md) · [Architecture](./docs/architecture/agent-system-overview.md) · [Runtime Contracts](./docs/architecture/agent-runtime-contracts.md) · [RAG Surface](./docs/architecture/rag-provider-surface.md) · [Docs Index](./docs/README.md)
 
-这个仓库解决的是一个很具体的问题：把“需求接收、任务领取、代码修改、自动 review、修复回路、最终通知”变成一条稳定的 agent 工作流。
+![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white)
+![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)
+![Local-first](https://img.shields.io/badge/execution-local--first-black?style=flat-square)
 
-当前主链路是：
+</div>
 
-`Feishu inbound -> gateway -> issue -> claim -> coding -> review -> final delivery`
+Marten turns `Feishu / GitHub / GitLab / MCP / local worktrees` into one executable agent chain so `Main Agent -> Ralph -> Code Review Agent` can work on real issues, real repositories, and real review loops instead of prompt-only demos.
 
-设计原则：
+## Overview
 
-- `agent-first`，但不是 prompt-only
-- `MCP` 负责平台操作和外部系统桥接
-- `LLM + skill` 负责规划、编码和审查的认知能力
-- 本地 `worktree / checkout` 负责真实代码上下文、命令执行和验证
-- schema-first、JSON-first，优先减少脆弱编排而不是继续扩张状态机
+- `Agent-first`, but not prompt-only
+- `LLM + skill + MCP` as the primary capability surface
+- Local repository execution for coding, testing, and review
+- Stable runtime contracts instead of brittle workflow sprawl
+- Retrieval provider abstraction with interchangeable vector backends
+
+## Why Marten
+
+Most agent demos stop at planning or generate text against partial context. Marten is built for a narrower but more useful target: take a real request, route it through issue intake, execute code in a real checkout, run review and repair loops, then notify the right channel only after the chain is actually complete.
+
+The repository is opinionated about that boundary:
+
+- MCP is for platform access and external system bridging
+- LLMs and skills are for reasoning, coding, and review
+- Local worktrees are for real file context, commands, and validation
+- JSON-first schemas are preferred over hard-coded orchestration growth
+
+## At A Glance
+
+| Layer | Responsibility |
+| --- | --- |
+| `channel` | Feishu inbound and outbound delivery |
+| `control plane` | task lifecycle, polling, repair loops, final delivery gates |
+| `runtime` | model access, skills, MCP bridge, token accounting, provider wiring |
+| `agents` | Main Agent, Ralph, Code Review Agent |
+
+## Core Workflow
+
+```mermaid
+flowchart LR
+    A["Feishu / API Request"] --> B["Main Agent"]
+    B -->|"chat mode"| C["Direct Response"]
+    B -->|"coding handoff"| D["GitHub Issue / Control Task"]
+    D --> E["Ralph Worker"]
+    E --> F["Local Worktree Coding"]
+    F --> G["PR + Review Handoff"]
+    G --> H["Code Review Agent"]
+    H -->|"approved"| I["Final Delivery"]
+    H -->|"blocking"| J["Repair Loop"]
+    J --> E
+    J -->|"3 blocking rounds"| K["needs_attention"]
+```
 
 ## Highlights
 
-- Main Agent 可把用户请求转成 GitHub issue
-- Ralph Worker 可轮询 issue、接管任务、在本地 worktree 中执行编码
-- Review Agent 支持 `local / github / gitlab` 三种 source，并优先落本地后再 review
-- 多轮 review loop 已改为 local-first，中间轮次通过渠道通知，最终结果再统一写回平台
-- 统一记录 task、event、session、token usage，便于追踪和复盘
+- Main Agent separates `chat` mode from `coding_handoff` mode
+- Ralph works in a local worktree and emits structured coding and review artifacts
+- Code Review Agent produces stable machine-readable and human-readable review payloads
+- Final delivery is gated on review approval, not just coding completion
+- Retrieval stays behind a unified contract while providers can switch between `Qdrant`, `Milvus`, and future backends
 
 ## Architecture
 
-仓库当前收口为四层：
+Marten is optimized around one stable path:
 
-- `channel`: Feishu webhook 与通知输出
-- `control plane`: task lifecycle、worker poll、follow-up、review loop
-- `runtime`: LLM、skill、MCP、token accounting
-- `agents`: Main Agent、Ralph、Code Review Agent
+`Feishu / API -> Main Agent -> GitHub issue -> Ralph coding -> local validation -> review -> final delivery`
 
-Ralph 和 Review Agent 的目标不是“远程读一点上下文就生成文本”，而是在真实仓库副本上工作：
+That path is the project center of gravity. If a change does not make this chain stronger, safer, or easier to operate, it should be treated as low priority.
 
-- Ralph 在本地 worktree 中执行 coding command
-- Review 先 materialize 远程 source，再基于本地代码和 diff 做审查
-- GitHub / GitLab 只承担 issue、PR、comment、status 的读写桥接
+Key references:
 
-## Workflow
-
-1. 用户从 Feishu 或 API 提交需求
-2. Main Agent 先区分 `chat` 与 `coding_handoff`
-3. 对于 coding 请求，Main Agent 生成或接管 GitHub issue
-4. Ralph Worker 轮询并 claim issue
-5. Ralph 在本地 worktree 中规划、编码、验证、提交 PR
-6. Review Agent 在本地代码上下文上执行 review，并输出稳定的 machine/human review payload
-7. 若有阻塞问题，Ralph 自动修复，最多 3 轮；超过上限进入 `needs_attention`
-8. 只有 review 通过后，最终结果才写回 GitHub / GitLab，并发送 Feishu 通知
-
-## Current Scope
-
-如果你只想快速理解当前仓库，不需要先看所有模块。
-
-当前已经稳定收口的是一条单任务主链路：
-
-- `Feishu / API -> Main Agent -> GitHub issue`
-- `worker poll -> Ralph coding -> local validation -> PR`
-- `Review Agent -> local-first review -> repair loop`
-- `Feishu final delivery -> token usage summary`
-
-当前这条链路已经在真实仓库上完成过多次 live 验证。
-
-详细 issue / PR / review 编号只保留在内部状态文档，避免公开入口被历史样本绑死。
-
-当前还没有展开的方向：
-
-- 多仓库并发调度
-- 多 reviewer 聚合
-- 长期记忆和上下文压缩平台化
-
-判断仓库目标是否偏移时，优先看这条主链路有没有被稀释成“功能拼盘”。如果某个改动不强化这条链路，基本就不该优先。
+- [Agent-First Implementation Principles](./docs/architecture/agent-first-implementation-principles.md)
+- [Agent System Overview](./docs/architecture/agent-system-overview.md)
+- [Agent Runtime Contracts](./docs/architecture/agent-runtime-contracts.md)
+- [RAG Provider Surface](./docs/architecture/rag-provider-surface.md)
+- [GitHub Issue / PR State Model](./docs/architecture/github-issue-pr-state-model.md)
 
 ## Getting Started
 
 ### Requirements
 
-- Python `3.11` 或 `3.12`
+- Python `3.11`, `3.12`, or `3.13`
 - Git
-- 可用的 LLM provider 凭据
-- 可选的 GitHub / GitLab / Feishu / MCP 配置
+- a usable LLM provider credential
+- optional GitHub / GitLab / Feishu / MCP configuration
 
 ### Install
 
@@ -104,66 +110,20 @@ cp models.json.example models.json
 cp platform.json.example platform.json
 ```
 
-配置职责建议如下：
+Configuration responsibilities:
 
-- `mcp.json`: MCP server 的 command、args、env、cwd、adapter；JSON-first，可直接在这里放 token
-- `models.json`: provider 凭据、api base、default model、profile 绑定；JSON-first，可配置多个 provider
-- `platform.json`: repo 和少量运行行为覆盖；大部分 worker/review/execution 默认值内建在代码里
-- `agents.json`: agent workspace、skills、MCP servers、model profile、prompt spec
-- `.env`: 框架运行参数和可选 override；不是主 secrets 存储层
+- `mcp.json`: MCP server command, args, env, cwd, adapter, and external tokens
+- `models.json`: provider credentials, API base, default model, and profile bindings
+- `platform.json`: repository target and runtime behavior overrides
+- `agents.json`: optional agent workspace, skills, MCP servers, prompt spec, model profile
+- `.env`: deployment-time overrides, not the primary source of truth
 
-默认情况下，`agents.json` 可以不存在，系统会使用内建 agent spec。`mcp.json`、`models.json`、`platform.json` 才是主要配置入口；`.env` 更适合作为部署环境 override，而不是唯一的 key 来源。
+Minimal practical setup:
 
-最小可理解配置：
-
-- `mcp.json`：告诉 Marten 怎么连 MCP server，并可直接放 server token
-- `models.json`：告诉 Marten 用哪个 provider/model，以及 provider 的 key/base
-- `platform.json`：告诉 Marten 默认 repo、worker、review、git 行为
-- `.env`：只在你需要 runtime override 时再补
-
-`models.json` 也支持直接把默认 profile 指到 MiniMax：
-
-```json
-{
-  "profiles": {
-    "default": {
-      "model": "minimax/MiniMax-M2.5"
-    }
-  },
-  "providers": {
-    "minimax": {
-      "protocol": "openai",
-      "api_key": "your-api-key",
-      "api_base": "https://api.minimax.io/v1",
-      "default_model": "MiniMax-M2.5",
-      "pricing_provider": "minimax"
-    }
-  }
-}
-```
-
-如果你有自己的 OpenAI-compatible gateway，也可以直接定义一个自定义 provider id。例如把一个 gateway 暴露成 `cpcpa`：
-
-```json
-{
-  "profiles": {
-    "default": {
-      "model": "cpcpa/gpt-5.4-mini"
-    }
-  },
-  "providers": {
-    "cpcpa": {
-      "protocol": "openai",
-      "api_key": "your-api-key",
-      "api_base": "https://your-gateway.example.com/v1",
-      "default_model": "gpt-5.4-mini",
-      "pricing_provider": "openai"
-    }
-  }
-}
-```
-
-`profile.model` 可以直接写成 `provider/model`，这样默认 profile 和 provider 绑定关系会更清晰。
+- `mcp.json`: at least one GitHub MCP server with a valid token
+- `models.json`: at least one working model provider
+- `platform.json`: at least `github.repository`
+- `.env`: only when runtime overrides are needed
 
 ### Run
 
@@ -171,7 +131,7 @@ cp platform.json.example platform.json
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-启动后优先检查：
+Recommended first checks:
 
 - `GET /health`
 - `GET /diagnostics/integrations`
@@ -180,60 +140,37 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 ## Local-First Execution
 
-当前默认策略不是“把大段代码经由 MCP 喂给模型”，而是：
+The default path is not "stream a large codebase through MCP into a model." The default path is:
 
-- coding / review 先把代码放到本地 worktree 或 checkout
-- agent 再在本地目录中读文件、运行命令、生成修改
-- 只有平台写回才走 MCP / API bridge
+1. Materialize code into a local worktree or checkout.
+2. Let the agent read files and run commands locally.
+3. Use MCP or platform APIs only for issue, PR, comment, and notification bridges.
 
-默认行为：
+Important defaults:
 
-- Ralph 默认使用内建 LLM + agent runtime 生成 coding draft
-- `sleep_coding.execution.command` 只是可选覆盖，用于把 coding 委托给外部本地执行器
-- review 默认每轮本地执行，只在最终结果时统一写回远程平台
-- review 默认不再引入固定 follow-up delay；发现阻塞后会立即进入下一轮 repair loop
+- Ralph uses the built-in agent runtime unless an execution command override is configured
+- Review is local-first across intermediate rounds
+- Blocking review feedback immediately enters the next repair loop
+- Final delivery happens only after review approval
 
-常用覆盖项：
-
-- `mcp.json -> servers.github.env.GITHUB_PERSONAL_ACCESS_TOKEN`
-- `models.json -> providers.<provider>.api_key`
-- `models.json -> providers.<provider>.api_base`
-- `platform.json -> github.repository`
-- `models.json -> profiles.default`
-
-只有在你需要偏离默认行为时，再考虑 `agents.json` 或 `platform.json` 中的高级覆盖项；默认情况下不需要先理解这些细节。
-
-一个真实可运行的最小配置组合通常是：
-
-- `mcp.json`：至少一个 GitHub MCP server，带可用 token
-- `models.json`：至少一个可用 provider，带可用 key/base
-- `platform.json`：至少 `github.repository`
-- `.env`：只放 webhook、framework runtime 或你明确想通过环境注入的覆盖项
-
-如果你要跑真实全链路测试，而不是 mock e2e，还需要在 `platform.json` 显式打开：
-
-```json
-{
-  "live_test": {
-    "enabled": true,
-    "timeout_seconds": 900,
-    "poll_interval_seconds": 1
-  }
-}
-```
-
-然后执行：
+For live end-to-end validation, enable `live_test` in `platform.json` and run:
 
 ```bash
 python -m unittest tests.test_live_chain -v
 ```
 
-这条 live test 不会使用 fake GitHub、fake review、fake channel。它会直接使用当前工作区里的真实 `models.json`、`mcp.json`、`platform.json` 和 `.env`，并要求 GitHub MCP、Ralph execution、Review skill、Feishu inbound/outbound 都已配置完成。
+## RAG And Retrieval
 
-如果你第一次接触这个仓库，只要记住两件事：
+Marten keeps retrieval behind a stable facade so upper layers do not care which vector store is active.
 
-1. `MCP` 负责平台操作，不负责替代本地代码执行。
-2. Ralph 和 Review 都默认在本地代码副本上工作，远程平台只做 issue/PR/comment 写回。
+- Provider selection is configuration-driven
+- Search and fetch mapping stay normalized at the retrieval layer
+- Collection schema and incremental indexing can be handled per provider behind the same contract
+- Current validated providers include `Qdrant` and `Milvus`
+
+Design reference:
+
+- [RAG Provider Surface](./docs/architecture/rag-provider-surface.md)
 
 ## API Surface
 
@@ -251,35 +188,63 @@ python -m unittest tests.test_live_chain -v
 
 ## Testing
 
-运行全量测试：
+Run the full test suite:
 
 ```bash
 python -m unittest discover -s tests -v
 ```
 
-当前重点回归包括：
+Important regression areas:
 
-- Main Agent intake
-- worker issue polling
-- Ralph local-first execution
-- review materialize 与 local review loop
-- MVP 端到端链路
+- Main Agent intake and mode routing
+- worker polling and claim flow
+- Ralph local-first execution artifacts
+- review materialization and repair loop control
+- retrieval provider contract stability
+- MVP end-to-end chain behavior
 
-## Docs
+## Documentation
 
-优先阅读：
+Recommended reading order:
 
-1. [docs/architecture/agent-first-implementation-principles.md](docs/architecture/agent-first-implementation-principles.md)
-2. [docs/architecture/agent-system-overview.md](docs/architecture/agent-system-overview.md)
-3. [docs/architecture/agent-runtime-contracts.md](docs/architecture/agent-runtime-contracts.md)
-4. [docs/architecture/rag-provider-surface.md](docs/architecture/rag-provider-surface.md)
-5. [docs/handoffs/README.md](docs/handoffs/README.md)
-6. [docs/README.md](docs/README.md)
+1. [docs/architecture/agent-first-implementation-principles.md](./docs/architecture/agent-first-implementation-principles.md)
+2. [docs/architecture/agent-system-overview.md](./docs/architecture/agent-system-overview.md)
+3. [docs/architecture/agent-runtime-contracts.md](./docs/architecture/agent-runtime-contracts.md)
+4. [docs/architecture/rag-provider-surface.md](./docs/architecture/rag-provider-surface.md)
+5. [docs/evolution/agent-system-rollout-plan.md](./docs/evolution/agent-system-rollout-plan.md)
+6. [docs/evolution/rag-provider-rollout-plan.md](./docs/evolution/rag-provider-rollout-plan.md)
+7. [docs/handoffs/README.md](./docs/handoffs/README.md)
+8. [docs/README.md](./docs/README.md)
+
+## Development Rules
+
+- Do not implement directly on `main`; create or switch to a work branch first
+- `docs/handoffs/` is only for handoff rules and templates
+- concrete session handoffs belong in local-only `docs/internal/`
+- low-value historical execution notes should be deleted instead of force-archived
+
+## Current Scope
+
+The repository is intentionally focused on a single-task production path, not a feature buffet.
+
+In scope:
+
+- request intake to issue creation
+- local-first coding and validation
+- review, repair, and final delivery
+- unified runtime contracts
+- pluggable retrieval providers
+
+Not yet expanded:
+
+- multi-repository concurrent scheduling
+- multi-reviewer aggregation
+- platformized long-term memory and context compression
 
 ## Roadmap
 
-- 继续减少 Ralph 对 issue-only 上下文的依赖
-- 继续强化 GitHub / GitLab source materialize 的健壮性
-- 继续压缩 Python fallback，让 LLM + skill + 本地仓库成为真正主路径
-- 继续把 runtime payload 从自由 patch 收口成更稳定的 public/API schema
-- 在保证可调试性的前提下继续做仓库瘦身
+- continue reducing issue-only context assumptions
+- strengthen source materialization across GitHub and GitLab
+- keep shrinking Python fallback paths where the agent runtime can carry the work
+- keep public and runtime payload contracts explicit and stable
+- keep the repository small enough to debug without losing production utility

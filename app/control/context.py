@@ -144,11 +144,33 @@ class ContextAssemblyService:
         current_input: str,
         heading: str,
     ) -> str:
+        session = self.sessions.get_session(session_id)
         memories = self.collect_short_memory(session_id)
         sections: list[str] = []
+        session_state = self._render_session_state(session.payload)
+        if session_state:
+            sections.append(session_state)
         if memories:
             sections.append(
                 "Short Memory:\n" + "\n".join(f"- {item}" for item in memories)
             )
         sections.append(f"{heading}:\n{current_input}")
         return "\n\n".join(section for section in sections if section.strip())
+
+    def _render_session_state(self, payload: dict[str, object]) -> str:
+        summary_fields = {
+            "Active Agent": payload.get("active_agent"),
+            "Last Intent": payload.get("last_intent"),
+            "Last Workflow State": payload.get("last_workflow_state"),
+            "Last Task ID": payload.get("last_task_id"),
+            "Source Endpoint": payload.get("source_endpoint_id"),
+            "Delivery Endpoint": payload.get("delivery_endpoint_id"),
+        }
+        lines = [
+            f"- {label}: {value}"
+            for label, value in summary_fields.items()
+            if isinstance(value, str) and value.strip()
+        ]
+        if not lines:
+            return ""
+        return "Session State:\n" + "\n".join(lines)

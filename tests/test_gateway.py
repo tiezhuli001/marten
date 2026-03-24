@@ -8,6 +8,9 @@ from pathlib import Path
 from app.core.config import Settings
 from app.control.gateway import GatewayControlPlaneService
 from app.control.routing import classify_intent, resolve_route
+from app.control.task_registry import TaskRegistryService
+from app.control.workflow import GatewayWorkflowService
+from app.control.session_registry import SessionRegistryService
 from app.models.schemas import (
     GatewayMessageRequest,
     GitHubIssueResult,
@@ -17,29 +20,46 @@ from app.models.schemas import (
 
 
 class FakeMainAgentService:
-    def __init__(self) -> None:
+    def __init__(self, tasks: TaskRegistryService | None = None) -> None:
         self.calls = 0
+        self.tasks = tasks
 
     def intake(self, payload):  # noqa: ANN001
         self.calls += 1
+        issue_number = 100 + self.calls
+        control_task_id = f"control-task-{issue_number}"
+        if self.tasks is not None:
+            created = self.tasks.create_task(
+                task_type="main_agent_intake",
+                agent_id="main-agent",
+                status="issue_created",
+                user_id=payload.user_id,
+                source=payload.source,
+                repo="tiezhuli001/marten",
+                issue_number=issue_number,
+                title="Gateway-created issue",
+                external_ref=f"github_issue:tiezhuli001/marten#{issue_number}",
+                payload={},
+            )
+            control_task_id = created.task_id
         return MainAgentIntakeResponse(
             mode="coding_handoff",
             issue=GitHubIssueResult(
-                issue_number=101,
+                issue_number=issue_number,
                 title="Gateway-created issue",
                 body=payload.content,
-                html_url="https://github.com/tiezhuli001/marten/issues/101",
+                html_url=f"https://github.com/tiezhuli001/marten/issues/{issue_number}",
                 labels=["agent:ralph", "workflow:sleep-coding"],
                 is_dry_run=True,
             ),
-            message="Main Agent created #101: Gateway-created issue",
+            message=f"Main Agent created #{issue_number}: Gateway-created issue",
             token_usage=TokenUsage(
                 prompt_tokens=10,
                 completion_tokens=5,
                 total_tokens=15,
                 step_name="main_agent_issue_intake",
             ),
-            control_task_id="control-task-101",
+            control_task_id=control_task_id,
         )
 
 
@@ -111,16 +131,70 @@ class FakeSessionRegistryService:
         self.receipts[dedupe_key] = response_payload
         return response_payload
 
+    def get_execution_lane(self, lane_key: str | None = None):  # noqa: ANN001
+        return type("ExecutionLaneSnapshotStub", (), {"lane_key": lane_key or "self_host:default", "active_task_id": None, "queued_task_ids": []})()
+
+    def acquire_execution_lane(self, task_id: str, lane_key: str | None = None):  # noqa: ANN001
+        return type(
+            "ExecutionLaneDecisionStub",
+            (),
+            {
+                "disposition": "accepted",
+                "snapshot": self.get_execution_lane(lane_key),
+            },
+        )()
+
+    def release_execution_lane(self, task_id: str, lane_key: str | None = None):  # noqa: ANN001
+        return type(
+            "ExecutionLaneDecisionStub",
+            (),
+            {
+                "disposition": "released",
+                "snapshot": self.get_execution_lane(lane_key),
+            },
+        )()
+
+    def record_session_turn(
+        self,
+        session_id: str,
+        *,
+        request_id: str,
+        chain_request_id: str,
+        intent: str,
+        workflow_state: str,
+        task_id: str | None,
+        source_endpoint_id: str,
+        delivery_endpoint_id: str,
+        run_session_id: str | None = None,
+    ):  # noqa: ANN001
+        session = self.get_session(session_id)
+        updated_payload = {
+            **getattr(session, "payload", {}),
+            "last_request_id": request_id,
+            "last_chain_request_id": chain_request_id,
+            "last_intent": intent,
+            "last_workflow_state": workflow_state,
+            "last_task_id": task_id,
+            "source_endpoint_id": source_endpoint_id,
+            "delivery_endpoint_id": delivery_endpoint_id,
+            "last_run_session_id": run_session_id,
+        }
+        return self.update_session_payload(session_id, updated_payload)
+
 
 class FakeLedgerService:
     def record_request(self, **kwargs):  # noqa: ANN003
         return kwargs["usage"]
+
+    def get_usage_summary(self, query: str):  # noqa: ANN001
+        return f"usage summary for {query}"
 
 
 class FakeTaskRegistryService:
     def __init__(self, parent_request_id: str | None = None) -> None:
         self.parent_request_id = parent_request_id
         self.events = []
+        self.tasks = {}
 
     def find_parent_for_issue(self, repo: str, issue_number: int):  # noqa: ANN001
         if self.parent_request_id is None:
@@ -141,6 +215,17 @@ class FakeTaskRegistryService:
         self.events.append((task_id, event_type, payload))
         return None
 
+    def update_task(self, task_id: str, **kwargs):  # noqa: ANN003
+        payload_patch = kwargs.get("payload_patch", {})
+        current = self.tasks.get(task_id, {"task_id": task_id, "payload": {}})
+        current["payload"] = {**current.get("payload", {}), **payload_patch}
+        self.tasks[task_id] = current
+        return type("TaskStub", (), current)()
+
+    def get_task(self, task_id: str):  # noqa: ANN001
+        current = self.tasks.get(task_id, {"task_id": task_id, "payload": {}})
+        return type("TaskStub", (), current)()
+
 
 class FakeSleepCodingService:
     def __init__(self) -> None:
@@ -148,7 +233,25 @@ class FakeSleepCodingService:
 
     def start_task(self, payload):  # noqa: ANN001
         self.requests.append(payload)
-        return type("TaskStub", (), {"task_id": "sleep-task-55", "status": "awaiting_confirmation", "head_branch": "codex/issue-55-sleep-coding"})()
+        return type(
+            "TaskStub",
+            (),
+            {
+                "task_id": "sleep-task-55",
+                "status": "awaiting_confirmation",
+                "head_branch": "codex/issue-55-sleep-coding",
+                "control_task_id": None,
+            },
+        )()
+
+
+class FakeAutomationService:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def continue_gateway_workflow(self, *, intent: str, task_id: str | None):  # noqa: ANN001
+        self.calls += 1
+        return {"triggered": True, "mode": "worker_poll", "intent": intent, "task_id": task_id}
 
 
 class GatewayRoutingTests(unittest.TestCase):
@@ -177,6 +280,7 @@ class GatewayRoutingTests(unittest.TestCase):
             main_agent=FakeMainAgentService(),
             sessions=sessions,
             ledger=FakeLedgerService(),
+            tasks=FakeTaskRegistryService(),
         )
 
         response = service.run(
@@ -201,6 +305,7 @@ class GatewayRoutingTests(unittest.TestCase):
             main_agent=FakeMainAgentService(),
             sessions=sessions,
             ledger=FakeLedgerService(),
+            tasks=FakeTaskRegistryService(),
         )
 
         service.run(
@@ -258,6 +363,89 @@ class GatewayRoutingTests(unittest.TestCase):
 
         self.assertEqual(sessions.run_parent_session_ids[-1], "user-session-55")
 
+    def test_gateway_workflow_queues_second_general_request_while_first_task_is_active(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings(app_env="test", database_url=f"sqlite:///{Path(temp_dir) / 'gateway.db'}")
+            sessions = SessionRegistryService(settings)
+            tasks = TaskRegistryService(settings)
+            workflow = GatewayWorkflowService(
+                settings=settings,
+                control_plane=GatewayControlPlaneService(
+                    settings=settings,
+                    main_agent=FakeMainAgentService(tasks=tasks),
+                    sessions=sessions,
+                    tasks=tasks,
+                    ledger=FakeLedgerService(),
+                ),
+                automation=FakeAutomationService(),
+            )
+
+            first = workflow.run(
+                GatewayMessageRequest(
+                    user_id="user-1",
+                    source="manual",
+                    content="请实现第一个 coding 请求。",
+                )
+            )
+            second = workflow.run(
+                GatewayMessageRequest(
+                    user_id="user-2",
+                    source="manual",
+                    content="请实现第二个 coding 请求。",
+                )
+            )
+
+            queued_task = tasks.get_task(second.gateway_response.task_id)
+
+            self.assertEqual(first.gateway_response.workflow_state, "accepted")
+            self.assertEqual(second.gateway_response.workflow_state, "queued")
+            self.assertEqual(second.gateway_response.active_task_id, first.gateway_response.task_id)
+            self.assertEqual(first.follow_up["triggered"], True)
+            self.assertEqual(second.follow_up["triggered"], False)
+            self.assertEqual(second.follow_up["reason"], "queued")
+            self.assertEqual(queued_task.payload["queue_status"], "queued")
+            self.assertEqual(queued_task.payload["active_task_id"], first.gateway_response.task_id)
+
+    def test_same_feishu_session_records_last_task_linkage_after_stats_then_coding(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings(app_env="test", database_url=f"sqlite:///{Path(temp_dir) / 'gateway.db'}")
+            sessions = SessionRegistryService(settings)
+            tasks = TaskRegistryService(settings)
+            service = GatewayControlPlaneService(
+                settings=settings,
+                main_agent=FakeMainAgentService(tasks=tasks),
+                sessions=sessions,
+                tasks=tasks,
+                ledger=FakeLedgerService(),
+            )
+
+            stats = service.run(
+                GatewayMessageRequest(
+                    user_id="feishu:test-user",
+                    source="feishu",
+                    session_key="feishu:chat:oc_123",
+                    content="今天 token 用量怎么样？",
+                )
+            )
+            coding = service.run(
+                GatewayMessageRequest(
+                    user_id="feishu:test-user",
+                    source="feishu",
+                    session_key="feishu:chat:oc_123",
+                    content="请整理这个需求并创建 issue 进入开发流程。",
+                )
+            )
+
+            user_session = sessions.find_by_external_ref("feishu:chat:oc_123")
+
+            self.assertIsNotNone(user_session)
+            assert user_session is not None
+            self.assertEqual(stats.workflow_state, "completed")
+            self.assertEqual(coding.workflow_state, "accepted")
+            self.assertEqual(user_session.payload["last_task_id"], coding.task_id)
+            self.assertEqual(user_session.payload["last_workflow_state"], "accepted")
+            self.assertEqual(user_session.payload["last_chain_request_id"], coding.chain_request_id)
+
     def test_explicit_ralph_mention_starts_sleep_coding_even_without_keyword(self) -> None:
         sleep_coding = FakeSleepCodingService()
         sessions = FakeSessionRegistryService()
@@ -266,6 +454,7 @@ class GatewayRoutingTests(unittest.TestCase):
             sleep_coding=sleep_coding,
             sessions=sessions,
             ledger=FakeLedgerService(),
+            tasks=FakeTaskRegistryService(),
         )
 
         response = service.run(
@@ -332,11 +521,11 @@ class GatewayRoutingTests(unittest.TestCase):
             self.assertEqual(response.intent, "general")
             self.assertEqual(response.task_id, "control-task-101")
             self.assertEqual(sessions.payload_updates[-1][1], "main-agent")
-            self.assertEqual(len(tasks.events), 1)
-            self.assertEqual(tasks.events[0][0], "control-task-101")
-            self.assertEqual(tasks.events[0][1], "routing_failure")
-            self.assertEqual(tasks.events[0][2]["requested_agent"], "ralph")
-            self.assertEqual(tasks.events[0][2]["reason"], "handoff_not_allowed")
+            self.assertEqual(len(tasks.events), 2)
+            self.assertEqual(tasks.events[-1][0], "control-task-101")
+            self.assertEqual(tasks.events[-1][1], "routing_failure")
+            self.assertEqual(tasks.events[-1][2]["requested_agent"], "ralph")
+            self.assertEqual(tasks.events[-1][2]["reason"], "handoff_not_allowed")
 
     def test_duplicate_message_id_reuses_recorded_gateway_response(self) -> None:
         sessions = FakeSessionRegistryService()
@@ -346,6 +535,7 @@ class GatewayRoutingTests(unittest.TestCase):
             main_agent=main_agent,
             sessions=sessions,
             ledger=FakeLedgerService(),
+            tasks=FakeTaskRegistryService(),
         )
 
         first = service.run(
@@ -398,6 +588,7 @@ class GatewayRoutingTests(unittest.TestCase):
             main_agent=main_agent,
             sessions=sessions,
             ledger=FakeLedgerService(),
+            tasks=FakeTaskRegistryService(),
         )
         results = []
 

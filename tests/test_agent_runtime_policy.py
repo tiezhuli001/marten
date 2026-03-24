@@ -183,6 +183,65 @@ class AgentRuntimePolicyTests(unittest.TestCase):
             self.assertIn("Output Contract:", system_prompt)
             self.assertNotIn("Detailed instructions.", system_prompt)
 
+    def test_agent_specific_truncation_override_applies_only_to_target_agent(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            platform_json = root / "platform.json"
+            main_workspace = root / "agents" / "main-agent"
+            main_workspace.mkdir(parents=True)
+            (main_workspace / "AGENTS.md").write_text("Main agent rules. " * 200, encoding="utf-8")
+            review_workspace = root / "agents" / "code-review-agent"
+            review_workspace.mkdir(parents=True)
+            (review_workspace / "AGENTS.md").write_text("Review agent rules. " * 20, encoding="utf-8")
+            platform_json.write_text(
+                json.dumps(
+                    {
+                        "agent_runtime": {
+                            "context_policy": {
+                                "max_chars_by_agent": {
+                                    "main-agent": 700,
+                                }
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            settings = Settings(platform_config_path=str(platform_json))
+            fake_llm = FakeLLMRuntime()
+            runtime = AgentRuntime(settings=settings, llm_runtime=fake_llm)
+
+            runtime.generate_structured_output(
+                AgentDescriptor(
+                    agent_id="main-agent",
+                    workspace=main_workspace,
+                    skill_names=[],
+                    mcp_servers=[],
+                    system_instruction="Draft issues. " * 10,
+                    model_profile="default",
+                ),
+                user_prompt="Summarize the current task.",
+                output_contract="Return JSON.",
+            )
+            runtime.generate_structured_output(
+                AgentDescriptor(
+                    agent_id="code-review-agent",
+                    workspace=review_workspace,
+                    skill_names=[],
+                    mcp_servers=[],
+                    system_instruction="Review changes. " * 10,
+                    model_profile="review",
+                ),
+                user_prompt="Review the patch.",
+                output_contract="Return JSON.",
+            )
+
+            main_prompt = fake_llm.requests[0].messages[0].content
+            review_prompt = fake_llm.requests[1].messages[0].content
+            self.assertLess(len(main_prompt), 700)
+            self.assertNotIn("Main agent rules.", main_prompt)
+            self.assertIn("Review agent rules.", review_prompt)
+
 
 if __name__ == "__main__":
     unittest.main()

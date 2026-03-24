@@ -131,12 +131,40 @@ Minimal practical setup:
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
+### Private Server Self-Host
+
+当前第一阶段的目标运行形态是“私有服务器自用”，不是本机临时脚本集合。
+
+- `Feishu` 是默认用户入口
+- `Web/API` 是诊断、运维和备用入口
+- 同一时刻只允许一个 active 主任务
+- 新请求必须进入队列或收到明确 busy 语义
+- 目标仓库遵循“请求优先，否则配置默认”
+
+推荐的最小运行模型已经固定：
+
+- 一个 `API/webhook` 进程
+- 一个 `scheduler/worker` 进程
+- 第一阶段不采用单进程内挂 scheduler
+
 Recommended first checks:
 
 - `GET /health`
 - `GET /diagnostics/integrations`
+- `GET /control/operator/state`
+- 确认 `self_host_boot.ready=true` 且 `self_host_boot.process_model=split_process`
+- 确认 `feishu.inbound_status=ready` 且 `feishu.delivery_status=ready`
+- 用同一个 Feishu chat 连续发送一次状态查询和一次 coding 请求，确认 session continuity 不断裂
 - `POST /main-agent/intake`
+- `POST /control/tasks/{task_id}/actions`
 - `POST /workers/sleep-coding/poll`
+
+Recommended process startup contract:
+
+- API/webhook process:
+  - `uvicorn app.main:app --host 0.0.0.0 --port 8000`
+- scheduler/worker process:
+  - `python scripts/run_worker_scheduler.py`
 
 ## Local-First Execution
 
@@ -148,7 +176,7 @@ The default path is not "stream a large codebase through MCP into a model." The 
 
 Important defaults:
 
-- Ralph uses the built-in agent runtime unless an execution command override is configured
+- Ralph uses the built-in agent runtime as the only supported main-chain execution path
 - Review is local-first across intermediate rounds
 - Blocking review feedback immediately enters the next repair loop
 - Final delivery happens only after review approval
@@ -156,7 +184,7 @@ Important defaults:
 For live end-to-end validation, enable `live_test` in `platform.json` and run:
 
 ```bash
-python -m unittest tests.test_live_chain -v
+python scripts/run_test_suites.py live
 ```
 
 ## RAG And Retrieval
@@ -176,9 +204,11 @@ Design reference:
 
 - `GET /health`
 - `GET /diagnostics/integrations`
+- `GET /control/operator/state`
 - `POST /gateway/message`
 - `POST /webhooks/feishu/events`
 - `POST /main-agent/intake`
+- `POST /control/tasks/{task_id}/actions`
 - `POST /workers/sleep-coding/poll`
 - `GET /workers/sleep-coding/claims`
 - `GET /control/tasks/{task_id}`
@@ -186,12 +216,26 @@ Design reference:
 - `GET /tasks/sleep-coding/{task_id}`
 - `GET /reviews/{review_id}`
 
+对当前私有服务器自用阶段，`API` 是 operator surface，不是第二套业务编排面。默认用户流量优先从 `Feishu` 进入，再由 control plane 驱动 `main-agent -> ralph -> code-review-agent -> delivery` 主链。
+
 ## Testing
 
-Run the full test suite:
+Run the default fast suite:
 
 ```bash
-python -m unittest discover -s tests -v
+python scripts/run_test_suites.py quick
+```
+
+Run the broader non-live regression suite:
+
+```bash
+python scripts/run_test_suites.py regression
+```
+
+Run live validation separately:
+
+```bash
+python scripts/run_test_suites.py live
 ```
 
 Important regression areas:
@@ -202,6 +246,7 @@ Important regression areas:
 - review materialization and repair loop control
 - retrieval provider contract stability
 - MVP end-to-end chain behavior
+- live-chain remains intentionally isolated because it depends on real local integrations
 
 ## Documentation
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Mapping
 
 from app.core.config import Settings
 
@@ -21,17 +22,42 @@ class PromptSection:
         return f"{self.title}:\n{self.content}".strip()
 
 
-def resolve_prompt_assembly_policy(settings: Settings) -> PromptAssemblyPolicy:
+def _coerce_positive_int(value: object) -> int | None:
+    if value in {None, ""}:
+        return None
+    return max(int(value), 1)
+
+
+def resolve_prompt_assembly_policy(
+    settings: Settings,
+    *,
+    agent_id: str | None = None,
+    workflow: str | None = None,
+) -> PromptAssemblyPolicy:
     runtime_config = settings.platform_config.get("agent_runtime", {})
     if not isinstance(runtime_config, dict):
         return PromptAssemblyPolicy()
     raw_policy = runtime_config.get("context_policy", {})
     if not isinstance(raw_policy, dict):
         return PromptAssemblyPolicy()
-    raw_max_chars = raw_policy.get("max_chars")
-    if raw_max_chars in {None, ""}:
-        return PromptAssemblyPolicy()
-    return PromptAssemblyPolicy(max_chars=max(int(raw_max_chars), 1))
+    raw_max_chars = _coerce_positive_int(raw_policy.get("max_chars"))
+
+    if isinstance(agent_id, str) and agent_id.strip():
+        by_agent = raw_policy.get("max_chars_by_agent")
+        if isinstance(by_agent, Mapping):
+            agent_override = _coerce_positive_int(by_agent.get(agent_id.strip()))
+            if agent_override is not None:
+                raw_max_chars = agent_override
+
+    if isinstance(agent_id, str) and agent_id.strip() and isinstance(workflow, str) and workflow.strip():
+        by_workflow = raw_policy.get("max_chars_by_workflow")
+        if isinstance(by_workflow, Mapping):
+            key = f"{agent_id.strip()}:{workflow.strip()}"
+            workflow_override = _coerce_positive_int(by_workflow.get(key))
+            if workflow_override is not None:
+                raw_max_chars = workflow_override
+
+    return PromptAssemblyPolicy(max_chars=raw_max_chars)
 
 
 def assemble_prompt_sections(

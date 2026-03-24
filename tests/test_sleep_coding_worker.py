@@ -19,6 +19,7 @@ from app.models.schemas import (
 from app.runtime.mcp import InMemoryMCPServer, MCPClient
 from app.channel.notifications import ChannelNotificationResult
 from app.agents.ralph import SleepCodingService
+from app.control.session_registry import SessionRegistryService
 from app.control.sleep_coding_worker import SleepCodingWorkerService
 
 
@@ -557,6 +558,40 @@ class SleepCodingWorkerServiceTests(unittest.TestCase):
 
             self.assertEqual(result.claimed_count, 1)
             self.assertEqual(result.tasks[0].issue_number, 77)
+
+    def test_poll_once_prefers_active_parent_repo_over_default_repo(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = build_settings(Path(temp_dir) / "worker.db")
+            github = FakeGitHubService()
+            mcp_client = build_github_mcp(github)
+            sleep_coding = build_sleep_coding_service(settings, mcp_client)
+            sessions = SessionRegistryService(settings)
+            worker = SleepCodingWorkerService(
+                settings=settings,
+                mcp_client=mcp_client,
+                sleep_coding=sleep_coding,
+                sessions=sessions,
+            )
+            parent = worker.tasks.create_task(
+                task_type="main_agent_intake",
+                agent_id="main-agent",
+                status="issue_created",
+                user_id="user-1",
+                source="manual",
+                repo="acme/platform-repo",
+                issue_number=55,
+                title="Implement worker takeover",
+                external_ref="github_issue:acme/platform-repo#55",
+                payload={"request_id": "req-custom-55"},
+            )
+            sessions.acquire_execution_lane(parent.task_id)
+
+            result = worker.poll_once()
+
+            self.assertEqual(result.claimed_count, 1)
+            self.assertEqual(result.repo, "acme/platform-repo")
+            self.assertEqual(result.tasks[0].repo, "acme/platform-repo")
+            self.assertEqual(result.tasks[0].issue.html_url, "https://github.com/acme/platform-repo/issues/55")
 
     def test_expire_stale_claim_marks_timeout(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

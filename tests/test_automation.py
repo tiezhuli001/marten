@@ -16,6 +16,7 @@ from app.models.schemas import (
     SleepCodingTaskActionRequest,
     SleepCodingTaskRequest,
     SleepCodingWorkerClaim,
+    SleepCodingWorkerPollRequest,
     TokenUsage,
     ValidationResult,
 )
@@ -169,6 +170,26 @@ class FakeChannelService:
             delivered=False,
             is_dry_run=True,
             endpoint_id=endpoint_id,
+        )
+
+
+class FakeWorkerPollService:
+    def __init__(self) -> None:
+        self.requests: list[SleepCodingWorkerPollRequest] = []
+
+    def poll_once(self, payload: SleepCodingWorkerPollRequest) -> object:  # noqa: ANN401
+        self.requests.append(payload)
+        from app.models.schemas import SleepCodingWorkerPollResponse
+
+        return SleepCodingWorkerPollResponse(
+            repo=payload.repo or "n/a",
+            worker_id=payload.worker_id,
+            auto_approve_plan=bool(payload.auto_approve_plan),
+            discovered_count=0,
+            claimed_count=0,
+            skipped_count=0,
+            tasks=[],
+            claims=[],
         )
 
 
@@ -459,6 +480,110 @@ def build_sleep_coding_service(
 
 
 class AutomationServiceTests(unittest.TestCase):
+    def test_handle_control_task_action_can_approve_plan_from_control_task(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = build_settings(Path(temp_dir) / "automation.db")
+            github = FakeGitHubService()
+            channel = FakeChannelService()
+            background = FakeBackgroundJobs()
+            sleep_coding = build_sleep_coding_service(
+                settings=settings,
+                channel=channel,
+                github=github,
+                validator=FakeValidationRunner(),
+                ledger=TokenLedgerService(settings),
+            )
+            automation = AutomationService(
+                settings=settings,
+                sleep_coding=sleep_coding,
+                review=FakeReviewService(sleep_coding, blocking_sequence=[False]),
+                channel=channel,
+                ledger=TokenLedgerService(settings),
+                background_jobs=background,
+            )
+            task = sleep_coding.start_task(SleepCodingTaskRequest(issue_number=68))
+
+            result = automation.handle_control_task_action(task.control_task_id, "approve_plan")
+
+            self.assertEqual(result.control_task_id, task.control_task_id)
+            self.assertEqual(result.action, "approve_plan")
+            self.assertEqual(result.status, "in_review")
+            self.assertEqual(result.domain_task_id, task.task_id)
+            self.assertEqual(background.keys, [f"sleep-coding-follow-up:{task.task_id}"])
+
+    def test_handle_control_task_action_can_resume_queued_parent_task(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = build_settings(Path(temp_dir) / "automation.db")
+            github = FakeGitHubService()
+            channel = FakeChannelService()
+            sleep_coding = build_sleep_coding_service(
+                settings=settings,
+                channel=channel,
+                github=github,
+                validator=FakeValidationRunner(),
+                ledger=TokenLedgerService(settings),
+            )
+            worker = FakeWorkerPollService()
+            automation = AutomationService(
+                settings=settings,
+                sleep_coding=sleep_coding,
+                worker=worker,  # type: ignore[arg-type]
+                review=FakeReviewService(sleep_coding, blocking_sequence=[False]),
+                channel=channel,
+                ledger=TokenLedgerService(settings),
+            )
+            control_task = automation.tasks.create_task(
+                task_type="main_agent_intake",
+                agent_id="main-agent",
+                status="issue_created",
+                user_id="user-1",
+                source="manual",
+                repo="acme/platform-repo",
+                issue_number=55,
+                title="Queued intake",
+                external_ref="github_issue:acme/platform-repo#55",
+                payload={"queue_status": "queued"},
+            )
+
+            result = automation.handle_control_task_action(control_task.task_id, "resume")
+
+            self.assertEqual(result.control_task_id, control_task.task_id)
+            self.assertEqual(result.action, "resume")
+            self.assertEqual(result.claimed_count, 0)
+            self.assertEqual(worker.requests[0].repo, "acme/platform-repo")
+
+    def test_handle_control_task_action_can_mark_task_needs_attention(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = build_settings(Path(temp_dir) / "automation.db")
+            github = FakeGitHubService()
+            channel = FakeChannelService()
+            sleep_coding = build_sleep_coding_service(
+                settings=settings,
+                channel=channel,
+                github=github,
+                validator=FakeValidationRunner(),
+                ledger=TokenLedgerService(settings),
+            )
+            automation = AutomationService(
+                settings=settings,
+                sleep_coding=sleep_coding,
+                review=FakeReviewService(sleep_coding, blocking_sequence=[False]),
+                channel=channel,
+                ledger=TokenLedgerService(settings),
+            )
+            task = sleep_coding.start_task(SleepCodingTaskRequest(issue_number=67))
+
+            result = automation.handle_control_task_action(
+                task.control_task_id,
+                "mark_needs_attention",
+                reason="operator intervention",
+            )
+
+            control_task = automation.tasks.get_task(task.control_task_id)
+            self.assertEqual(result.status, "needs_attention")
+            self.assertEqual(control_task.status, "needs_attention")
+            self.assertEqual(control_task.payload["last_error"], "operator intervention")
+
     def test_handle_sleep_coding_action_async_schedules_follow_up_without_blocking(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             settings = build_settings(Path(temp_dir) / "automation.db")

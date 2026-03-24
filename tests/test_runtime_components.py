@@ -5,11 +5,20 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from fastapi.testclient import TestClient
+
 from app.agents.code_review_agent import ReviewService
 from app.agents.ralph import SleepCodingService
+from app.api.routes import (
+    get_session_registry_service,
+    get_task_registry_service,
+)
 from app.control.sleep_coding_worker import SleepCodingWorkerService
+from app.control.session_registry import SessionRegistryService
+from app.control.task_registry import TaskRegistryService
 from app.core.config import Settings
 from app.infra.diagnostics import IntegrationDiagnosticsService
+from app.main import app
 from app.models.schemas import TokenUsage
 from app.runtime.agent_runtime import AgentDescriptor, AgentRuntime
 from app.runtime import mcp as mcp_module
@@ -140,6 +149,61 @@ class FakeStdioServerParameters:
 
 
 class RuntimeComponentTests(unittest.TestCase):
+    def test_operator_state_reports_active_queued_and_recent_failure_tasks(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings(app_env="test", database_url=f"sqlite:///{Path(temp_dir) / 'runtime.db'}")
+            tasks = TaskRegistryService(settings)
+            sessions = SessionRegistryService(settings)
+            active = tasks.create_task(
+                task_type="main_agent_intake",
+                agent_id="main-agent",
+                status="issue_created",
+                repo="acme/platform-repo",
+                issue_number=55,
+                title="Active intake",
+                external_ref="github_issue:acme/platform-repo#55",
+                payload={"queue_status": "running"},
+            )
+            queued = tasks.create_task(
+                task_type="main_agent_intake",
+                agent_id="main-agent",
+                status="issue_created",
+                repo="acme/platform-repo",
+                issue_number=56,
+                title="Queued intake",
+                external_ref="github_issue:acme/platform-repo#56",
+                payload={"queue_status": "queued"},
+            )
+            failed = tasks.create_task(
+                task_type="sleep_coding",
+                agent_id="ralph",
+                status="needs_attention",
+                repo="acme/platform-repo",
+                issue_number=57,
+                title="Failed task",
+                external_ref="sleep_coding_task:failed-57",
+                payload={"last_error": "review blocked"},
+            )
+            sessions.acquire_execution_lane(active.task_id)
+            sessions.acquire_execution_lane(queued.task_id)
+            app.dependency_overrides[get_task_registry_service] = lambda: tasks
+            app.dependency_overrides[get_session_registry_service] = lambda: sessions
+
+            try:
+                with TestClient(app) as client:
+                    response = client.get("/control/operator/state")
+            finally:
+                app.dependency_overrides.pop(get_task_registry_service, None)
+                app.dependency_overrides.pop(get_session_registry_service, None)
+
+            self.assertEqual(response.status_code, 200)
+            payload = response.json()
+            self.assertEqual(payload["lane"]["active_task_id"], active.task_id)
+            self.assertEqual(payload["lane"]["queued_task_ids"], [queued.task_id])
+            self.assertEqual(payload["active_task"]["task_id"], active.task_id)
+            self.assertEqual(payload["queued_tasks"][0]["task_id"], queued.task_id)
+            self.assertEqual(payload["recent_failure"]["task_id"], failed.task_id)
+
     def test_diagnostics_reports_main_chain_blockers_with_component_readiness(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -181,6 +245,11 @@ class RuntimeComponentTests(unittest.TestCase):
             self.assertEqual(report["github_mcp"]["next_action"], "repair_github_mcp")
             self.assertEqual(report["gateway"]["severity"], "degraded")
             self.assertEqual(report["gateway"]["next_action"], "improve_gateway")
+            self.assertEqual(report["feishu"]["inbound_status"], "missing")
+            self.assertEqual(report["feishu"]["delivery_status"], "missing")
+            self.assertFalse(report["self_host_boot"]["ready"])
+            self.assertEqual(report["self_host_boot"]["process_model"], "split_process")
+            self.assertEqual(report["self_host_boot"]["next_action"], "repair_github_mcp")
             self.assertFalse(report["main_chain"]["live_ready"])
             self.assertIn("github_mcp", report["main_chain"]["live_blocking_components"])
             self.assertIn("review_skill", report["main_chain"]["live_blocking_components"])
@@ -250,6 +319,11 @@ class RuntimeComponentTests(unittest.TestCase):
             self.assertIsNone(report["main_chain"]["next_action"])
             self.assertEqual(report["github_mcp"]["severity"], "ready")
             self.assertTrue(report["github_mcp"]["required_for_live_chain"])
+            self.assertEqual(report["feishu"]["inbound_status"], "ready")
+            self.assertEqual(report["feishu"]["delivery_status"], "ready")
+            self.assertTrue(report["self_host_boot"]["ready"])
+            self.assertEqual(report["self_host_boot"]["worker_process"], "python scripts/run_worker_scheduler.py")
+            self.assertFalse(report["self_host_boot"]["embedded_scheduler"])
 
     def test_settings_prefer_agents_and_models_json_when_present(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

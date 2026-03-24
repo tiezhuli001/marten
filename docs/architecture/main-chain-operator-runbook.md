@@ -18,17 +18,36 @@
 
 1. `GET /health`
 2. `GET /diagnostics/integrations`
-3. `GET /control/tasks/{task_id}`
-4. `GET /control/tasks/{task_id}/events`
-5. `GET /tasks/sleep-coding/{task_id}`
-6. `GET /reviews/{review_id}`（如果已经进入 review）
+3. `GET /control/operator/state`
+4. `GET /control/tasks/{task_id}`
+5. `GET /control/tasks/{task_id}/events`
+6. `GET /tasks/sleep-coding/{task_id}`
+7. `GET /reviews/{review_id}`（如果已经进入 review）
 
 规则：
 
 - `/health` 只回答进程是否活着，不回答主链是否可跑。
 - `/diagnostics/integrations` 是 live readiness 的统一事实源。
+- `/control/operator/state` 是单任务运行态、排队态和最近失败项的聚合入口。
 - `control task` 是 operator 的状态真相入口。
 - `sleep_coding task` 和 `review` 只用于看 domain 细节，不取代 control 面判断。
+
+## 2.1 私有服务器自用阶段的运行约束
+
+当前第一阶段按“单租户、单用户、单任务执行槽”运行：
+
+- `Feishu` 是默认入口
+- `Web/API` 是诊断、运维和备用入口
+- 同一时刻只允许一个 active 主任务
+- 新请求要么进入队列，要么收到明确 busy 语义
+
+operator 在日常值守时，应优先确认：
+
+1. 当前 active task 是谁
+2. 是否还有 queued task 等待进入主链
+3. 最近失败或 `needs_attention` 的任务是哪一个
+
+不要把多个主任务并发跑起来做验收；这不属于当前阶段支持范围。
 
 ## 3. 如何判断当前是否可以跑 live chain
 
@@ -50,11 +69,27 @@
 - `live_ready`
 - `next_action`
 
+对 `feishu` 组件，额外看：
+
+- `inbound_status`
+- `delivery_status`
+
+对 `self_host_boot`，额外看：
+
+- `ready`
+- `process_model`
+- `api_process`
+- `worker_process`
+- `embedded_scheduler`
+- `next_action`
+
 解释规则：
 
 - `severity=blocking`：会阻断主链
 - `severity=degraded`：主链可继续，但该组件存在降级
 - `delivery_status=degraded`：任务可能已完成，但消息投递没有真实送达
+- `self_host_boot.process_model=split_process`：API 和 scheduler/worker 必须分进程拉起
+- `self_host_boot.embedded_scheduler=false`：`app.main` 进程不应再偷偷启动 worker loop
 
 额外规则：
 
@@ -75,6 +110,8 @@
 - `payload.delivery_delivered`
 - `payload.background_follow_up_status`
 - `payload.last_error`
+- `payload.queue_status`（若当前实现已投影）
+- `payload.active_task_id` / `payload.queued_task_ids`（若当前实现已投影）
 
 终态解释：
 
@@ -146,6 +183,35 @@
 - 这是 delivery 通道问题，不是 coding/review 问题
 - 若需要人工通知，用现有 final evidence 补发，不要重跑 coding loop
 
+### 场景 E：系统忙碌或存在排队任务
+
+看：
+
+- 当前 active task 的 `status`
+- `/control/tasks/{task_id}` 是否已投影 queue / busy truth
+- `/control/tasks/{task_id}/events` 是否记录 queued / resumed / claimed
+
+处理：
+
+- 第二个请求不应静默丢失
+- 若系统返回 busy/queued，先确认它是否被如实记录
+- 若需要人工恢复，优先 resume queued task，而不是手工重建 issue
+
+### 场景 F：Feishu 看起来能收消息，但主入口行为不稳定
+
+看：
+
+- `/diagnostics/integrations.feishu.inbound_status`
+- `/diagnostics/integrations.feishu.delivery_status`
+- 同一 `chat_id` 下连续两条请求是否复用了同一 session
+- control task 的 `payload.source_endpoint_id` / `payload.delivery_endpoint_id`
+
+处理：
+
+- 若 `inbound_status != ready`，先修 webhook 凭据或签名配置
+- 若 `delivery_status != ready`，先修 channel webhook，再判断是否只是 delivery degraded
+- 若同一 chat 的状态查询和 coding 请求落在不同 endpoint，先修 endpoint external ref 绑定，不要直接怀疑 agent 推理
+
 ## 6. Resume / Handoff 原则
 
 ### Ralph resume
@@ -205,6 +271,8 @@ Ralph 现在应从 persisted facts 恢复，不应重新推导整条链。重点
 - 用状态机替代 review / repair 推理
 - live readiness 和实际执行前置出现两套真相
 - delivery degraded 被误报成 coding failed
+- 为了“支持更多入口”把 `API` 做成第二套业务编排面
+- 为了“看起来能并发”提前引入复杂调度器和多执行槽
 
 这条 runbook 的前提仍然是：
 

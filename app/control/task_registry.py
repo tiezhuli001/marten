@@ -215,6 +215,19 @@ class TaskRegistryService:
                 statuses=statuses,
             )
 
+    def find_latest_task(
+        self,
+        *,
+        task_type: ControlTaskType | None = None,
+        statuses: set[str] | None = None,
+    ) -> ControlTask | None:
+        with closing(self._connect()) as connection:
+            return self.tasks.find_latest_task(
+                connection,
+                task_type=task_type,
+                statuses=statuses,
+            )
+
     def build_recovery_snapshot(self, task_id: str) -> dict[str, Any]:
         with closing(self._connect()) as connection:
             task = self.tasks.get_task(connection, task_id)

@@ -690,6 +690,62 @@ class ReviewServiceTests(unittest.TestCase):
             self.assertIn("Workspace Snapshot:", context)
             self.assertIn("+live marker", context)
 
+    def test_review_context_truncates_oversized_diff_and_workspace_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = build_settings(root / "review.db", root / "review-runs")
+            sleep_coding, mcp_client = build_sleep_coding_service(settings)
+            task = sleep_coding.start_task(SleepCodingTaskRequest(issue_number=14))
+            task = sleep_coding.apply_action(
+                task.task_id,
+                SleepCodingTaskActionRequest(action="approve_plan"),
+            )
+            huge_diff = "diff --git a/tests/generated_test.py b/tests/generated_test.py\n" + ("+line\n" * 6000)
+            many_paths = [f"generated/file_{index}.py" for index in range(20)]
+            with sleep_coding._connect() as connection:
+                sleep_coding.store.update_task_payloads(
+                    connection,
+                    task.task_id,
+                    status=task.status,
+                    git_execution=task.git_execution.model_copy(
+                        update={
+                            "is_dry_run": False,
+                            "worktree_path": str(root / "fake-worktree"),
+                            "changed_files": many_paths,
+                            "file_changes": [
+                                {"path": path, "diff_excerpt": huge_diff}
+                                for path in many_paths
+                            ],
+                            "diff_summary": "20 files changed",
+                        }
+                    ),
+                )
+                connection.commit()
+            skill = CapturingReviewSkillService()
+            review_service = ReviewService(
+                settings=settings,
+                sleep_coding=sleep_coding,
+                skill=skill,
+                mcp_client=mcp_client,
+            )
+            review_service.context_builder.workspace_support = type(
+                "WorkspaceSupportStub",
+                (),
+                {
+                    "build_workspace_context": staticmethod(
+                        lambda target: "## Diff\n" + ("+workspace-line\n" * 5000)
+                    )
+                },
+            )()
+
+            review_service.start_review(ReviewStartRequest(task_id=task.task_id), write_comment=False)
+
+            context = skill.contexts[-1]
+            self.assertLess(len(context), 25000)
+            self.assertIn("truncated", context)
+            self.assertIn("generated/file_0.py", context)
+            self.assertIn("Workspace Snapshot:", context)
+
     def test_review_requires_execution_evidence_before_starting(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -981,7 +1037,7 @@ class ReviewServiceTests(unittest.TestCase):
             )
             self.assertTrue(result.output.blocking)
 
-    def test_review_skill_retries_runtime_failures_before_succeeding(self) -> None:
+    def test_review_skill_does_not_repeat_runtime_retries_above_agent_runtime_layer(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             settings = build_settings(root / "review.db", root / "review-runs").model_copy(
@@ -997,18 +1053,17 @@ class ReviewServiceTests(unittest.TestCase):
                 mcp_client=MCPClient(),
             )
 
-            result = skill.run(
-                type(
-                    "ReviewTargetStub",
-                    (),
-                    {"task_id": "task-1", "workspace_path": None},
-                )(),
-                "diff context",
-            )
+            with self.assertRaisesRegex(RuntimeError, "temporary review runtime failure"):
+                skill.run(
+                    type(
+                        "ReviewTargetStub",
+                        (),
+                        {"task_id": "task-1", "workspace_path": None},
+                    )(),
+                    "diff context",
+                )
 
-            self.assertEqual(runtime.calls, 3)
-            self.assertEqual(result.output.summary, "Recovered review")
-            self.assertEqual(result.output.run_mode, "real_run")
+            self.assertEqual(runtime.calls, 1)
 
     def test_review_skill_requires_builtin_runtime_when_llm_credentials_are_missing(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

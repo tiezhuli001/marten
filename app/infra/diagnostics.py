@@ -35,6 +35,7 @@ class IntegrationDiagnosticsService:
             main_chain_requirement="required",
             live_requirement="required",
         )
+        repo_contract = self._repo_contract_status()
         channel_delivery = self._annotate_component(
             "channel_delivery",
             self._channel_delivery_status(),
@@ -52,6 +53,7 @@ class IntegrationDiagnosticsService:
             "github_mcp": github,
             "ralph_execution": ralph,
             "review_skill": review,
+            "repo_contract": repo_contract,
             "channel_delivery": channel_delivery,
             "feishu": feishu,
             "main_chain": self._main_chain_status(
@@ -61,6 +63,13 @@ class IntegrationDiagnosticsService:
                 review=review,
                 channel_delivery=channel_delivery,
                 feishu=feishu,
+            ),
+            "self_host_boot": self._self_host_boot_status(
+                github=github,
+                ralph=ralph,
+                review=review,
+                feishu=feishu,
+                repo_contract=repo_contract,
             ),
         }
 
@@ -133,14 +142,28 @@ class IntegrationDiagnosticsService:
         )
         outbound_ready = bool(self.settings.channel_webhook_url)
         if inbound_ready and outbound_ready:
-            return {"status": "ok", "inbound": True, "outbound": True}
+            return {
+                "status": "ok",
+                "inbound": True,
+                "outbound": True,
+                "inbound_status": "ready",
+                "delivery_status": "ready",
+            }
         if inbound_ready or outbound_ready:
             return {
                 "status": "partial",
                 "inbound": inbound_ready,
                 "outbound": outbound_ready,
+                "inbound_status": "ready" if inbound_ready else "missing",
+                "delivery_status": "ready" if outbound_ready else "missing",
             }
-        return {"status": "not_configured", "inbound": False, "outbound": False}
+        return {
+            "status": "not_configured",
+            "inbound": False,
+            "outbound": False,
+            "inbound_status": "missing",
+            "delivery_status": "missing",
+        }
 
     def _channel_delivery_status(self) -> dict[str, Any]:
         if self.settings.channel_webhook_url:
@@ -149,6 +172,19 @@ class IntegrationDiagnosticsService:
             "status": "partial",
             "provider": self.settings.channel_provider or "feishu",
             "detail": "No outbound channel webhook configured. Final delivery falls back to dry-run/local observation.",
+        }
+
+    def _repo_contract_status(self) -> dict[str, Any]:
+        if self.settings.resolved_github_repository:
+            return {
+                "status": "ok",
+                "mode": "platform_default",
+                "repository": self.settings.resolved_github_repository,
+            }
+        return {
+            "status": "ok",
+            "mode": "request_required",
+            "detail": "No default repository configured. Self-host boot is still valid if requests supply repo explicitly.",
         }
 
     def _main_chain_status(
@@ -208,6 +244,40 @@ class IntegrationDiagnosticsService:
                 blocking_components=blocking_components,
                 degraded_components=degraded_components,
             ),
+        }
+
+    def _self_host_boot_status(
+        self,
+        *,
+        github: dict[str, Any],
+        ralph: dict[str, Any],
+        review: dict[str, Any],
+        feishu: dict[str, Any],
+        repo_contract: dict[str, Any],
+    ) -> dict[str, Any]:
+        blocking_components: list[str] = []
+        if not github.get("ready", False):
+            blocking_components.append("github_mcp")
+        if not ralph.get("ready", False):
+            blocking_components.append("ralph_execution")
+        if not review.get("ready", False):
+            blocking_components.append("review_skill")
+        if feishu.get("inbound_status") != "ready":
+            blocking_components.append("feishu_inbound")
+        if feishu.get("delivery_status") != "ready":
+            blocking_components.append("feishu_delivery")
+        next_action = None if not blocking_components else f"repair_{blocking_components[0]}"
+        return {
+            "ready": not blocking_components,
+            "status": "ready" if not blocking_components else "blocked",
+            "process_model": "split_process",
+            "api_process": "uvicorn app.main:app --host 0.0.0.0 --port 8000",
+            "worker_process": "python scripts/run_worker_scheduler.py",
+            "embedded_scheduler": False,
+            "repo_mode": repo_contract.get("mode"),
+            "repo_ready": repo_contract.get("status") == "ok",
+            "blocking_components": blocking_components,
+            "next_action": next_action,
         }
 
     def _annotate_component(

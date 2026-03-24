@@ -265,8 +265,7 @@ class MainAgentService:
                 except (json.JSONDecodeError, ValidationError):
                     pass
             except Exception:
-                if self.settings.app_env != "test":
-                    raise
+                raise
         mode, chat_response, handoff = self._build_heuristic_main_agent_output(payload, repo=repo)
         output_text = (
             chat_response
@@ -285,33 +284,19 @@ class MainAgentService:
         return mode, usage.model_copy(update={"message_count": 2}), chat_response, handoff
 
     def _generate_issue_draft_with_retry(self, prompt: str):
-        max_attempts = self.settings.resolved_llm_request_max_attempts
-        base_delay = self.settings.resolved_llm_request_retry_base_delay_seconds
-        last_error: Exception | None = None
-        for attempt in range(1, max_attempts + 1):
-            try:
-                return self.agent_runtime.generate_structured_output(
-                    self._build_agent_descriptor(),
-                    user_prompt=prompt,
-                    workflow="general",
-                    output_contract=(
-                        "Return strict JSON. "
-                        "For chat mode, return keys `mode`=`chat` and `reply`. "
-                        "For coding mode, return keys `mode`=`coding_handoff` and `handoff`. "
-                        "`handoff` must contain `title`, `body`, `labels`, `acceptance`, `constraints`, `repo`, and `next_owner_agent`. "
-                        "The labels array must include `agent:ralph` and `workflow:sleep-coding`. "
-                        "`next_owner_agent` must be `ralph`."
-                    ),
-                )
-            except Exception as exc:
-                last_error = exc
-                if attempt >= max_attempts:
-                    break
-                delay_seconds = base_delay * (2 ** (attempt - 1))
-                if delay_seconds > 0:
-                    self.sleep_fn(delay_seconds)
-        assert last_error is not None
-        raise last_error
+        return self.agent_runtime.generate_structured_output(
+            self._build_agent_descriptor(),
+            user_prompt=prompt,
+            workflow="general",
+            output_contract=(
+                "Return strict JSON. "
+                "For chat mode, return keys `mode`=`chat` and `reply`. "
+                "For coding mode, return keys `mode`=`coding_handoff` and `handoff`. "
+                "`handoff` must contain `title`, `body`, `labels`, `acceptance`, `constraints`, `repo`, and `next_owner_agent`. "
+                "The labels array must include `agent:ralph` and `workflow:sleep-coding`. "
+                "`next_owner_agent` must be `ralph`."
+            ),
+        )
 
     def _parse_issue_draft_output(self, output_text: str) -> dict[str, Any]:
         parsed = parse_structured_object(output_text)

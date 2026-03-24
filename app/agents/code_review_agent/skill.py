@@ -100,26 +100,12 @@ class ReviewSkillService:
         user_prompt: str,
         output_contract: str,
     ):
-        max_attempts = self.settings.resolved_llm_request_max_attempts
-        base_delay = self.settings.resolved_llm_request_retry_base_delay_seconds
-        last_error: Exception | None = None
-        for attempt in range(1, max_attempts + 1):
-            try:
-                return self.agent_runtime.generate_structured_output(
-                    self._build_agent_descriptor(),
-                    user_prompt=user_prompt,
-                    workflow="code_review",
-                    output_contract=output_contract,
-                )
-            except Exception as exc:
-                last_error = exc
-                if attempt >= max_attempts:
-                    break
-                delay_seconds = base_delay * (2 ** (attempt - 1))
-                if delay_seconds > 0:
-                    self.sleep_fn(delay_seconds)
-        assert last_error is not None
-        raise last_error
+        return self.agent_runtime.generate_structured_output(
+            self._build_agent_descriptor(),
+            user_prompt=user_prompt,
+            workflow="code_review",
+            output_contract=output_contract,
+        )
 
     def _estimate_usage(
         self,

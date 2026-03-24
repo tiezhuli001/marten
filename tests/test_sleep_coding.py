@@ -1126,7 +1126,10 @@ class SleepCodingServiceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             database_path = Path(temp_dir) / "sleep_coding.db"
             platform_config_path = Path(temp_dir) / "platform.json"
-            platform_config_path.write_text("{}", encoding="utf-8")
+            platform_config_path.write_text(
+                '{"sleep_coding":{"git":{"enable_commit":true,"enable_push":false}}}',
+                encoding="utf-8",
+            )
             settings = Settings(
                 app_env="development",
                 database_url=f"sqlite:///{database_path}",
@@ -1732,7 +1735,10 @@ class GitWorkspaceServiceTests(unittest.TestCase):
             nested.write_text("live smoke\n", encoding="utf-8")
 
             platform_config_path = Path(temp_dir) / "platform.json"
-            platform_config_path.write_text("{}", encoding="utf-8")
+            platform_config_path.write_text(
+                '{"sleep_coding":{"git":{"enable_commit":true,"enable_push":false}}}',
+                encoding="utf-8",
+            )
             settings = Settings(
                 app_env="test",
                 database_url=f"sqlite:///{repo_root / 'test.db'}",
@@ -1779,7 +1785,10 @@ class GitWorkspaceServiceTests(unittest.TestCase):
             ignored.write_text("marker\n", encoding="utf-8")
 
             platform_config_path = Path(temp_dir) / "platform.json"
-            platform_config_path.write_text("{}", encoding="utf-8")
+            platform_config_path.write_text(
+                '{"sleep_coding":{"git":{"enable_commit":true,"enable_push":false}}}',
+                encoding="utf-8",
+            )
             settings = Settings(
                 app_env="test",
                 database_url=f"sqlite:///{repo_root / 'test.db'}",
@@ -1797,3 +1806,83 @@ class GitWorkspaceServiceTests(unittest.TestCase):
                 collected,
                 [{"path": "docs/internal/live-chain-validation.md", "content": "marker\n"}],
             )
+
+    def test_prepare_worktree_uses_main_baseline_instead_of_current_head(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo_root = Path(temp_dir) / "repo"
+            repo_root.mkdir()
+            subprocess.run(["git", "init"], cwd=repo_root, check=True, capture_output=True, text=True)
+            subprocess.run(["git", "checkout", "-b", "main"], cwd=repo_root, check=True, capture_output=True, text=True)
+            (repo_root / "README.md").write_text("base\n", encoding="utf-8")
+            subprocess.run(["git", "add", "README.md"], cwd=repo_root, check=True, capture_output=True, text=True)
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "user.name=Test User",
+                    "-c",
+                    "user.email=test@example.com",
+                    "commit",
+                    "-m",
+                    "init",
+                ],
+                cwd=repo_root,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            main_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=repo_root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+
+            subprocess.run(["git", "checkout", "-b", "feature/live-drift"], cwd=repo_root, check=True, capture_output=True, text=True)
+            (repo_root / "feature-only.txt").write_text("drift\n", encoding="utf-8")
+            subprocess.run(["git", "add", "feature-only.txt"], cwd=repo_root, check=True, capture_output=True, text=True)
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "user.name=Test User",
+                    "-c",
+                    "user.email=test@example.com",
+                    "commit",
+                    "-m",
+                    "feature drift",
+                ],
+                cwd=repo_root,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+            platform_config_path = Path(temp_dir) / "platform.json"
+            platform_config_path.write_text(
+                '{"sleep_coding":{"git":{"enable_commit":true,"enable_push":false}}}',
+                encoding="utf-8",
+            )
+            settings = Settings(
+                app_env="test",
+                database_url=f"sqlite:///{repo_root / 'test.db'}",
+                platform_config_path=str(platform_config_path),
+                github_repository="tiezhuli001/youmeng-gateway",
+                langsmith_tracing=False,
+            )
+            service = GitWorkspaceService(settings, mcp_client=MCPClient())
+            service.repo_path = repo_root
+            service.worktree_root = repo_root / ".worktrees"
+
+            prepared = service.prepare_worktree("codex/issue-77-sleep-coding")
+
+            self.assertFalse((Path(prepared.worktree_path) / "feature-only.txt").exists())
+            prepared_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=Path(prepared.worktree_path),
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            self.assertEqual(prepared_sha, main_sha)

@@ -108,7 +108,11 @@ class AgentRuntime:
         user_prompt: str,
         workflow: str | None,
     ) -> str:
-        prompt_policy = resolve_prompt_assembly_policy(self.settings)
+        prompt_policy = resolve_prompt_assembly_policy(
+            self.settings,
+            agent_id=agent.agent_id,
+            workflow=workflow,
+        )
         skill_catalog = self.skills.render_skill_catalog(agent.skill_names, agent.workspace)
         skill_instructions = self._render_skill_instructions(agent)
         mcp_tools = self.list_available_mcp_tools(agent.mcp_servers)

@@ -29,7 +29,12 @@ class RalphTaskWorkflow:
         self.progress = RalphTaskProgress(service)
 
     def start_task(self, payload: SleepCodingTaskRequest) -> SleepCodingTask:
-        repo = payload.repo or self.service.settings.resolved_github_repository
+        parent_task = (
+            self.service.tasks.get_task(payload.parent_task_id)
+            if payload.parent_task_id
+            else None
+        )
+        repo = payload.repo or (parent_task.repo if parent_task else None) or self.service.settings.resolved_github_repository
         task_id = str(uuid4())
         head_branch = payload.head_branch or f"codex/issue-{payload.issue_number}-sleep-coding"
         pending_usage: tuple[str, str, TokenUsage] | None = None
@@ -45,11 +50,8 @@ class RalphTaskWorkflow:
             command=self.service.settings.resolved_sleep_coding_validation_command,
         )
         git_execution = GitExecutionResult()
-        parent_task = (
-            self.service.tasks.get_task(payload.parent_task_id)
-            if payload.parent_task_id
-            else self.service.tasks.find_parent_for_issue(repo, payload.issue_number)
-        )
+        if parent_task is None:
+            parent_task = self.service.tasks.find_parent_for_issue(repo, payload.issue_number)
         inherited_request_id = None
         if parent_task is not None:
             candidate_request_id = parent_task.payload.get("request_id")

@@ -295,6 +295,32 @@ class MainAgentServiceTests(unittest.TestCase):
             self.assertTrue(any(line.startswith("状态: ") for line in lines))
             self.assertIsNone(endpoint_id)
 
+    def test_intake_prefers_request_repo_and_persists_it_on_control_task(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            channel = FakeChannelService()
+            service = MainAgentService(
+                build_settings(Path(temp_dir) / "main-agent.db"),
+                channel=channel,
+                mcp_client=build_github_mcp(),
+            )
+
+            response = service.intake(
+                MainAgentIntakeRequest(
+                    user_id="user-1",
+                    content="请修复 repo continuity 并补测试。",
+                    repo="acme/platform-repo",
+                )
+            )
+
+            control_task = service.tasks.get_task(response.control_task_id)
+
+            self.assertEqual(response.mode, "coding_handoff")
+            self.assertEqual(response.handoff.repo, "acme/platform-repo")
+            self.assertEqual(response.issue.html_url, "https://github.com/acme/platform-repo/issues/101")
+            self.assertEqual(control_task.repo, "acme/platform-repo")
+            self.assertEqual(control_task.payload["handoff"]["repo"], "acme/platform-repo")
+            self.assertTrue(any("仓库: acme/platform-repo" in line for _, lines, _ in channel.notifications for line in lines))
+
     def test_intake_uses_skill_runtime_draft_when_provider_is_configured(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             mcp_client = build_github_mcp()
@@ -480,7 +506,7 @@ class MainAgentServiceTests(unittest.TestCase):
                     )
                 )
 
-    def test_intake_retries_runtime_failures_before_succeeding(self) -> None:
+    def test_intake_does_not_repeat_runtime_retries_above_agent_runtime_layer(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             mcp_client = build_github_mcp()
             runtime = FlakyAgentRuntime(
@@ -505,15 +531,15 @@ class MainAgentServiceTests(unittest.TestCase):
                 mcp_client=mcp_client,
             )
 
-            response = service.intake(
-                MainAgentIntakeRequest(
-                    user_id="user-1",
-                    content="重试后成功创建 issue",
+            with self.assertRaisesRegex(RuntimeError, "temporary llm runtime failure"):
+                service.intake(
+                    MainAgentIntakeRequest(
+                        user_id="user-1",
+                        content="服务层不应重复 transport 级重试",
+                    )
                 )
-            )
 
-            self.assertEqual(runtime.calls, 3)
-            self.assertEqual(response.issue.title, "Recovered issue draft")
+            self.assertEqual(runtime.calls, 1)
 
 
 if __name__ == "__main__":

@@ -1,13 +1,15 @@
 # Current MVP Status Summary
 
-> 更新时间：2026-03-22
+> 更新时间：2026-03-24
 > 用途：用一页说明当前公开仓库的真实架构、主链路、状态模型，以及文档声明与代码实现的对齐结果。
 
 ## 一、当前项目处于什么阶段
 
 `Marten` 当前不在功能扩张期，而在 `post-MVP cleanup / 收口` 阶段。
 
-同时，到 `2026-03-22` 为止，框架分层设计已经完成，项目已具备进入最后编码阶段的文档基础。
+到 `2026-03-24` 为止，面向“私有服务器自用”的第一阶段 rollout 已完成，当前重点不再是继续补仓内 rollout chunk，而是把这条既有主链按 split-process 契约部署到目标服务器并做真实环境验收。
+
+同时，框架分层设计已经完成，项目已具备进入真实部署与使用阶段的文档基础。
 这份文档只负责描述当前代码已经成立的事实，不再承担未来框架分层设计本身。
 
 判断标准不是“又加了多少能力”，而是：
@@ -154,16 +156,31 @@ GitHub 的 open/closed 不再直接充当业务状态真相。
 
 ### 3. 当前测试状态
 
-本轮 timeout hardening 后，已通过：
+本轮测试链路分层与重试/等待收紧后，已通过：
 
-- `python -m unittest tests/test_runtime_components.py tests/test_sleep_coding.py tests/test_review.py tests/test_automation.py -v`
-  - 结果：`Ran 63 tests ... OK`
-- `python -m unittest tests/test_mvp_e2e.py -v`
-  - 结果：`Ran 5 tests ... OK`
-- `python -m unittest tests/test_live_chain.py -v`
-  - 结果：`Ran 1 test in 127.159s ... OK`
-- `python -m unittest discover -s tests -v`
-  - 结果：`Ran 131 tests in 170.390s OK`
+- `python scripts/run_test_suites.py quick`
+  - 结果：`Ran 119 tests in 11.662s ... OK`
+  - 端到端耗时：`real 13.26s`
+- `python scripts/run_test_suites.py regression`
+  - 结果：`Ran 154 tests in 17.561s ... OK`
+  - 端到端耗时：`real 19.85s`
+- `python -m unittest tests.test_mvp_e2e -v`
+  - 结果：`Ran 8 tests in 4.448s ... OK`
+- `python scripts/run_sleep_coding_validation.py`
+  - 结果：`Ran 3 tests in 0.609s ... OK`
+
+对照基线：
+
+- 旧的非 live curated 回归命令
+  - `python -m unittest tests.test_agent_runtime_policy tests.test_rag_capability tests.test_main_agent tests.test_gateway tests.test_sleep_coding tests.test_sleep_coding_worker tests.test_review tests.test_automation tests.test_runtime_components tests.test_mvp_e2e tests.test_framework_public_surface -v`
+  - 结果：`Ran 150 tests in 118.537s ... OK`
+  - 端到端耗时：`real 123.38s`
+
+说明：
+
+- 默认本地开发路径不再顺带跑 live-chain。
+- service 层不再额外包一层通用 runtime retry；保留底层 LLM transport retry 和必要的 structured-output repair retry。
+- live-chain 仍单独保留，因为它依赖真实本地 MCP / LLM / delivery 集成，不能混入日常回归耗时。
 
 ### 4. 当前 operator 入口
 

@@ -41,7 +41,8 @@ class GitWorkspaceService:
         if worktree_path.exists():
             self._run_git(["worktree", "remove", "--force", str(worktree_path)])
 
-        self._run_git(["worktree", "add", "-B", branch, str(worktree_path), "HEAD"])
+        base_ref = self._resolve_worktree_base_ref()
+        self._run_git(["worktree", "add", "-B", branch, str(worktree_path), base_ref])
         return GitExecutionResult(
             status="prepared",
             worktree_path=str(worktree_path),
@@ -454,6 +455,26 @@ class GitWorkspaceService:
 
     def _sanitize_branch(self, branch: str) -> str:
         return branch.replace("/", "__")
+
+    def _resolve_worktree_base_ref(self) -> str:
+        try:
+            self._run_git(["show-ref", "--verify", "--quiet", "refs/heads/main"])
+            return "main"
+        except RuntimeError:
+            pass
+
+        try:
+            remote_head = self._run_git(
+                ["symbolic-ref", "--quiet", "--short", f"refs/remotes/{self.git_remote_name}/HEAD"]
+            ).stdout.strip()
+            if remote_head.startswith(f"{self.git_remote_name}/"):
+                candidate = remote_head.removeprefix(f"{self.git_remote_name}/").strip()
+                if candidate:
+                    return candidate
+        except RuntimeError:
+            pass
+
+        return "HEAD"
 
     def _resolve_relative_path(self, worktree_path: Path, relative_path: str) -> Path:
         candidate = Path(relative_path)

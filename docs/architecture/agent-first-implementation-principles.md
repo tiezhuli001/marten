@@ -176,6 +176,11 @@
 - final delivery 必须以 review approved 为前置条件
 - provider 切换不影响 retrieval contract
 - builtin coding/review capability 缺失时显式失败
+- self-host 单任务阶段允许保留：
+  - single-flight queue / active lane truth
+  - repo continuity truth
+  - operator snapshot / deterministic control task actions
+  - self-host boot diagnostics / split-process startup contract
 
 这些是系统边界，不是应交给模型自由发挥的部分。
 

@@ -11,13 +11,14 @@ from app.api.routes import (
     get_gateway_control_plane_service,
     get_main_agent_service,
     get_review_service,
+    get_session_registry_service,
     get_sleep_coding_service,
     get_task_registry_service,
 )
 from app.control.gateway import GatewayControlPlaneService
 from app.control.workflow import GatewayWorkflowService
 from app.main import app
-from app.core.config import Settings
+from app.core.config import Settings, get_settings
 from app.ledger.service import TokenLedgerService
 from app.models.schemas import (
     GitExecutionResult,
@@ -401,6 +402,38 @@ class FakeRalphAgentRuntime:
         )()
 
 
+class FakeMainAgentRuntime:
+    def __init__(self, mcp_client: MCPClient) -> None:
+        self.mcp = mcp_client
+
+    def generate_structured_output(self, agent, **kwargs):
+        output_text = (
+            '{"mode":"coding_handoff","handoff":{'
+            '"title":"Implement requested main-chain change",'
+            '"body":"## Summary\\nDrive the request through the Ralph workflow.\\n\\nAcceptance criteria:\\n- implement the requested change\\n- add or update tests\\n",'
+            '"labels":["agent:main","agent:ralph","workflow:sleep-coding"],'
+            '"acceptance":["Implement the requested change.","Add or update tests for the changed behavior."],'
+            '"constraints":["Keep the implementation scoped to the requested change."],'
+            '"next_owner_agent":"ralph"'
+            "}}"
+        )
+        return type(
+            "LLMResponseStub",
+            (),
+            {
+                "output_text": output_text,
+                "usage": TokenUsage(
+                    prompt_tokens=18,
+                    completion_tokens=12,
+                    total_tokens=30,
+                    provider="openai",
+                    model_name="gpt-4.1-mini",
+                    cost_usd=0.001,
+                ),
+            },
+        )()
+
+
 class FakeReviewSkillService:
     def run(self, source, context: str) -> ReviewSkillRunResult:  # noqa: ANN001
         return ReviewSkillRunResult(
@@ -502,6 +535,22 @@ def build_sleep_coding_service(
     )
 
 
+def build_main_agent_service(
+    *,
+    settings: Settings,
+    channel: FakeChannelService,
+    ledger: TokenLedgerService,
+    github_mcp: MCPClient,
+) -> MainAgentService:
+    return MainAgentService(
+        settings,
+        channel=channel,
+        ledger=ledger,
+        mcp_client=github_mcp,
+        agent_runtime=FakeMainAgentRuntime(github_mcp),
+    )
+
+
 class MVPE2ETests(unittest.TestCase):
     def setUp(self) -> None:
         from app.core.config import get_settings
@@ -557,11 +606,11 @@ class MVPE2ETests(unittest.TestCase):
                 ledger=ledger,
                 background_jobs=ImmediateBackgroundJobs(),
             )
-            main_agent = MainAgentService(
-                settings,
+            main_agent = build_main_agent_service(
+                settings=settings,
                 channel=channel,
                 ledger=ledger,
-                mcp_client=github_mcp,
+                github_mcp=github_mcp,
             )
             control_plane = GatewayControlPlaneService(
                 settings=settings,
@@ -668,11 +717,11 @@ class MVPE2ETests(unittest.TestCase):
                 ledger=ledger,
                 background_jobs=ImmediateBackgroundJobs(),
             )
-            main_agent = MainAgentService(
-                settings,
+            main_agent = build_main_agent_service(
+                settings=settings,
                 channel=channel,
                 ledger=ledger,
-                mcp_client=github_mcp,
+                github_mcp=github_mcp,
             )
 
             intake = main_agent.intake(
@@ -739,6 +788,279 @@ class MVPE2ETests(unittest.TestCase):
             self.assertTrue(any(event.event_type == "handoff_to_code_review" for event in child_events))
             self.assertTrue(any(event.event_type == "review_returned" for event in child_events))
             self.assertTrue(any(event.event_type == "review_approved" for event in review_events))
+
+    def test_main_agent_intake_request_repo_round_trips_through_public_surfaces(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = build_settings(Path(temp_dir) / "mvp-e2e-request-repo.db")
+            github = FakeGitHubService()
+            channel = FakeChannelService()
+            ledger = TokenLedgerService(settings)
+            github_mcp = build_github_mcp(github)
+            sleep_coding = build_sleep_coding_service(
+                settings=settings,
+                channel=channel,
+                ledger=ledger,
+                github_mcp=github_mcp,
+            )
+            worker = SleepCodingWorkerService(
+                settings=settings,
+                sleep_coding=sleep_coding,
+                mcp_client=github_mcp,
+            )
+            review = ReviewService(
+                settings=settings,
+                sleep_coding=sleep_coding,
+                skill=FakeReviewSkillService(),
+                mcp_client=github_mcp,
+            )
+            automation = AutomationService(
+                settings=settings,
+                sleep_coding=sleep_coding,
+                review=review,
+                worker=worker,
+                channel=channel,
+                ledger=ledger,
+                background_jobs=ImmediateBackgroundJobs(),
+            )
+            main_agent = build_main_agent_service(
+                settings=settings,
+                channel=channel,
+                ledger=ledger,
+                github_mcp=github_mcp,
+            )
+            control_plane = GatewayControlPlaneService(
+                settings=settings,
+                ledger=ledger,
+                main_agent=main_agent,
+                sleep_coding=sleep_coding,
+            )
+
+            app.dependency_overrides[get_settings] = lambda: settings
+            app.dependency_overrides[get_gateway_control_plane_service] = lambda: control_plane
+            app.dependency_overrides[get_automation_service] = lambda: automation
+            app.dependency_overrides[get_main_agent_service] = lambda: main_agent
+            app.dependency_overrides[get_sleep_coding_service] = lambda: sleep_coding
+            app.dependency_overrides[get_review_service] = lambda: review
+            app.dependency_overrides[get_task_registry_service] = lambda: main_agent.tasks
+
+            with TestClient(app) as client:
+                intake_response = client.post(
+                    "/main-agent/intake",
+                    json={
+                        "user_id": "user-1",
+                        "content": "请修复 repo continuity，并进入开发流程。",
+                        "source": "manual",
+                        "repo": "acme/platform-repo",
+                    },
+                )
+                self.assertEqual(intake_response.status_code, 200)
+                intake_payload = intake_response.json()
+                self.assertEqual(intake_payload["handoff"]["repo"], "acme/platform-repo")
+                self.assertEqual(
+                    intake_payload["issue"]["html_url"],
+                    "https://github.com/acme/platform-repo/issues/101",
+                )
+
+                parent_task_response = client.get(f"/control/tasks/{intake_payload['control_task_id']}")
+                self.assertEqual(parent_task_response.status_code, 200)
+                parent_task_payload = parent_task_response.json()
+                self.assertEqual(parent_task_payload["repo"], "acme/platform-repo")
+                self.assertEqual(parent_task_payload["handoff"]["repo"], "acme/platform-repo")
+
+    def test_gateway_api_reports_queued_state_when_single_flight_lane_is_busy(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = build_settings(Path(temp_dir) / "mvp-e2e-single-flight.db")
+            github = FakeGitHubService()
+            channel = FakeChannelService()
+            ledger = TokenLedgerService(settings)
+            github_mcp = build_github_mcp(github)
+            sleep_coding = build_sleep_coding_service(
+                settings=settings,
+                channel=channel,
+                ledger=ledger,
+                github_mcp=github_mcp,
+            )
+            main_agent = build_main_agent_service(
+                settings=settings,
+                channel=channel,
+                ledger=ledger,
+                github_mcp=github_mcp,
+            )
+            control_plane = GatewayControlPlaneService(
+                settings=settings,
+                ledger=ledger,
+                main_agent=main_agent,
+                sleep_coding=sleep_coding,
+            )
+
+            app.dependency_overrides[get_settings] = lambda: settings
+            app.dependency_overrides[get_gateway_control_plane_service] = lambda: control_plane
+            app.dependency_overrides[get_main_agent_service] = lambda: main_agent
+            app.dependency_overrides[get_sleep_coding_service] = lambda: sleep_coding
+            app.dependency_overrides[get_task_registry_service] = lambda: main_agent.tasks
+
+            with TestClient(app) as client:
+                first = client.post(
+                    "/gateway/message",
+                    json={
+                        "user_id": "user-1",
+                        "content": "请实现第一个 coding 请求。",
+                        "source": "manual",
+                    },
+                )
+                self.assertEqual(first.status_code, 200)
+                first_payload = first.json()
+                self.assertEqual(first_payload["workflow_state"], "accepted")
+
+                second = client.post(
+                    "/gateway/message",
+                    json={
+                        "user_id": "user-2",
+                        "content": "请实现第二个 coding 请求。",
+                        "source": "manual",
+                    },
+                )
+                self.assertEqual(second.status_code, 200)
+                second_payload = second.json()
+                self.assertEqual(second_payload["workflow_state"], "queued")
+                self.assertEqual(second_payload["active_task_id"], first_payload["task_id"])
+
+                queued_task = client.get(f"/control/tasks/{second_payload['task_id']}")
+                self.assertEqual(queued_task.status_code, 200)
+                queued_payload = queued_task.json()
+                self.assertEqual(queued_payload["payload"]["queue_status"], "queued")
+                self.assertEqual(queued_payload["payload"]["active_task_id"], first_payload["task_id"])
+
+    def test_custom_repo_continues_from_intake_to_worker_review_and_delivery(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = build_settings(Path(temp_dir) / "mvp-e2e-custom-repo.db")
+            github = FakeGitHubService()
+            channel = FakeChannelService()
+            ledger = TokenLedgerService(settings)
+            github_mcp = build_github_mcp(github)
+            sleep_coding = build_sleep_coding_service(
+                settings=settings,
+                channel=channel,
+                ledger=ledger,
+                github_mcp=github_mcp,
+            )
+            worker = SleepCodingWorkerService(
+                settings=settings,
+                sleep_coding=sleep_coding,
+                mcp_client=github_mcp,
+            )
+            review = ReviewService(
+                settings=settings,
+                sleep_coding=sleep_coding,
+                skill=FakeReviewSkillService(),
+                mcp_client=github_mcp,
+            )
+            automation = AutomationService(
+                settings=settings,
+                sleep_coding=sleep_coding,
+                review=review,
+                worker=worker,
+                channel=channel,
+                ledger=ledger,
+                background_jobs=ImmediateBackgroundJobs(),
+            )
+            main_agent = build_main_agent_service(
+                settings=settings,
+                channel=channel,
+                ledger=ledger,
+                github_mcp=github_mcp,
+            )
+
+            intake = main_agent.intake(
+                MainAgentIntakeRequest(
+                    user_id="user-1",
+                    content="请修复 custom repo continuity，并进入开发流程。",
+                    source="manual",
+                    repo="acme/platform-repo",
+                )
+            )
+
+            poll = automation.process_worker_poll_async(
+                SleepCodingWorkerPollRequest(auto_approve_plan=True)
+            )
+
+            self.assertEqual(poll.claimed_count, 1)
+            task = poll.tasks[0]
+            reviews = review.list_task_reviews(task.task_id)
+            parent_task = main_agent.tasks.get_task(intake.control_task_id)
+            final_title, final_lines, _ = channel.notifications[-1]
+
+            self.assertEqual(task.repo, "acme/platform-repo")
+            self.assertEqual(task.issue.html_url, "https://github.com/acme/platform-repo/issues/101")
+            self.assertIsNotNone(task.pull_request)
+            self.assertTrue(task.pull_request.html_url.startswith("https://github.com/acme/platform-repo/pull/"))
+            self.assertEqual(reviews[0].target.repo, "acme/platform-repo")
+            self.assertEqual(parent_task.repo, "acme/platform-repo")
+            self.assertIn("任务完成", final_title)
+            self.assertIn("仓库: acme/platform-repo", final_lines)
+
+    def test_operator_state_endpoint_reports_active_and_queued_tasks(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = build_settings(Path(temp_dir) / "mvp-e2e-operator-state.db")
+            github = FakeGitHubService()
+            channel = FakeChannelService()
+            ledger = TokenLedgerService(settings)
+            github_mcp = build_github_mcp(github)
+            sleep_coding = build_sleep_coding_service(
+                settings=settings,
+                channel=channel,
+                ledger=ledger,
+                github_mcp=github_mcp,
+            )
+            main_agent = build_main_agent_service(
+                settings=settings,
+                channel=channel,
+                ledger=ledger,
+                github_mcp=github_mcp,
+            )
+            control_plane = GatewayControlPlaneService(
+                settings=settings,
+                ledger=ledger,
+                main_agent=main_agent,
+                sleep_coding=sleep_coding,
+            )
+
+            app.dependency_overrides[get_gateway_control_plane_service] = lambda: control_plane
+            app.dependency_overrides[get_task_registry_service] = lambda: main_agent.tasks
+            app.dependency_overrides[get_session_registry_service] = lambda: control_plane.sessions
+
+            try:
+                with TestClient(app) as client:
+                    first = client.post(
+                        "/gateway/message",
+                        json={
+                            "user_id": "user-1",
+                            "content": "请实现第一个 coding 请求。",
+                            "source": "manual",
+                        },
+                    )
+                    second = client.post(
+                        "/gateway/message",
+                        json={
+                            "user_id": "user-2",
+                            "content": "请实现第二个 coding 请求。",
+                            "source": "manual",
+                        },
+                    )
+                    self.assertEqual(first.status_code, 200)
+                    self.assertEqual(second.status_code, 200)
+                    operator_state = client.get("/control/operator/state")
+            finally:
+                app.dependency_overrides.pop(get_gateway_control_plane_service, None)
+                app.dependency_overrides.pop(get_task_registry_service, None)
+                app.dependency_overrides.pop(get_session_registry_service, None)
+
+            self.assertEqual(operator_state.status_code, 200)
+            payload = operator_state.json()
+            self.assertEqual(payload["lane"]["active_task_id"], first.json()["task_id"])
+            self.assertEqual(payload["lane"]["queued_task_ids"], [second.json()["task_id"]])
+            self.assertEqual(payload["active_task"]["task_id"], first.json()["task_id"])
+            self.assertEqual(payload["queued_tasks"][0]["task_id"], second.json()["task_id"])
 
     def test_pipeline_stops_when_execution_truth_is_missing(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -904,11 +1226,11 @@ class MVPE2ETests(unittest.TestCase):
                 ledger=ledger,
                 background_jobs=ImmediateBackgroundJobs(),
             )
-            main_agent = MainAgentService(
-                settings,
+            main_agent = build_main_agent_service(
+                settings=settings,
                 channel=channel,
                 ledger=ledger,
-                mcp_client=github_mcp,
+                github_mcp=github_mcp,
             )
 
             intake = main_agent.intake(
@@ -996,11 +1318,11 @@ class MVPE2ETests(unittest.TestCase):
                 ledger=ledger,
                 background_jobs=ImmediateBackgroundJobs(),
             )
-            main_agent = MainAgentService(
-                settings,
+            main_agent = build_main_agent_service(
+                settings=settings,
                 channel=channel,
                 ledger=ledger,
-                mcp_client=github_mcp,
+                github_mcp=github_mcp,
             )
             control_plane = GatewayControlPlaneService(
                 settings=settings,
@@ -1175,11 +1497,11 @@ class MVPE2ETests(unittest.TestCase):
                 ledger=ledger,
                 background_jobs=ImmediateBackgroundJobs(),
             )
-            main_agent = MainAgentService(
-                settings,
+            main_agent = build_main_agent_service(
+                settings=settings,
                 channel=channel,
                 ledger=ledger,
-                mcp_client=github_mcp,
+                github_mcp=github_mcp,
             )
             control_plane = GatewayControlPlaneService(
                 settings=settings,
@@ -1261,6 +1583,132 @@ class MVPE2ETests(unittest.TestCase):
             self.assertGreater(task.token_usage.total_tokens, 0)
             self.assertTrue(github.pr_comments)
             self.assertIn("## Ralph Review Decision", github.pr_comments[-1][1])
+
+    def test_feishu_stats_then_coding_reuses_session_and_chat_endpoint_binding(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            Path(temp_dir, "platform.json").write_text(
+                (
+                    '{'
+                    '"github":{"repository":"tiezhuli001/youmeng-gateway"},'
+                    '"channel":{"provider":"feishu","default_endpoint":"fallback-entry","endpoints":{'
+                    '"fallback-entry":{"provider":"feishu","mode":"primary","entry_enabled":true,"delivery_enabled":true},'
+                    '"chat-entry":{"provider":"feishu","mode":"primary","entry_enabled":true,"delivery_enabled":true,'
+                    '"external_refs":["feishu:chat:oc_123"],'
+                    '"delivery_policy":{"mode":"fixed_endpoint","endpoint_id":"feishu-delivery"}},'
+                    '"feishu-delivery":{"provider":"feishu","mode":"delivery","entry_enabled":false,"delivery_enabled":true}'
+                    '}},'
+                    '"sleep_coding":{"worker":{"auto_approve_plan":true,"scheduler_enabled":false}}'
+                    '}'
+                ),
+                encoding="utf-8",
+            )
+            settings = build_settings(Path(temp_dir) / "mvp-e2e-feishu-session.db")
+            os.environ["APP_ENV"] = settings.app_env
+            os.environ["DATABASE_URL"] = settings.database_url
+            os.environ["REVIEW_RUNS_DIR"] = settings.review_runs_dir
+            os.environ["PLATFORM_CONFIG_PATH"] = settings.platform_config_path
+            github = FakeGitHubService()
+            channel = FakeChannelService()
+            ledger = TokenLedgerService(settings)
+            github_mcp = build_github_mcp(github)
+            sleep_coding = build_sleep_coding_service(
+                settings=settings,
+                channel=channel,
+                ledger=ledger,
+                github_mcp=github_mcp,
+            )
+            worker = SleepCodingWorkerService(
+                settings=settings,
+                sleep_coding=sleep_coding,
+                mcp_client=github_mcp,
+            )
+            review = ReviewService(
+                settings=settings,
+                sleep_coding=sleep_coding,
+                skill=FakeReviewSkillService(),
+                mcp_client=github_mcp,
+            )
+            automation = AutomationService(
+                settings=settings,
+                sleep_coding=sleep_coding,
+                review=review,
+                worker=worker,
+                channel=channel,
+                ledger=ledger,
+                background_jobs=ImmediateBackgroundJobs(),
+            )
+            main_agent = build_main_agent_service(
+                settings=settings,
+                channel=channel,
+                ledger=ledger,
+                github_mcp=github_mcp,
+            )
+            control_plane = GatewayControlPlaneService(
+                settings=settings,
+                ledger=ledger,
+                main_agent=main_agent,
+                sleep_coding=sleep_coding,
+            )
+            feishu = FeishuWebhookService(
+                settings,
+                workflow=GatewayWorkflowService(
+                    settings,
+                    control_plane=control_plane,
+                    automation=automation,
+                ),
+            )
+
+            app.dependency_overrides[get_gateway_control_plane_service] = lambda: control_plane
+            app.dependency_overrides[get_automation_service] = lambda: automation
+            app.dependency_overrides[get_sleep_coding_service] = lambda: sleep_coding
+            app.dependency_overrides[get_review_service] = lambda: review
+            app.dependency_overrides[get_feishu_webhook_service] = lambda: feishu
+
+            def _signed_post(client: TestClient, text: str, message_id: str) -> dict[str, object]:
+                payload = {
+                    "schema": "2.0",
+                    "header": {"event_type": "im.message.receive_v1"},
+                    "event": {
+                        "sender": {"sender_id": {"open_id": "ou_123"}},
+                        "message": {
+                            "message_id": message_id,
+                            "chat_id": "oc_123",
+                            "message_type": "text",
+                            "content": __import__("json").dumps({"text": text}),
+                        },
+                    },
+                    "token": "token-1",
+                }
+                raw_body = __import__("json").dumps(payload).encode("utf-8")
+                signature = __import__("hashlib").sha256(
+                    b"1700000000nonce-1encrypt-key" + raw_body
+                ).hexdigest()
+                response = client.post(
+                    "/webhooks/feishu/events",
+                    content=raw_body,
+                    headers={
+                        "Content-Type": "application/json",
+                        "X-Lark-Request-Timestamp": "1700000000",
+                        "X-Lark-Request-Nonce": "nonce-1",
+                        "X-Lark-Signature": signature,
+                    },
+                )
+                self.assertEqual(response.status_code, 200)
+                return response.json()
+
+            with TestClient(app) as client:
+                stats_payload = _signed_post(client, "今天 token 用量怎么样？", "om_stats")
+                coding_payload = _signed_post(client, "请把这个需求整理清楚，并进入开发流程", "om_coding")
+
+            task = main_agent.tasks.get_task(coding_payload["gateway_response"]["task_id"])
+            user_session = main_agent.sessions.get_session(task.payload["user_session_id"])
+
+            self.assertEqual(stats_payload["gateway_response"]["workflow_state"], "completed")
+            self.assertEqual(coding_payload["gateway_response"]["workflow_state"], "accepted")
+            self.assertEqual(task.payload["source_endpoint_id"], "chat-entry")
+            self.assertEqual(task.payload["delivery_endpoint_id"], "feishu-delivery")
+            self.assertEqual(user_session.payload["last_task_id"], task.task_id)
+            self.assertEqual(user_session.payload["last_workflow_state"], "accepted")
 
 
 if __name__ == "__main__":

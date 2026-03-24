@@ -23,18 +23,28 @@ class ChannelEndpointRegistry:
         endpoint_id: str | None = None,
         provider: str | None = None,
         external_ref: str | None = None,
+        external_refs: list[str] | None = None,
     ) -> str:
         if endpoint_id and endpoint_id in self._endpoints:
             candidate = self._endpoints[endpoint_id]
             if candidate.entry_enabled:
                 return endpoint_id
+        candidate_refs: list[str] = []
+        if isinstance(external_refs, list):
+            candidate_refs.extend(
+                value.strip()
+                for value in external_refs
+                if isinstance(value, str) and value.strip()
+            )
         if external_ref:
+            candidate_refs.append(external_ref)
+        if candidate_refs:
             for candidate in self._endpoints.values():
                 if provider and candidate.provider != provider:
                     continue
                 if not candidate.entry_enabled:
                     continue
-                if external_ref in candidate.external_refs:
+                if any(ref in candidate.external_refs for ref in candidate_refs):
                     return candidate.endpoint_id
         configured_default = self._channel_config().get("default_endpoint")
         if (

@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 
 from app.agents.ralph import SleepCodingService
 from app.control.events import ControlEventType
+from app.control.session_registry import SessionRegistryService
 from app.control.task_registry import TaskRegistryService
 from app.core.config import Settings, get_settings
 from app.control.sleep_coding_worker_store import SleepCodingWorkerStore
@@ -40,11 +41,13 @@ class SleepCodingWorkerService:
         mcp_client: MCPClient | None = None,
         sleep_coding: SleepCodingService | None = None,
         tasks: TaskRegistryService | None = None,
+        sessions: SessionRegistryService | None = None,
     ) -> None:
         self.settings = settings or get_settings()
         self.sleep_coding = sleep_coding or SleepCodingService(self.settings)
         self.mcp_client = mcp_client or self.sleep_coding.mcp_client or build_default_mcp_client(self.settings)
         self.tasks = tasks or TaskRegistryService(self.settings)
+        self.sessions = sessions or SessionRegistryService(self.settings)
         self.store = SleepCodingWorkerStore(self.settings.resolved_database_path)
         self.database_path = self.store.database_path
         self.poll_labels = self.settings.resolved_sleep_coding_worker_poll_labels
@@ -58,7 +61,7 @@ class SleepCodingWorkerService:
         payload: SleepCodingWorkerPollRequest | None = None,
     ) -> SleepCodingWorkerPollResponse:
         request = payload or SleepCodingWorkerPollRequest()
-        repo = request.repo or self.settings.resolved_github_repository
+        repo = self._resolve_target_repo(request)
         if not repo:
             raise ValueError("GitHub repository is not configured")
         auto_approve_plan = (
@@ -85,10 +88,17 @@ class SleepCodingWorkerService:
             )
         for issue in discovered:
             should_process = False
+            parent_task = self.tasks.find_parent_for_issue(repo, issue.issue_number)
+            lane_snapshot = self.sessions.get_execution_lane()
             with closing(self._connect()) as connection:
                 self.store.record_discovered_issue(connection, repo, request.worker_id, issue)
                 if not self._is_issue_eligible(issue):
                     self.store.mark_claim_status(connection, repo, issue.issue_number, "skipped")
+                elif (
+                    lane_snapshot.active_task_id
+                    and (parent_task is None or parent_task.task_id != lane_snapshot.active_task_id)
+                ):
+                    self.store.mark_claim_status(connection, repo, issue.issue_number, "queued")
                 elif not self._is_ready_for_retry(connection, repo, issue.issue_number):
                     self.store.mark_claim_status(connection, repo, issue.issue_number, "retry_pending")
                 elif self._has_active_task(connection, repo, issue.issue_number):
@@ -101,10 +111,33 @@ class SleepCodingWorkerService:
                 continue
             task: SleepCodingTask | None = None
             try:
+                if parent_task is not None:
+                    lane_decision = self.sessions.acquire_execution_lane(parent_task.task_id)
+                    if lane_decision.disposition == "queued":
+                        with closing(self._connect()) as update_connection:
+                            self.store.mark_claim_status(update_connection, repo, issue.issue_number, "queued")
+                            update_connection.commit()
+                        continue
+                    self.tasks.update_task(
+                        parent_task.task_id,
+                        payload_patch={
+                            "queue_status": "running",
+                            "active_task_id": lane_decision.snapshot.active_task_id,
+                            "queued_task_ids": lane_decision.snapshot.queued_task_ids,
+                        },
+                    )
+                    self.tasks.append_event(
+                        parent_task.task_id,
+                        "single_flight.running",
+                        {
+                            "active_task_id": lane_decision.snapshot.active_task_id,
+                            "queued_task_ids": lane_decision.snapshot.queued_task_ids,
+                        },
+                    )
                 task = self.sleep_coding.start_task(
                     SleepCodingTaskRequest(
                         issue_number=issue.issue_number,
-                        repo=repo,
+                        repo=parent_task.repo if parent_task and parent_task.repo else repo,
                         issue_title=issue.title,
                         issue_body=issue.body,
                         request_id=self._resolve_parent_request_id(repo, issue.issue_number),
@@ -193,6 +226,30 @@ class SleepCodingWorkerService:
             tasks=tasks,
             claims=claims,
         )
+
+    def _resolve_target_repo(self, request: SleepCodingWorkerPollRequest) -> str | None:
+        if request.repo:
+            return request.repo
+        lane_snapshot = self.sessions.get_execution_lane()
+        candidate_task_ids = [
+            task_id
+            for task_id in [lane_snapshot.active_task_id, *lane_snapshot.queued_task_ids]
+            if isinstance(task_id, str) and task_id.strip()
+        ]
+        for task_id in candidate_task_ids:
+            try:
+                task = self.tasks.get_task(task_id)
+            except ValueError:
+                continue
+            if task.repo:
+                return task.repo
+        latest_intake = self.tasks.find_latest_task(
+            task_type="main_agent_intake",
+            statuses={"issue_created"},
+        )
+        if latest_intake is not None and latest_intake.repo:
+            return latest_intake.repo
+        return self.settings.resolved_github_repository
 
     def list_claims(self, repo: str | None = None) -> list[SleepCodingWorkerClaim]:
         target_repo = repo or self.settings.resolved_github_repository

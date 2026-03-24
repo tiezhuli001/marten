@@ -1,5 +1,5 @@
-# Skills
+# Private Skills
 
-Custom skills for the Private Agent Suite project.
+This directory contains private skill definitions for the private agent suite.
 
-Add your custom skills here following Marten's skill definition format.
+Skills defined here are only accessible to agents in this project.

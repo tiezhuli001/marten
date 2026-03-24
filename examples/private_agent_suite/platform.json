@@ -1,20 +1,13 @@
 {
-  "name": "private-agent-suite",
-  "version": "1.0.0",
-  "description": "Sample private agent project",
-  "private": true,
-  "endpoint_bindings": [
-    {
-      "name": "internal-api",
-      "url": "https://internal.example.com/api",
-      "auth": "bearer"
+  "version": "1.0",
+  "endpoints": {
+    "default": {
+      "url": "https://api.openai.com/v1",
+      "timeout": 60
     }
-  ],
-  "retrieval_domains": [
-    {
-      "name": "private-docs",
-      "type": "filesystem",
-      "path": "private_docs"
-    }
-  ]
+  },
+  "retrieval": {
+    "enabled": true,
+    "domains": ["private_docs"]
+  }
 }

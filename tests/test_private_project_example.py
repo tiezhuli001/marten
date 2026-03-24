@@ -1,12 +1,8 @@
 """
-Validation tests for the sample private project example.
+Validation test for the private project example.
 
-These tests verify that the sample private project can resolve:
-- Builtin agents
-- Endpoint bindings
-- Private retrieval domains
-
-Without importing internal-only modules.
+This test verifies that the sample private project can be loaded
+and validated without importing internal-only modules.
 """
 
 import json
@@ -16,99 +12,90 @@ from pathlib import Path
 
 
 class TestPrivateProjectExample(unittest.TestCase):
-    """Test that the sample private project uses only public surface."""
+    """Test that the private project example is valid and uses public surface only."""
 
     def setUp(self):
-        """Set up paths for the sample project."""
+        """Set up paths for the private agent suite example."""
         self.project_dir = Path(__file__).parent.parent / "examples" / "private_agent_suite"
-        self.agents_path = self.project_dir / "agents.json"
-        self.platform_path = self.project_dir / "platform.json"
+        self.agents_file = self.project_dir / "agents.json"
+        self.platform_file = self.project_dir / "platform.json"
 
     def test_project_directory_exists(self):
-        """Verify the sample project directory exists."""
+        """Verify the private agent suite directory exists."""
         self.assertTrue(
             self.project_dir.exists(),
-            f"Sample project directory should exist at {self.project_dir}"
+            f"Private project directory should exist at {self.project_dir}"
+        )
+        self.assertTrue(
+            self.project_dir.is_dir(),
+            "Private project should be a directory"
         )
 
-    def test_agents_json_exists_and_valid(self):
-        """Verify agents.json exists and is valid JSON."""
-        self.assertTrue(self.agents_path.exists(), "agents.json should exist")
-        
-        with open(self.agents_path) as f:
+    def test_agents_json_valid(self):
+        """Verify agents.json is valid JSON with required structure."""
+        self.assertTrue(
+            self.agents_file.exists(),
+            f"agents.json should exist at {self.agents_file}"
+        )
+
+        with open(self.agents_file) as f:
             agents_data = json.load(f)
-        
+
         self.assertIn("agents", agents_data, "agents.json should have 'agents' key")
         self.assertIsInstance(agents_data["agents"], list, "agents should be a list")
+        self.assertGreater(
+            len(agents_data["agents"]), 0, "agents should have at least one agent"
+        )
 
-    def test_platform_json_exists_and_valid(self):
-        """Verify platform.json exists and is valid JSON."""
-        self.assertTrue(self.platform_path.exists(), "platform.json should exist")
-        
-        with open(self.platform_path) as f:
+        # Verify agent structure
+        agent = agents_data["agents"][0]
+        self.assertIn("name", agent, "Agent should have a name")
+        self.assertIn("description", agent, "Agent should have a description")
+        self.assertIn("instructions", agent, "Agent should have instructions")
+
+    def test_platform_json_valid(self):
+        """Verify platform.json is valid JSON with required structure."""
+        self.assertTrue(
+            self.platform_file.exists(),
+            f"platform.json should exist at {self.platform_file}"
+        )
+
+        with open(self.platform_file) as f:
             platform_data = json.load(f)
-        
-        self.assertIn("endpoint_bindings", platform_data, "platform.json should have endpoint_bindings")
-        self.assertIn("retrieval_domains", platform_data, "platform.json should have retrieval_domains")
 
-    def test_resolve_builtin_agents(self):
-        """Verify builtin agents can be resolved from sample project config."""
-        with open(self.agents_path) as f:
-            agents_data = json.load(f)
-        
-        # Verify agent structure - this represents resolution of agent definitions
-        agents = agents_data.get("agents", [])
-        self.assertGreater(len(agents), 0, "Should have at least one agent defined")
-        
-        for agent in agents:
-            self.assertIn("id", agent, "Each agent should have an 'id'")
-            self.assertIn("name", agent, "Each agent should have a 'name'")
+        self.assertIn("version", platform_data, "platform.json should have 'version'")
+        self.assertIn("endpoints", platform_data, "platform.json should have 'endpoints'")
+        self.assertIn("retrieval", platform_data, "platform.json should have 'retrieval'")
 
-    def test_resolve_endpoint_bindings(self):
-        """Verify endpoint bindings can be resolved from sample project config."""
-        with open(self.platform_path) as f:
-            platform_data = json.load(f)
-        
-        endpoint_bindings = platform_data.get("endpoint_bindings", [])
-        self.assertGreater(len(endpoint_bindings), 0, "Should have at least one endpoint binding")
-        
-        for binding in endpoint_bindings:
-            self.assertIn("name", binding, "Each binding should have a 'name'")
-            self.assertIn("url", binding, "Each binding should have a 'url'")
+        # Verify retrieval configuration
+        retrieval = platform_data["retrieval"]
+        self.assertIn("domains", retrieval, "retrieval should have 'domains'")
+        self.assertIn("private_docs", retrieval["domains"], 
+            "retrieval should include 'private_docs' domain")
 
-    def test_resolve_private_retrieval_domains(self):
-        """Verify private retrieval domains can be resolved from sample project config."""
-        with open(self.platform_path) as f:
-            platform_data = json.load(f)
-        
-        retrieval_domains = platform_data.get("retrieval_domains", [])
-        self.assertGreater(len(retrieval_domains), 0, "Should have at least one retrieval domain")
-        
-        for domain in retrieval_domains:
-            self.assertIn("name", domain, "Each domain should have a 'name'")
-            self.assertIn("type", domain, "Each domain should have a 'type'")
-
-    def test_no_internal_only_modules(self):
-        """Verify the sample project doesn't use internal-only module imports."""
-        # Check all JSON config files for any suspicious import patterns
-        # This is a negative test - we verify there are no internal imports
-        json_files = list(self.project_dir.glob("*.json*"))
-        
-        for json_file in json_files:
-            with open(json_file) as f:
-                content = f.read()
-            
-            # JSON files shouldn't have Python import statements
-            # This test ensures we're using config-based approach, not code imports
-            self.assertNotIn("import", content, f"{json_file.name} should not contain import statements")
-
-    def test_example_files_present(self):
+    def test_example_configs_present(self):
         """Verify example configuration files are present."""
         models_example = self.project_dir / "models.json.example"
         mcp_example = self.project_dir / "mcp.json.example"
-        
+
         self.assertTrue(models_example.exists(), "models.json.example should exist")
         self.assertTrue(mcp_example.exists(), "mcp.json.example should exist")
+
+    def test_no_internal_imports_in_configs(self):
+        """Verify config files don't import internal modules."""
+        # This test verifies the configs are pure JSON without Python imports
+        # Internal module references would be in code, not JSON configs
+        config_files = ["agents.json", "platform.json"]
+
+        for config_file in config_files:
+            with open(self.project_dir / config_file) as f:
+                content = f.read()
+
+            # JSON files should not contain Python import statements
+            self.assertNotIn("import", content, 
+                f"{config_file} should not contain Python imports")
+            self.assertNotIn("from ", content,
+                f"{config_file} should not contain Python 'from' statements")
 
 
 if __name__ == "__main__":

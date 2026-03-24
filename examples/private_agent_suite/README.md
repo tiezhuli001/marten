@@ -1,16 +1,19 @@
 # Private Agent Suite Example
 
-This is a sample private project that demonstrates how to use Marten's public surface to define custom agents, endpoint bindings, and private retrieval domains.
+This is a sample private project demonstrating how to configure:
+- Custom agents with private definitions
+- Platform settings for endpoint bindings
+- Private documentation and skills
 
 ## Structure
 
-- `agents.json` - Agent definitions for this project
+- `agents.json` - Agent definitions
 - `platform.json` - Platform configuration
-- `models.json.example` - Example model configuration
-- `mcp.json.example` - Example MCP server configuration
-- `skills/` - Custom skills for this project
+- `models.json.example` - Model configuration template
+- `mcp.json.example` - MCP server configuration template
+- `skills/` - Private skill definitions
 - `private_docs/` - Private documentation
 
 ## Usage
 
-This project can be used as a template for creating private agent deployments using only Marten's public API surface.
+Copy `models.json.example` to `models.json` and `mcp.json.example` to `mcp.json`, then customize for your environment.

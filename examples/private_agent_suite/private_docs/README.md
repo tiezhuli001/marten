@@ -1,5 +1,5 @@
 # Private Documentation
 
-This directory contains private documentation for the Private Agent Suite.
+This directory contains private documentation that can be used with retrieval.
 
-The contents here are only accessible to agents defined in this project.
+Files here are indexed and available to agents with access to the private_docs domain.

@@ -1,0 +1,13 @@
+{
+  "version": "1.0",
+  "endpoints": {
+    "default": {
+      "url": "https://api.openai.com/v1",
+      "timeout": 60
+    }
+  },
+  "retrieval": {
+    "enabled": true,
+    "domains": ["private_docs"]
+  }
+}

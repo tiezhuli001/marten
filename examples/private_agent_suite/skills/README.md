@@ -1,3 +1,5 @@
 # Private Skills
 
-私有项目的 skill 应保留在这个项目自身，而不是回写到 `Marten`。
+This directory contains private skill definitions for the private agent suite.
+
+Skills defined here are only accessible to agents in this project.

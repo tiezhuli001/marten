@@ -1,0 +1,11 @@
+{
+  "agents": [
+    {
+      "name": "private-assistant",
+      "description": "A private assistant for internal tasks",
+      "instructions": "You are a helpful assistant that answers questions accurately.",
+      "model": "gpt-4",
+      "tools": []
+    }
+  ]
+}

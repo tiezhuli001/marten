@@ -1,0 +1,34 @@
+{
+  "version": "1.0",
+  "agents": [
+    {
+      "id": "private-assistant",
+      "name": "Private Assistant",
+      "description": "A private assistant agent for this project",
+      "builtin": true,
+      "capabilities": ["code", "reasoning", "communication"]
+    },
+    {
+      "id": "code-reviewer",
+      "name": "Code Reviewer",
+      "description": "Specialized agent for code review",
+      "builtin": true,
+      "capabilities": ["code-review", "analysis"]
+    }
+  ],
+  "endpoint_bindings": [
+    {
+      "agent_id": "private-assistant",
+      "endpoint": "https://api.example.com/v1/chat",
+      "enabled": true
+    }
+  ],
+  "private_domains": [
+    {
+      "id": "private-docs",
+      "name": "Private Documentation",
+      "path": "private_docs",
+      "enabled": true
+    }
+  ]
+}

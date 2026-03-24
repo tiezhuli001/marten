@@ -49,21 +49,18 @@ class FeishuWebhookService:
             return {"code": 0, "msg": "ignored", "event_type": event_type}
 
         message = self._normalize_message_event(payload)
+        session_key = self._build_session_key(message)
         workflow_result = self.workflow.run(
             GatewayMessageRequest(
                 user_id=message.user_id,
                 content=message.content,
                 source="feishu",
-                session_key=(
-                    f"feishu:chat:{message.chat_id}"
-                    if message.chat_id
-                    else f"feishu:user:{message.user_id}"
-                ),
+                session_key=session_key,
                 message_id=message.message_id,
                 chat_id=message.chat_id,
                 endpoint_id=self.endpoints.resolve_endpoint_id(
                     provider="feishu",
-                    external_ref=message.chat_id,
+                    external_refs=[session_key, message.chat_id] if message.chat_id else [session_key],
                 ),
             )
         )
@@ -176,8 +173,8 @@ class FeishuWebhookService:
             "code": 0,
             "msg": "ok",
             "accepted": True,
-            "started": True,
-            "completed": False,
+            "started": workflow_response.workflow_state in {"accepted", "running"},
+            "completed": workflow_response.workflow_state == "completed",
             "event_type": event_type,
             "user_id": message.user_id,
             "chat_id": message.chat_id,
@@ -190,6 +187,15 @@ class FeishuWebhookService:
                 "message": workflow_response.message,
                 "token_usage": workflow_response.token_usage.model_dump(),
                 "task_id": workflow_response.task_id,
+                "source_endpoint_id": workflow_response.source_endpoint_id,
+                "delivery_endpoint_id": workflow_response.delivery_endpoint_id,
+                "workflow_state": workflow_response.workflow_state,
+                "active_task_id": workflow_response.active_task_id,
             },
             "automation_follow_up": follow_up,
         }
+
+    def _build_session_key(self, message: FeishuInboundMessage) -> str:
+        if message.chat_id:
+            return f"feishu:chat:{message.chat_id}"
+        return message.user_id

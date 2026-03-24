@@ -20,9 +20,13 @@ from app.infra.diagnostics import IntegrationDiagnosticsService
 from app.ledger.service import TokenLedgerService
 from app.models.schemas import (
     ControlTask,
+    ControlTaskOperatorActionRequest,
+    ControlTaskOperatorActionResponse,
     ControlTaskEvent,
     GatewayMessageRequest,
     GatewayMessageResponse,
+    OperatorStateResponse,
+    OperatorTaskSummary,
     MainAgentIntakeRequest,
     MainAgentIntakeResponse,
     ReviewActionRequest,
@@ -189,6 +193,55 @@ def list_control_task_events(
         return service.list_events(task_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/control/operator/state", response_model=OperatorStateResponse)
+def get_operator_state(
+    tasks: TaskRegistryService = Depends(get_task_registry_service),
+    sessions: SessionRegistryService = Depends(get_session_registry_service),
+) -> OperatorStateResponse:
+    lane = sessions.get_execution_lane()
+
+    def _build_summary(task_id: str | None) -> OperatorTaskSummary | None:
+        if not isinstance(task_id, str) or not task_id.strip():
+            return None
+        try:
+            snapshot = tasks.build_recovery_snapshot(task_id)
+        except ValueError:
+            return None
+        return OperatorTaskSummary.model_validate(snapshot)
+
+    recent_failure_task = tasks.find_latest_task(
+        statuses={"failed", "needs_attention", "timed_out"}
+    )
+    return OperatorStateResponse(
+        lane=lane,
+        active_task=_build_summary(lane.active_task_id),
+        queued_tasks=[
+            summary
+            for summary in (_build_summary(task_id) for task_id in lane.queued_task_ids)
+            if summary is not None
+        ],
+        recent_failure=_build_summary(recent_failure_task.task_id if recent_failure_task else None),
+    )
+
+
+@router.post("/control/tasks/{task_id}/actions", response_model=ControlTaskOperatorActionResponse)
+def handle_control_task_action(
+    task_id: str,
+    payload: ControlTaskOperatorActionRequest,
+    service: AutomationService = Depends(get_automation_service),
+) -> ControlTaskOperatorActionResponse:
+    try:
+        return service.handle_control_task_action(
+            task_id,
+            payload.action,
+            reason=payload.reason,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/workers/sleep-coding/poll", response_model=SleepCodingWorkerPollResponse)

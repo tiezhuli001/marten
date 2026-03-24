@@ -74,6 +74,7 @@ class ReviewService:
         parent_control_task = self._resolve_parent_control_task(target.task_id)
         sleep_task = self.sleep_coding.get_task(target.task_id)
         self._ensure_validation_evidence_ready(sleep_task, parent_control_task)
+        self._ensure_execution_evidence_ready(sleep_task)
         parent_run_session_id = (
             parent_control_task.payload.get("run_session_id")
             if parent_control_task
@@ -135,6 +136,7 @@ class ReviewService:
                     comment_url=comment.html_url if comment is not None else None,
                 ).model_dump(mode="json"),
                 "review_target": target.model_dump(mode="json"),
+                "review_evidence": self._build_review_evidence_payload(sleep_task),
                 "handoff": {
                     "task_id": target.task_id,
                     "session_id": run_session.session_id,
@@ -556,6 +558,25 @@ class ReviewService:
             if isinstance(validation_gap, str) and validation_gap.strip():
                 return
         raise ValueError("Review requires validation evidence or an explicit validation gap.")
+
+    def _ensure_execution_evidence_ready(self, sleep_task) -> None:
+        if sleep_task.git_execution.changed_files and (
+            sleep_task.git_execution.diff_summary or sleep_task.git_execution.diff_excerpt
+        ):
+            return
+        raise ValueError("Review requires execution evidence from the worktree.")
+
+    def _build_review_evidence_payload(self, sleep_task) -> dict[str, Any]:
+        return {
+            "task_id": sleep_task.task_id,
+            "worktree_path": sleep_task.git_execution.worktree_path,
+            "artifact_path": sleep_task.git_execution.artifact_path,
+            "changed_files": list(sleep_task.git_execution.changed_files),
+            "diff_summary": sleep_task.git_execution.diff_summary,
+            "diff_excerpt": sleep_task.git_execution.diff_excerpt,
+            "validation_status": sleep_task.validation.status,
+            "validation_workspace": sleep_task.validation.workspace_path,
+        }
 
     def _build_review_return_payload(self, review: ReviewRun) -> dict[str, Any]:
         repair_strategy: list[str] = []

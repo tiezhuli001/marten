@@ -46,6 +46,12 @@ class WorkerSchedulerService:
             )
         )
 
+    def run_forever(self) -> None:
+        if not self.settings.resolved_sleep_coding_scheduler_enabled:
+            raise RuntimeError("Sleep coding scheduler is disabled in current settings.")
+        self._stop_event.clear()
+        self._run_loop()
+
     def _run_loop(self) -> None:
         while not self._stop_event.is_set():
             self.run_once()

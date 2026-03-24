@@ -9,6 +9,11 @@ from app.models.schemas import LLMMessage, LLMRequest, LLMResponse
 from app.rag import RAGFacade
 from app.runtime.llm import SharedLLMRuntime
 from app.runtime.mcp import MCPClient
+from app.runtime.context_policy import (
+    PromptSection,
+    assemble_prompt_sections,
+    resolve_prompt_assembly_policy,
+)
 from app.runtime.skills import SkillLoader
 
 
@@ -103,6 +108,11 @@ class AgentRuntime:
         user_prompt: str,
         workflow: str | None,
     ) -> str:
+        prompt_policy = resolve_prompt_assembly_policy(
+            self.settings,
+            agent_id=agent.agent_id,
+            workflow=workflow,
+        )
         skill_catalog = self.skills.render_skill_catalog(agent.skill_names, agent.workspace)
         skill_instructions = self._render_skill_instructions(agent)
         mcp_tools = self.list_available_mcp_tools(agent.mcp_servers)
@@ -113,28 +123,63 @@ class AgentRuntime:
             if mcp_tools
             else "No MCP tools are currently available."
         )
-        return (
-            f"You are {agent.agent_id} for {self.settings.app_name}.\n"
-            f"{agent.system_instruction}\n\n"
-            "Priorities:\n"
-            "1. Follow workspace and skill instructions.\n"
-            "2. Prefer the listed skills for cognition-heavy work.\n"
-            "3. Use MCP tools for external system operations; if required MCP tools are unavailable, stop and surface the missing configuration.\n\n"
-            "Agent Policies:\n"
-            f"- Memory Policy: {agent.memory_policy}\n"
-            f"- Execution Policy: {agent.execution_policy}\n\n"
-            "Workspace Instructions:\n"
-            f"{workspace_instructions}\n\n"
-            "Available Skills:\n"
-            f"{skill_catalog}\n\n"
-            "Loaded Skill Instructions:\n"
-            f"{skill_instructions}\n\n"
-            "Available MCP Tools:\n"
-            f"{mcp_section}\n\n"
-            "Retrieved Context:\n"
-            f"{rag_context}\n\n"
-            "Output Contract:\n"
-            f"{output_contract}"
+        return assemble_prompt_sections(
+            [
+                PromptSection(
+                    title="Bootstrap Instructions",
+                    content=(
+                        f"You are {agent.agent_id} for {self.settings.app_name}.\n"
+                        f"{agent.system_instruction}\n\n"
+                        "Priorities:\n"
+                        "1. Follow workspace and skill instructions.\n"
+                        "2. Prefer the listed skills for cognition-heavy work.\n"
+                        "3. Use MCP tools for external system operations; if required MCP tools are unavailable, stop and surface the missing configuration."
+                    ),
+                    priority=100,
+                    required=True,
+                ),
+                PromptSection(
+                    title="Agent Policies",
+                    content=(
+                        f"- Memory Policy: {agent.memory_policy}\n"
+                        f"- Execution Policy: {agent.execution_policy}"
+                    ),
+                    priority=95,
+                    required=True,
+                ),
+                PromptSection(
+                    title="Workspace Instructions",
+                    content=workspace_instructions,
+                    priority=80,
+                ),
+                PromptSection(
+                    title="Available Skills",
+                    content=skill_catalog,
+                    priority=50,
+                ),
+                PromptSection(
+                    title="Loaded Skill Instructions",
+                    content=skill_instructions,
+                    priority=40,
+                ),
+                PromptSection(
+                    title="Available MCP Tools",
+                    content=mcp_section,
+                    priority=60,
+                ),
+                PromptSection(
+                    title="Retrieved Context",
+                    content=rag_context,
+                    priority=30,
+                ),
+                PromptSection(
+                    title="Output Contract",
+                    content=output_contract,
+                    priority=100,
+                    required=True,
+                ),
+            ],
+            policy=prompt_policy,
         )
 
     def _load_workspace_instructions(self, workspace: Path) -> str:
@@ -172,6 +217,10 @@ class AgentRuntime:
             agent_id=agent.agent_id,
             workflow=active_workflow,
         )
+        if merge_policy.injection_mode == "disabled":
+            return "Policy: disabled\nRetrieved context is disabled for prompt injection."
+        if merge_policy.injection_mode == "runtime_only":
+            return "Policy: runtime_only\nRetrieved documents are available to the runtime but are not injected into the prompt."
         lines: list[str] = []
         used_chars = 0
         for item in results:

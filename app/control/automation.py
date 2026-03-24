@@ -10,6 +10,7 @@ from app.agents.ralph import SleepCodingService
 from app.channel.delivery import DeliveryMessageBuilder
 from app.channel.notifications import ChannelNotificationService
 from app.control.events import ControlEvent, ControlEventBus, ControlEventType
+from app.control.session_registry import SessionRegistryService
 from app.control.sleep_coding_worker import SleepCodingWorkerService
 from app.control.task_registry import TaskRegistryService
 from app.core.config import Settings, get_settings
@@ -19,6 +20,7 @@ from app.infra.background_jobs import (
 )
 from app.ledger.service import TokenLedgerService
 from app.models.schemas import (
+    ControlTaskOperatorActionResponse,
     FinalDeliveryEvidence,
     ReviewActionRequest,
     ReviewRun,
@@ -47,6 +49,7 @@ class AutomationService:
         channel: ChannelNotificationService | None = None,
         ledger: TokenLedgerService | None = None,
         tasks: TaskRegistryService | None = None,
+        sessions: SessionRegistryService | None = None,
         background_jobs: BackgroundJobService | None = None,
         event_bus: ControlEventBus | None = None,
         sleep_fn: Callable[[float], None] | None = None,
@@ -64,6 +67,7 @@ class AutomationService:
         self.channel = channel or ChannelNotificationService(self.settings)
         self.ledger = ledger or TokenLedgerService(self.settings)
         self.tasks = tasks or TaskRegistryService(self.settings)
+        self.sessions = sessions or SessionRegistryService(self.settings)
         self.background_jobs = background_jobs or get_background_job_service()
         self.event_bus = event_bus or ControlEventBus(self.background_jobs)
         self.max_repair_rounds = self.settings.resolved_review_max_repair_rounds
@@ -205,10 +209,10 @@ class AutomationService:
                         "approve_review",
                     )
                 current_task = self.sleep_coding.get_task(current_task.task_id)
-                self._publish_final_delivery(current_task, last_review)
+                current_task = self._publish_final_delivery(current_task, last_review)
                 return current_task
             if decision.action == "deliver":
-                self._publish_final_delivery(current_task)
+                current_task = self._publish_final_delivery(current_task)
             return current_task
 
     def _get_blocking_review_count(self, task: SleepCodingTask) -> int:
@@ -369,6 +373,96 @@ class AutomationService:
             "mode": "noop",
             "reason": "no_follow_up_required",
         }
+
+    def handle_control_task_action(
+        self,
+        control_task_id: str,
+        action: str,
+        *,
+        reason: str | None = None,
+    ) -> ControlTaskOperatorActionResponse:
+        control_task = self.tasks.get_task(control_task_id)
+        recovery = self.tasks.build_recovery_snapshot(control_task_id)
+        domain_task_id = recovery.get("domain_task_id")
+        if action == "approve_plan":
+            if not isinstance(domain_task_id, str) or not domain_task_id:
+                raise ValueError(f"Control task {control_task_id} does not have an approvable domain task")
+            task = self.handle_sleep_coding_action_async(domain_task_id, "approve_plan")
+            recovery = self.tasks.build_recovery_snapshot(task.control_task_id or control_task_id)
+            return ControlTaskOperatorActionResponse(
+                control_task_id=control_task_id,
+                action=action,
+                status=task.status,
+                task_type=control_task.task_type,
+                domain_task_id=domain_task_id,
+                task_ids=[task.task_id],
+                recovery_snapshot=recovery,
+            )
+        if action == "resume":
+            if control_task.task_type == "main_agent_intake":
+                poll = self.process_worker_poll_async(
+                    SleepCodingWorkerPollRequest(
+                        repo=control_task.repo,
+                        auto_approve_plan=self.settings.resolved_sleep_coding_worker_auto_approve_plan,
+                    )
+                )
+                recovery = self.tasks.build_recovery_snapshot(control_task_id)
+                return ControlTaskOperatorActionResponse(
+                    control_task_id=control_task_id,
+                    action=action,
+                    status=control_task.status,
+                    task_type=control_task.task_type,
+                    claimed_count=poll.claimed_count,
+                    task_ids=[task.task_id for task in poll.tasks],
+                    recovery_snapshot=recovery,
+                )
+            if not isinstance(domain_task_id, str) or not domain_task_id:
+                raise ValueError(f"Control task {control_task_id} does not have a resumable domain task")
+            task = self.sleep_coding.resume_task(domain_task_id)
+            self._schedule_follow_up(task)
+            recovery = self.tasks.build_recovery_snapshot(task.control_task_id or control_task_id)
+            return ControlTaskOperatorActionResponse(
+                control_task_id=control_task_id,
+                action=action,
+                status=task.status,
+                task_type=control_task.task_type,
+                domain_task_id=domain_task_id,
+                task_ids=[task.task_id],
+                recovery_snapshot=recovery,
+            )
+        if action == "mark_needs_attention":
+            resolved_reason = reason or "Operator marked task as needs_attention."
+            if isinstance(domain_task_id, str) and domain_task_id:
+                task = self.sleep_coding.mark_needs_attention(domain_task_id, reason=resolved_reason)
+                recovery = self.tasks.build_recovery_snapshot(task.control_task_id or control_task_id)
+                return ControlTaskOperatorActionResponse(
+                    control_task_id=control_task_id,
+                    action=action,
+                    status=task.status,
+                    task_type=control_task.task_type,
+                    domain_task_id=domain_task_id,
+                    task_ids=[task.task_id],
+                    recovery_snapshot=recovery,
+                )
+            updated = self.tasks.update_task(
+                control_task_id,
+                status="needs_attention",
+                payload_patch={"last_error": resolved_reason},
+            )
+            self.tasks.append_event(
+                control_task_id,
+                "needs_attention",
+                {"last_error": resolved_reason},
+            )
+            recovery = self.tasks.build_recovery_snapshot(control_task_id)
+            return ControlTaskOperatorActionResponse(
+                control_task_id=control_task_id,
+                action=action,
+                status=updated.status,
+                task_type=updated.task_type,
+                recovery_snapshot=recovery,
+            )
+        raise ValueError(f"Unsupported control task action: {action}")
 
     def _decide_review_loop_step(
         self,
@@ -555,10 +649,13 @@ class AutomationService:
         self,
         task: SleepCodingTask,
         review: ReviewRun | None = None,
-    ) -> None:
+    ) -> SleepCodingTask:
         review = review or self._resolve_final_review(task)
+        truth_error = self._validate_delivery_truth(task, review)
+        if truth_error is not None:
+            return self._escalate_truth_gap(task, truth_error)
         if not self._can_publish_final_delivery(task, review):
-            return
+            return task
         assert review is not None
         evidence = self._build_final_evidence(task, review)
         title, lines = self.delivery.build_final_delivery(task, review)
@@ -586,6 +683,7 @@ class AutomationService:
         status = "completed" if task.status == "approved" else task.status
         self._record_parent_result(task, event_type="child_completed", status=status, payload=payload)
         self._record_parent_result(task, event_type=ControlEventType.DELIVERY_COMPLETED, status=status, payload=payload)
+        return self.sleep_coding.get_task(task.task_id)
 
     def _resolve_final_review(self, task: SleepCodingTask) -> ReviewRun | None:
         reviews = self.review.list_task_reviews(task.task_id)
@@ -603,6 +701,57 @@ class AutomationService:
         if review is None or review.is_blocking:
             return False
         return review.status in {"approved", "completed"}
+
+    def _validate_delivery_truth(
+        self,
+        task: SleepCodingTask,
+        review: ReviewRun | None,
+    ) -> str | None:
+        if task.status != "approved":
+            return None
+        if task.validation.status != "passed":
+            return "Missing passed validation evidence for final delivery."
+        if not task.validation.workspace_path:
+            return "Missing validation workspace evidence for final delivery."
+        if not task.git_execution.changed_files or not (
+            task.git_execution.diff_summary or task.git_execution.diff_excerpt
+        ):
+            return "Missing execution evidence for final delivery."
+        if review is None:
+            return "Missing review evidence for final delivery."
+        if not (review.comment_url or review.artifact_path):
+            return "Missing review evidence for final delivery."
+        return None
+
+    def _escalate_truth_gap(
+        self,
+        task: SleepCodingTask,
+        reason: str,
+    ) -> SleepCodingTask:
+        updated_task = self.sleep_coding.mark_needs_attention(task.task_id, reason=reason)
+        payload = {
+            "task_status": updated_task.status,
+            "last_error": reason,
+            "terminal_evidence": self._build_terminal_evidence(
+                terminal_state="needs_attention",
+                task=updated_task,
+                review=self._resolve_final_review(updated_task),
+                last_error=reason,
+            ).model_dump(mode="json"),
+        }
+        self._record_parent_result(
+            updated_task,
+            event_type="child_handed_off",
+            status="needs_attention",
+            payload=payload,
+        )
+        self._record_parent_result(
+            updated_task,
+            event_type="delivery.handed_off",
+            status="needs_attention",
+            payload=payload,
+        )
+        return updated_task
 
     def _build_final_evidence(
         self,
@@ -688,6 +837,17 @@ class AutomationService:
                 control_task.parent_task_id,
                 event_type,
                 {"child_control_task_id": control_task.task_id, **payload},
+            )
+        if status in {"approved", "completed", "failed", "cancelled", "needs_attention"}:
+            owner_task_id = control_task.parent_task_id or control_task.task_id
+            lane_decision = self.sessions.release_execution_lane(owner_task_id)
+            self.tasks.update_task(
+                owner_task_id,
+                payload_patch={
+                    "queue_status": "completed" if lane_decision.snapshot.active_task_id is None else "running",
+                    "active_task_id": lane_decision.snapshot.active_task_id,
+                    "queued_task_ids": lane_decision.snapshot.queued_task_ids,
+                },
             )
 
     def _record_notification(

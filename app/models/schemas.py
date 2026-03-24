@@ -6,6 +6,7 @@ IntentType = Literal["general", "stats_query", "sleep_coding"]
 MainAgentMode = Literal["chat", "coding_handoff"]
 ProviderType = str
 MessageRole = Literal["system", "user", "assistant"]
+GatewayWorkflowState = Literal["accepted", "queued", "running", "completed"]
 ReviewStatus = Literal[
     "pending",
     "running",
@@ -143,7 +144,57 @@ class GatewayMessageResponse(BaseModel):
     token_usage: TokenUsage
     task_id: str | None = None
     run_session_id: str | None = None
+    source_endpoint_id: str | None = None
     delivery_endpoint_id: str | None = None
+    workflow_state: GatewayWorkflowState = "accepted"
+    active_task_id: str | None = None
+
+
+class ExecutionLaneSnapshot(BaseModel):
+    lane_key: str
+    active_task_id: str | None = None
+    queued_task_ids: list[str] = Field(default_factory=list)
+
+
+class ExecutionLaneDecision(BaseModel):
+    disposition: Literal["accepted", "queued", "released"]
+    snapshot: ExecutionLaneSnapshot
+
+
+class OperatorTaskSummary(BaseModel):
+    task_id: str
+    task_type: str
+    status: str
+    owner_agent: str | None = None
+    next_owner_agent: str | None = None
+    next_action: str | None = None
+    review_id: str | None = None
+    delivery_endpoint_id: str | None = None
+    latest_event_type: str | None = None
+    last_event_type: str | None = None
+
+
+class OperatorStateResponse(BaseModel):
+    lane: ExecutionLaneSnapshot
+    active_task: OperatorTaskSummary | None = None
+    queued_tasks: list[OperatorTaskSummary] = Field(default_factory=list)
+    recent_failure: OperatorTaskSummary | None = None
+
+
+class ControlTaskOperatorActionRequest(BaseModel):
+    action: Literal["approve_plan", "resume", "mark_needs_attention"]
+    reason: str | None = None
+
+
+class ControlTaskOperatorActionResponse(BaseModel):
+    control_task_id: str
+    action: str
+    status: str
+    task_type: str
+    domain_task_id: str | None = None
+    claimed_count: int = Field(default=0, ge=0)
+    task_ids: list[str] = Field(default_factory=list)
+    recovery_snapshot: dict[str, Any] = Field(default_factory=dict)
 
 
 class GitHubIssueDraft(BaseModel):
@@ -277,6 +328,8 @@ class RalphCodingArtifact(BaseModel):
     commit_message: str
     generated_files: list[str] = Field(default_factory=list)
     file_changes: list[dict[str, str]] = Field(default_factory=list)
+    diff_summary: str = ""
+    diff_excerpt: str = ""
 
 
 class RalphReviewHandoff(BaseModel):
@@ -314,6 +367,7 @@ class ValidationResult(BaseModel):
     command: str = "python scripts/run_sleep_coding_validation.py"
     exit_code: int | None = None
     output: str = ""
+    workspace_path: str | None = None
 
 
 class SleepCodingPullRequest(BaseModel):
@@ -334,6 +388,10 @@ class GitExecutionResult(BaseModel):
     push_remote: str | None = None
     output: str = ""
     is_dry_run: bool = True
+    changed_files: list[str] = Field(default_factory=list)
+    file_changes: list[dict[str, str]] = Field(default_factory=list)
+    diff_summary: str = ""
+    diff_excerpt: str = ""
 
 
 class SleepCodingTaskEvent(BaseModel):

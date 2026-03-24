@@ -37,6 +37,7 @@
 - 修复时是否需要补测试、补验证、补注释
 
 这些属于 `ralph` 的核心认知能力，不应逐步变成硬编码 repair playbook。
+同样，标准主链上的本地编码 ownership 也应继续保留在 `ralph`，而不是默认外包给外部 execution command。
 
 ### 3. review 推理本身
 
@@ -46,6 +47,7 @@
 - 哪些建议只是可选优化
 
 代码只需要收口结构化输出与审批门禁，不应该把 review 结论主体重写成规则引擎。
+标准主链上的 review ownership 应继续保留在 `code-review-agent`，而不是默认外包给外部 review command。
 
 ### 4. skill / MCP 选择与调用策略
 
@@ -54,6 +56,11 @@
 - 哪些 skill 组合最适合当前任务
 
 这应主要体现在 agent prompt、skill contract、tool availability 上，而不是散落在大量 orchestration if/else 中。
+
+补充：
+
+- RAG 首先是工程检索层：检索、过滤、去重、裁剪、注入策略都应由 runtime policy 管理
+- 不应把“有 retrieval”简化成“把检索结果原样拼进 system prompt”
 
 ## 三、哪些地方应该降工程编排
 
@@ -101,6 +108,16 @@
 
 而不是不断增加隐式字段和特殊状态，让下游只能依赖具体实现细节。
 
+### 5. 用宽松 fallback 掩盖关键失败
+
+如果 coding runtime、review runtime、structured output 或上下文组装失败，默认应显式失败或进入 `needs_attention`。
+
+不应为了“让链路继续走完”而：
+
+- 自动把 review 解释成 non-blocking
+- 自动把 dry-run 解释成真实完成
+- 自动把缺失 capability 解释成可接受降级
+
 ## 四、哪些地方必须保持工程化
 
 以下内容到 2026 年 3 月仍必须保留在确定性运行时里：
@@ -116,6 +133,7 @@
 - review 未通过不能 final delivery
 - repair loop 到上限必须进入 `needs_attention`
 - provider 切换不能破坏统一 retrieval contract
+- coding/review/runtime 关键失败不能被 permissive fallback 掩盖
 
 ### 3. 结构化输出与状态投影
 
@@ -157,6 +175,12 @@
 - 3 轮 blocking 后进入 `needs_attention`
 - final delivery 必须以 review approved 为前置条件
 - provider 切换不影响 retrieval contract
+- builtin coding/review capability 缺失时显式失败
+- self-host 单任务阶段允许保留：
+  - single-flight queue / active lane truth
+  - repo continuity truth
+  - operator snapshot / deterministic control task actions
+  - self-host boot diagnostics / split-process startup contract
 
 这些是系统边界，不是应交给模型自由发挥的部分。
 
@@ -166,8 +190,9 @@
 
 1. 如果这是权限、门禁、状态一致性或跨系统 contract，写代码约束
 2. 如果这是理解、规划、review 推理或文本组织，优先交给 agent
-3. 如果代码约束只是为了弥补 schema 不稳定，优先先补 schema 与测试
-4. 如果新逻辑需要引入多个额外状态，先反问能否收敛成更少 gate
+3. 如果这是 retrieval 注入、prompt 预算、context 裁剪，优先先补 runtime context policy，而不是平铺字符串
+4. 如果代码约束只是为了弥补 schema 不稳定，优先先补 schema 与测试
+5. 如果新逻辑需要引入多个额外状态，先反问能否收敛成更少 gate
 
 ## 七、落地要求
 

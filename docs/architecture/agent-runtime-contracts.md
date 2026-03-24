@@ -1,6 +1,6 @@
 # Agent Runtime Contracts
 
-> 更新时间：2026-03-22
+> 更新时间：2026-03-23
 > 文档角色：`docs/architecture` 下的实现规格文档
 > 目标：给 `main-agent`、`ralph`、`code-review-agent` 定义统一的运行 contract，保证任何 agent 只靠文档与 handoff 也能继续执行。
 
@@ -84,6 +84,9 @@
 
 - `MainAgentCodingHandoff`
 
+`main-agent` 的职责到 handoff 为止。
+它不是标准主链上的本地执行 agent，不应替 `ralph` 或 `code-review-agent` 完成长链编码或 review。
+
 ### Decision Rules
 
 - 能直接回答的轻问题，直接回答
@@ -101,13 +104,14 @@
 
 - coding loop owner
 - 本地 workspace / branch / PR owner
+- 标准主链上的内置编码执行 agent
 
 ### Allowed Work
 
 - 读取 handoff / issue
 - 产出 plan
-- 改代码
-- 跑验证
+- 在本地 worktree 直接改代码
+- 在本地 workspace 直接跑验证
 - 开 PR
 - 根据 review finding 修复
 
@@ -117,6 +121,7 @@
 - 跳过验证直接请求 review
 - 无限 repair loop
 - 代替 `code-review-agent` 审批自己
+- 把标准主链编码工作默认外包给外部 execution command
 
 ### Input Contract
 
@@ -142,12 +147,15 @@
 - `RalphCodingArtifact`
 - `RalphReviewHandoff`
 
+这些 schema 是 Ralph 已完成本地工作的稳定投影，不是默认 command 路径的替身协议。
+
 ### Decision Rules
 
 - 先从最小可行实现入手
 - 行为变更必须带测试或验证
 - review 前必须确认 diff 可审
 - 如果 review blocking，先修当前 finding，不擅自扩大范围
+- 如果 builtin Ralph runtime 缺少完成当前任务所需的本地能力，显式失败或进入 `needs_attention`
 
 ### Repair Loop Rules
 
@@ -165,12 +173,18 @@
 - review blocking finding 已清零
 - final delivery 已具备条件
 
+补充：
+
+- 标准主链默认要求 Ralph 自己完成本地编码与验证
+- 缺少 builtin coding capability 时，真实链路直接失败，不把外部 execution command 视为默认成功路径
+
 ## 五、`code-review-agent` contract
 
 ### Identity
 
 - 结构化 review agent
 - review loop 的判定输出方
+- 标准主链上的内置 review 执行 agent
 
 ### Allowed Work
 
@@ -185,6 +199,7 @@
 - 直接改代码
 - 以风格偏好制造 blocking
 - 输出不可执行的模糊批评
+- 用 permissive fallback 掩盖 review runtime 失败
 
 ### Input Contract
 
@@ -221,6 +236,9 @@
 
 - `ReviewHumanOutput`
 
+这些输出必须来自真实 review 结论。
+如果 builtin review runtime 无法完成审查或无法给出合法结构化输出，主链应显式失败，而不是回退成默认 non-blocking review。
+
 ### Severity Rules
 
 - `P0/P1`: blocking
@@ -231,6 +249,7 @@
 - review 结论明确
 - finding 具体到可修复
 - blocking 与 non-blocking 无歧义
+- runtime / context / structured-output 失败语义明确可见
 
 ## 六、标准 handoff 要求
 
@@ -258,6 +277,23 @@
 若出现冲突，处理顺序应为：
 
 1. 当前 architecture 文档
+
+## 八、主链执行补充
+
+当前主链的标准执行面是：
+
+- `main-agent`：聊天与 handoff
+- `ralph`：本地编码、验证、PR 准备
+- `code-review-agent`：本地 review、blocking 判定、repair guidance
+
+MCP 主要负责外部系统桥接，不替代 builtin agent 的本地编码和本地 review ownership。
+
+主链默认遵循 `fail closed`：
+
+- coding runtime 失败：任务失败或 `needs_attention`
+- review runtime 失败：任务失败或 `needs_attention`
+- structured output 非法：任务失败或 `needs_attention`
+- 不允许把上述失败自动解释成 non-blocking 成功
 2. handoff 文档
 3. agent `AGENTS.md`
 4. 局部实现细节

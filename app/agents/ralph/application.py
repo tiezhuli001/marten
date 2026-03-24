@@ -415,6 +415,34 @@ class SleepCodingService:
                 return
         raise ValueError("Cannot enter review without validation evidence or an explicit validation gap.")
 
+    def ensure_execution_evidence_ready(self, git_execution: GitExecutionResult) -> None:
+        if git_execution.changed_files and (git_execution.diff_excerpt or git_execution.diff_summary):
+            return
+        raise ValueError("Cannot enter review without real worktree change evidence.")
+
+    def resolve_validation_repo_path(self, git_execution: GitExecutionResult) -> Path:
+        if git_execution.worktree_path:
+            candidate = Path(git_execution.worktree_path)
+            if candidate.exists():
+                return candidate
+        return self.repo_path
+
+    def record_validation_evidence(
+        self,
+        validation: ValidationResult,
+        repo_path: Path,
+    ) -> ValidationResult:
+        output = validation.output.strip()
+        workspace_line = f"workspace_path: {repo_path}"
+        if workspace_line not in output:
+            output = f"{output}\n{workspace_line}".strip()
+        return validation.model_copy(
+            update={
+                "workspace_path": str(repo_path),
+                "output": output,
+            }
+        )
+
     def _build_plan(
         self,
         issue: SleepCodingIssue,

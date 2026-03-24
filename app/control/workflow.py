@@ -27,10 +27,19 @@ class GatewayWorkflowService:
 
     def run(self, payload: GatewayMessageRequest) -> GatewayWorkflowResult:
         gateway_response = self.control_plane.run(payload)
-        follow_up = self.automation.continue_gateway_workflow(
-            intent=gateway_response.intent,
-            task_id=gateway_response.task_id,
-        )
+        if gateway_response.workflow_state in {"queued", "running"}:
+            follow_up = {
+                "triggered": False,
+                "mode": "single_flight",
+                "reason": gateway_response.workflow_state,
+                "task_id": gateway_response.task_id,
+                "active_task_id": gateway_response.active_task_id,
+            }
+        else:
+            follow_up = self.automation.continue_gateway_workflow(
+                intent=gateway_response.intent,
+                task_id=gateway_response.task_id,
+            )
         return GatewayWorkflowResult(
             gateway_response=gateway_response,
             follow_up=follow_up,

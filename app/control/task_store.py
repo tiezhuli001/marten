@@ -140,6 +140,26 @@ class TaskStore:
         row = connection.execute(" ".join(query), tuple(params)).fetchone()
         return self.deserialize_task(row) if row else None
 
+    def find_latest_task(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        task_type: ControlTaskType | None = None,
+        statuses: set[str] | None = None,
+    ) -> ControlTask | None:
+        query = ["SELECT * FROM control_tasks WHERE 1 = 1"]
+        params: list[Any] = []
+        if task_type is not None:
+            query.append("AND task_type = ?")
+            params.append(task_type)
+        if statuses:
+            placeholders = ", ".join("?" for _ in statuses)
+            query.append(f"AND status IN ({placeholders})")
+            params.extend(sorted(statuses))
+        query.append("ORDER BY datetime(created_at) DESC, rowid DESC LIMIT 1")
+        row = connection.execute(" ".join(query), tuple(params)).fetchone()
+        return self.deserialize_task(row) if row else None
+
     def get_task_row(self, connection: sqlite3.Connection, task_id: str) -> sqlite3.Row:
         row = connection.execute(
             "SELECT * FROM control_tasks WHERE task_id = ?",

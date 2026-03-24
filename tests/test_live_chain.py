@@ -28,11 +28,36 @@ def _load_live_test_config(settings: Settings) -> dict[str, Any]:
     return config if isinstance(config, dict) else {}
 
 
+def _build_live_test_settings(settings: Settings, live_config: dict[str, Any]) -> Settings:
+    return settings.model_copy(
+        update={
+            "llm_request_timeout_seconds": float(live_config.get("llm_request_timeout_seconds", 30.0)),
+            "llm_request_max_attempts": max(int(live_config.get("llm_request_max_attempts", 1)), 1),
+            "llm_request_retry_base_delay_seconds": max(
+                float(live_config.get("llm_request_retry_base_delay_seconds", 0.0)),
+                0.0,
+            ),
+            "mcp_request_timeout_seconds": float(live_config.get("mcp_request_timeout_seconds", 20.0)),
+        }
+    )
+
+
+def _default_live_issue_prompt(marker: str) -> str:
+    return (
+        "创建一个最小 sleep-coding issue。\n"
+        "只改 `docs/internal/live-chain-validation.md`。\n"
+        f"只追加一行 marker，且包含 `{marker}`。\n"
+        "不要改其他文件。\n"
+        "给出简短验证说明，便于 review 通过。"
+    )
+
+
 class LiveChainIntegrationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.settings = Settings()
-        cls.live_config = _load_live_test_config(cls.settings)
+        base_settings = Settings()
+        cls.live_config = _load_live_test_config(base_settings)
+        cls.settings = _build_live_test_settings(base_settings, cls.live_config)
         if not cls.live_config.get("enabled", False):
             raise unittest.SkipTest(
                 "Live chain test is disabled. Set `platform.json -> live_test.enabled=true` to run it."
@@ -137,11 +162,15 @@ class LiveChainIntegrationTests(unittest.TestCase):
         self.assertEqual(gateway_chain_request_id, intake_request_id)
         self.assertNotEqual(gateway_request_id, intake_request_id)
         task_id = self._extract_task_id(automation_follow_up)
-        if not automation_follow_up.get("triggered", False):
+        current_task = sleep_coding.get_task(task_id)
+        if (
+            not automation_follow_up.get("triggered", False)
+            or current_task.status == "awaiting_confirmation"
+        ):
             task = automation.handle_sleep_coding_action_async(task_id, "approve_plan")
             task_id = task.task_id
 
-        task = self._wait_for_terminal_task(sleep_coding, task_id)
+        task = self._wait_for_terminal_task(sleep_coding, automation, task_id)
         self.assertEqual(task.status, "approved", task.model_dump_json(indent=2))
         self.assertEqual(task.background_follow_up_status, "completed", task.model_dump_json(indent=2))
         self.assertEqual(task.kickoff_request_id, gateway_chain_request_id)
@@ -186,14 +215,7 @@ class LiveChainIntegrationTests(unittest.TestCase):
         configured = self.live_config.get("issue_prompt")
         if isinstance(configured, str) and configured.strip():
             return configured.format(marker=marker)
-        return (
-            "请创建一个最小真实链路验证 issue。\n\n"
-            "要求：\n"
-            "1. 只对 docs/internal/live-chain-validation.md 追加一行 live validation marker\n"
-            f"2. marker 必须包含 `{marker}`\n"
-            "3. 保持改动最小，避免引入额外重构\n"
-            "4. 需要包含验证说明，便于 review 通过\n"
-        )
+        return _default_live_issue_prompt(marker)
 
     def _build_feishu_request(self, *, user_id: str, content: str) -> tuple[bytes, dict[str, str]]:
         payload = {
@@ -236,16 +258,23 @@ class LiveChainIntegrationTests(unittest.TestCase):
     def _wait_for_terminal_task(
         self,
         sleep_coding: SleepCodingService,
+        automation: AutomationService,
         task_id: str,
     ) -> SleepCodingTask:
         timeout_seconds = int(self.live_config.get("timeout_seconds", 900))
-        poll_interval_seconds = max(int(self.live_config.get("poll_interval_seconds", 1)), 1)
+        poll_interval_seconds = max(float(self.live_config.get("poll_interval_seconds", 0.2)), 0.05)
         deadline = time.time() + timeout_seconds
         latest = sleep_coding.get_task(task_id)
+        approval_requested = False
         while time.time() < deadline:
             latest = sleep_coding.get_task(task_id)
-            if latest.status in {"failed", "cancelled"}:
+            if latest.status in {"failed", "cancelled", "needs_attention"}:
                 return latest
+            if latest.status == "awaiting_confirmation" and not approval_requested:
+                latest = automation.handle_sleep_coding_action_async(task_id, "approve_plan")
+                approval_requested = True
+                if latest.status in {"failed", "cancelled"}:
+                    return latest
             if latest.status == "approved" and latest.background_follow_up_status == "completed":
                 return latest
             time.sleep(poll_interval_seconds)
@@ -256,6 +285,37 @@ class LiveChainIntegrationTests(unittest.TestCase):
 
 
 class LiveChainPrerequisiteContractTests(unittest.TestCase):
+    def test_default_live_issue_prompt_is_minimal_and_single_target(self) -> None:
+        prompt = _default_live_issue_prompt("20260324T000000Z")
+
+        self.assertIn("docs/internal/live-chain-validation.md", prompt)
+        self.assertIn("20260324T000000Z", prompt)
+        self.assertIn("不要改其他文件", prompt)
+
+    def test_build_live_test_settings_applies_faster_runtime_profile(self) -> None:
+        settings = Settings(
+            app_env="development",
+            llm_request_timeout_seconds=30.0,
+            llm_request_max_attempts=3,
+            llm_request_retry_base_delay_seconds=1.0,
+            mcp_request_timeout_seconds=30.0,
+        )
+
+        optimized = _build_live_test_settings(
+            settings,
+            {
+                "llm_request_timeout_seconds": 12.0,
+                "llm_request_max_attempts": 1,
+                "llm_request_retry_base_delay_seconds": 0.0,
+                "mcp_request_timeout_seconds": 10.0,
+            },
+        )
+
+        self.assertEqual(optimized.resolved_llm_request_timeout_seconds, 12.0)
+        self.assertEqual(optimized.resolved_llm_request_max_attempts, 1)
+        self.assertEqual(optimized.resolved_llm_request_retry_base_delay_seconds, 0.0)
+        self.assertEqual(optimized.mcp_request_timeout_seconds, 10.0)
+
     def test_live_prerequisite_message_points_to_diagnostics_truth(self) -> None:
         diagnostics = {
             "main_chain": {

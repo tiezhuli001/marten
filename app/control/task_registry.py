@@ -215,6 +215,19 @@ class TaskRegistryService:
                 statuses=statuses,
             )
 
+    def find_latest_task(
+        self,
+        *,
+        task_type: ControlTaskType | None = None,
+        statuses: set[str] | None = None,
+    ) -> ControlTask | None:
+        with closing(self._connect()) as connection:
+            return self.tasks.find_latest_task(
+                connection,
+                task_type=task_type,
+                statuses=statuses,
+            )
+
     def build_recovery_snapshot(self, task_id: str) -> dict[str, Any]:
         with closing(self._connect()) as connection:
             task = self.tasks.get_task(connection, task_id)
@@ -332,6 +345,12 @@ class TaskRegistryService:
         if task.status in {"approved", "completed", "cancelled", "failed"}:
             return "none"
         if task.status in {"needs_attention", "timed_out"}:
+            last_error = self._coerce_string(task.payload, "last_error") or ""
+            normalized = last_error.lower()
+            if "execution evidence" in normalized:
+                return "repair_execution_evidence"
+            if "review evidence" in normalized:
+                return "repair_review_evidence"
             return "operator_attention"
         if task.status == "changes_requested":
             return "rerun_coding"

@@ -41,7 +41,8 @@ class GitWorkspaceService:
         if worktree_path.exists():
             self._run_git(["worktree", "remove", "--force", str(worktree_path)])
 
-        self._run_git(["worktree", "add", "-B", branch, str(worktree_path), "HEAD"])
+        base_ref = self._resolve_worktree_base_ref()
+        self._run_git(["worktree", "add", "-B", branch, str(worktree_path), base_ref])
         return GitExecutionResult(
             status="prepared",
             worktree_path=str(worktree_path),
@@ -141,6 +142,41 @@ class GitWorkspaceService:
                 f"Generated file changes: {len(generated_changes)}."
             ),
             is_dry_run=False,
+        )
+
+    def capture_worktree_evidence(self, branch: str) -> GitExecutionResult:
+        worktree_path = self.worktree_root / self._sanitize_branch(branch)
+        if not worktree_path.exists():
+            return GitExecutionResult(
+                status="failed",
+                worktree_path=str(worktree_path),
+                output="Worktree path does not exist; unable to collect evidence.",
+                is_dry_run=not self.enable_git_commit,
+            )
+        changed_files = self._collect_changed_files(worktree_path, branch=branch)
+        changed_paths = [item["path"] for item in changed_files]
+        file_changes = [
+            {
+                "path": item["path"],
+                "diff_excerpt": self._build_diff_excerpt(worktree_path, item["path"], item["content"]),
+            }
+            for item in changed_files
+        ]
+        diff_summary = self._build_diff_summary(worktree_path, changed_paths)
+        diff_excerpt = "\n\n".join(
+            item["diff_excerpt"]
+            for item in file_changes
+            if isinstance(item.get("diff_excerpt"), str) and item["diff_excerpt"].strip()
+        )
+        return GitExecutionResult(
+            status="prepared",
+            worktree_path=str(worktree_path),
+            output=f"Collected worktree evidence for {len(changed_paths)} files.",
+            is_dry_run=not self.enable_git_commit,
+            changed_files=changed_paths,
+            file_changes=file_changes,
+            diff_summary=diff_summary,
+            diff_excerpt=diff_excerpt,
         )
 
     def push_branch(self, branch: str) -> GitExecutionResult:
@@ -290,6 +326,35 @@ class GitWorkspaceService:
             seen_paths.add(pending_path)
         return changed_files
 
+    def _build_diff_summary(self, worktree_path: Path, changed_paths: list[str]) -> str:
+        if not changed_paths:
+            return ""
+        try:
+            summary = self._run_git(
+                ["diff", "--stat", "--", *changed_paths],
+                cwd=worktree_path,
+            ).stdout.strip()
+        except RuntimeError:
+            summary = ""
+        if summary:
+            return summary
+        return f"{len(changed_paths)} files changed in worktree."
+
+    def _build_diff_excerpt(self, worktree_path: Path, relative_path: str, content: str) -> str:
+        try:
+            diff = self._run_git(
+                ["diff", "--", relative_path],
+                cwd=worktree_path,
+            ).stdout.strip()
+        except RuntimeError:
+            diff = ""
+        if diff:
+            return diff
+        preview_lines = "\n".join(content.splitlines()[:12]).strip()
+        if not preview_lines:
+            return f"new file: {relative_path}"
+        return f"new file: {relative_path}\n{preview_lines}"
+
     def _ensure_remote_branch(self, branch: str) -> None:
         if not self._supports_github_mcp_write():
             return
@@ -390,6 +455,26 @@ class GitWorkspaceService:
 
     def _sanitize_branch(self, branch: str) -> str:
         return branch.replace("/", "__")
+
+    def _resolve_worktree_base_ref(self) -> str:
+        try:
+            self._run_git(["show-ref", "--verify", "--quiet", "refs/heads/main"])
+            return "main"
+        except RuntimeError:
+            pass
+
+        try:
+            remote_head = self._run_git(
+                ["symbolic-ref", "--quiet", "--short", f"refs/remotes/{self.git_remote_name}/HEAD"]
+            ).stdout.strip()
+            if remote_head.startswith(f"{self.git_remote_name}/"):
+                candidate = remote_head.removeprefix(f"{self.git_remote_name}/").strip()
+                if candidate:
+                    return candidate
+        except RuntimeError:
+            pass
+
+        return "HEAD"
 
     def _resolve_relative_path(self, worktree_path: Path, relative_path: str) -> Path:
         candidate = Path(relative_path)

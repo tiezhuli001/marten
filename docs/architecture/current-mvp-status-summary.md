@@ -1,13 +1,15 @@
 # Current MVP Status Summary
 
-> 更新时间：2026-03-22
+> 更新时间：2026-03-24
 > 用途：用一页说明当前公开仓库的真实架构、主链路、状态模型，以及文档声明与代码实现的对齐结果。
 
 ## 一、当前项目处于什么阶段
 
 `Marten` 当前不在功能扩张期，而在 `post-MVP cleanup / 收口` 阶段。
 
-同时，到 `2026-03-22` 为止，框架分层设计已经完成，项目已具备进入最后编码阶段的文档基础。
+到 `2026-03-24` 为止，面向“私有服务器自用”的第一阶段 rollout 已完成，当前重点不再是继续补仓内 rollout chunk，而是把这条既有主链按 split-process 契约部署到目标服务器并做真实环境验收。
+
+同时，框架分层设计已经完成，项目已具备进入真实部署与使用阶段的文档基础。
 这份文档只负责描述当前代码已经成立的事实，不再承担未来框架分层设计本身。
 
 判断标准不是“又加了多少能力”，而是：
@@ -128,9 +130,9 @@ GitHub 的 open/closed 不再直接充当业务状态真相。
 
 在上一轮状态收口之后，主链又补完了一轮运行时防卡死加固。
 
-### 1. 外部执行超时已补齐
+### 1. 执行路径超时已补齐
 
-当前主链上最容易卡死的 3 条外部执行路径已经补上超时控制：
+当前主链上最容易卡死的 3 条执行路径已经补上超时控制：
 
 - `sleep_coding.validation.timeout_seconds`
 - `sleep_coding.execution.timeout_seconds`
@@ -139,31 +141,46 @@ GitHub 的 open/closed 不再直接充当业务状态真相。
 覆盖范围包括：
 
 - Ralph validation command
-- Ralph 本地 execution command
-- Code Review 外部 command
+- Ralph 本地执行路径
+- Code Review 执行路径
 
 这些超时都会把“无限等待”收敛成明确失败，不再让任务无界卡住。
 
-### 2. repair loop 约束与外部执行约束已经形成闭环
+### 2. repair loop 约束与执行约束已经形成闭环
 
 当前主链已经同时具备两层防钻牛角尖保护：
 
 - LLM 请求有单次超时和最大重试次数
 - review repair loop 有最大轮次，达到上限后 handoff
-- 外部命令执行也有超时，不会因为本地 command 卡死而绕过编排层约束
+- 执行路径也有超时，不会因为本地执行卡死而绕过编排层约束
 
 ### 3. 当前测试状态
 
-本轮 timeout hardening 后，已通过：
+本轮测试链路分层与重试/等待收紧后，已通过：
 
-- `python -m unittest tests/test_runtime_components.py tests/test_sleep_coding.py tests/test_review.py tests/test_automation.py -v`
-  - 结果：`Ran 63 tests ... OK`
-- `python -m unittest tests/test_mvp_e2e.py -v`
-  - 结果：`Ran 5 tests ... OK`
-- `python -m unittest tests/test_live_chain.py -v`
-  - 结果：`Ran 1 test in 127.159s ... OK`
-- `python -m unittest discover -s tests -v`
-  - 结果：`Ran 131 tests in 170.390s OK`
+- `python scripts/run_test_suites.py quick`
+  - 结果：`Ran 119 tests in 11.662s ... OK`
+  - 端到端耗时：`real 13.26s`
+- `python scripts/run_test_suites.py regression`
+  - 结果：`Ran 154 tests in 17.561s ... OK`
+  - 端到端耗时：`real 19.85s`
+- `python -m unittest tests.test_mvp_e2e -v`
+  - 结果：`Ran 8 tests in 4.448s ... OK`
+- `python scripts/run_sleep_coding_validation.py`
+  - 结果：`Ran 3 tests in 0.609s ... OK`
+
+对照基线：
+
+- 旧的非 live curated 回归命令
+  - `python -m unittest tests.test_agent_runtime_policy tests.test_rag_capability tests.test_main_agent tests.test_gateway tests.test_sleep_coding tests.test_sleep_coding_worker tests.test_review tests.test_automation tests.test_runtime_components tests.test_mvp_e2e tests.test_framework_public_surface -v`
+  - 结果：`Ran 150 tests in 118.537s ... OK`
+  - 端到端耗时：`real 123.38s`
+
+说明：
+
+- 默认本地开发路径不再顺带跑 live-chain。
+- service 层不再额外包一层通用 runtime retry；保留底层 LLM transport retry 和必要的 structured-output repair retry。
+- live-chain 仍单独保留，因为它依赖真实本地 MCP / LLM / delivery 集成，不能混入日常回归耗时。
 
 ### 4. 当前 operator 入口
 
@@ -247,18 +264,18 @@ GitHub 的 open/closed 不再直接充当业务状态真相。
 - `models.json` 的 provider 元数据已经收口到 canonical snake_case
 - README 示例与运行时解析口径一致
 
-### 5. 外部执行路径已补统一超时
+### 5. 执行路径已补统一超时
 
 代码事实：
 
-- `app/core/config.py` 新增 execution / validation / review command timeout 配置解析
+- `app/core/config.py` 新增 execution / validation / review timeout 配置解析
 - `app/agents/ralph/validation.py` 的 validation subprocess 现在带 timeout
 - `app/agents/ralph/drafting.py` 的本地 execution subprocess 现在带 timeout
-- `app/agents/code_review_agent/skill.py` 的 review command subprocess 现在带 timeout
+- `app/agents/code_review_agent/skill.py` 的 review 执行路径现在带 timeout
 
 结论：
 
-- 主链不再只防 LLM HTTP 死等，也同时防本地外部命令无界阻塞
+- 主链不再只防 LLM HTTP 死等，也同时防执行路径无界阻塞
 
 ## 七、当前阶段的红线
 
@@ -268,7 +285,7 @@ GitHub 的 open/closed 不再直接充当业务状态真相。
 - 不要把 `sleep_coding_tasks` 或 `review_runs` 提升回与 `control_tasks` 并列的主编排真相
 - 不要把内部 handoff / 临时计划文档重新暴露为公开架构入口
 - 不要把当前单条主链稀释成功能拼盘
-- 不要重新把 validation / execution / review command 放回无超时状态
+- 不要重新把 validation / execution / review 执行路径放回无超时状态
 
 ## 八、继续阅读
 

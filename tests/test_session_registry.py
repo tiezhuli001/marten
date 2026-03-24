@@ -129,6 +129,26 @@ class SessionRegistryServiceTests(unittest.TestCase):
             self.assertEqual(updated.session_id, session.session_id)
             self.assertEqual(updated.payload["active_agent"], "ralph")
 
+    def test_execution_lane_persists_active_and_queued_tasks(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings(database_url=f"sqlite:///{Path(temp_dir) / 'sessions.db'}")
+            service = SessionRegistryService(settings)
+
+            first = service.acquire_execution_lane("task-1")
+            second = service.acquire_execution_lane("task-2")
+            released = service.release_execution_lane("task-1")
+            snapshot = service.get_execution_lane()
+
+            self.assertEqual(first.disposition, "accepted")
+            self.assertEqual(first.snapshot.active_task_id, "task-1")
+            self.assertEqual(second.disposition, "queued")
+            self.assertEqual(second.snapshot.active_task_id, "task-1")
+            self.assertEqual(second.snapshot.queued_task_ids, ["task-2"])
+            self.assertEqual(released.disposition, "released")
+            self.assertEqual(released.snapshot.active_task_id, "task-2")
+            self.assertEqual(snapshot.active_task_id, "task-2")
+            self.assertEqual(snapshot.queued_task_ids, [])
+
 
 if __name__ == "__main__":
     unittest.main()

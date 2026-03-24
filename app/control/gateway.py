@@ -35,6 +35,7 @@ class _GatewayChainContext:
 class GatewayControlPlaneService:
     _LANE_GUARD = threading.Lock()
     _LANE_LOCKS: dict[str, threading.Lock] = {}
+    _DEFAULT_EXECUTION_LANE = "self_host:default"
 
     def __init__(
         self,
@@ -75,6 +76,7 @@ class GatewayControlPlaneService:
             source_endpoint_id = self.endpoints.resolve_endpoint_id(
                 endpoint_id=payload.endpoint_id,
                 provider=payload.source,
+                external_refs=[user_session_ref, payload.chat_id] if payload.chat_id else [user_session_ref],
             )
             binding = self.endpoints.resolve_binding(source_endpoint_id)
             route = resolve_route(payload.content, endpoint_binding=binding)
@@ -103,9 +105,9 @@ class GatewayControlPlaneService:
                 parent_task_id=chain_context.parent_task_id,
             )
             if route.intent == "stats_query":
-                usage, message, task_id = self._handle_stats_query(payload)
+                usage, message, task_id, workflow_state, active_task_id = self._handle_stats_query(payload)
             else:
-                usage, message, task_id = self._handle_route(
+                usage, message, task_id, workflow_state, active_task_id = self._handle_route(
                     route=route,
                     payload=payload,
                     request_id=request_id,
@@ -136,7 +138,14 @@ class GatewayControlPlaneService:
                 token_usage=recorded,
                 task_id=task_id,
                 run_session_id=run_session.session_id,
+                source_endpoint_id=source_endpoint_id,
                 delivery_endpoint_id=delivery_endpoint_id,
+                workflow_state=workflow_state,
+                active_task_id=active_task_id,
+            )
+            self._record_session_turn(
+                run_session=run_session,
+                response=response,
             )
             if dedupe_key:
                 self.sessions.record_inbound_receipt(dedupe_key, response.model_dump(mode="json"))
@@ -177,6 +186,37 @@ class GatewayControlPlaneService:
                 "source_endpoint_id": source_endpoint_id,
             },
         )
+
+    def _record_session_turn(
+        self,
+        *,
+        run_session,
+        response: GatewayMessageResponse,
+    ) -> None:  # noqa: ANN001
+        self.sessions.record_session_turn(
+            run_session.session_id,
+            request_id=response.request_id,
+            chain_request_id=response.chain_request_id,
+            intent=response.intent,
+            workflow_state=response.workflow_state,
+            task_id=response.task_id,
+            source_endpoint_id=response.source_endpoint_id or "default",
+            delivery_endpoint_id=response.delivery_endpoint_id or "default",
+            run_session_id=response.run_session_id,
+        )
+        parent_session_id = getattr(run_session, "parent_session_id", None)
+        if isinstance(parent_session_id, str) and parent_session_id.strip():
+            self.sessions.record_session_turn(
+                parent_session_id,
+                request_id=response.request_id,
+                chain_request_id=response.chain_request_id,
+                intent=response.intent,
+                workflow_state=response.workflow_state,
+                task_id=response.task_id,
+                source_endpoint_id=response.source_endpoint_id or "default",
+                delivery_endpoint_id=response.delivery_endpoint_id or "default",
+                run_session_id=response.run_session_id,
+            )
 
     def _ensure_sessions(
         self,
@@ -286,7 +326,7 @@ class GatewayControlPlaneService:
         chain_request_id: str,
         source_endpoint_id: str,
         delivery_endpoint_id: str,
-    ) -> tuple[TokenUsage, str, str | None]:
+    ) -> tuple[TokenUsage, str, str | None, str, str | None]:
         if route.target_agent == "ralph":
             return self._handle_sleep_coding(
                 payload,
@@ -309,7 +349,7 @@ class GatewayControlPlaneService:
         run_id: str,
         source_endpoint_id: str,
         delivery_endpoint_id: str,
-    ) -> tuple[TokenUsage, str, str | None]:
+    ) -> tuple[TokenUsage, str, str | None, str, str | None]:
         intake = self.main_agent.intake(
             MainAgentIntakeRequest(
                 user_id=payload.user_id,
@@ -324,17 +364,48 @@ class GatewayControlPlaneService:
             )
         )
         if intake.mode == "chat":
-            return intake.token_usage, intake.message, None
+            return intake.token_usage, intake.message, None, "completed", None
+        assert intake.control_task_id is not None
+        lane_decision = self.sessions.acquire_execution_lane(
+            intake.control_task_id,
+            lane_key=self._DEFAULT_EXECUTION_LANE,
+        )
+        self.tasks.update_task(
+            intake.control_task_id,
+            payload_patch={
+                "queue_status": "queued" if lane_decision.disposition == "queued" else "running",
+                "active_task_id": lane_decision.snapshot.active_task_id,
+                "queued_task_ids": lane_decision.snapshot.queued_task_ids,
+            },
+        )
+        self.tasks.append_event(
+            intake.control_task_id,
+            f"single_flight.{lane_decision.disposition}",
+            {
+                "active_task_id": lane_decision.snapshot.active_task_id,
+                "queued_task_ids": lane_decision.snapshot.queued_task_ids,
+            },
+        )
         issue_url = intake.issue.html_url if intake.issue is not None else None
         message = f"{intake.message}. Issue URL: {issue_url or 'n/a'}."
-        return intake.token_usage, message, intake.control_task_id
+        if lane_decision.disposition == "queued":
+            message = (
+                f"{message} 当前主任务仍在执行，新的请求已排队。"
+            )
+        return (
+            intake.token_usage,
+            message,
+            intake.control_task_id,
+            "queued" if lane_decision.disposition == "queued" else "accepted",
+            lane_decision.snapshot.active_task_id,
+        )
 
     def _handle_stats_query(
         self,
         payload: GatewayMessageRequest,
-    ) -> tuple[TokenUsage, str, str | None]:
+    ) -> tuple[TokenUsage, str, str | None, str, str | None]:
         summary = self.ledger.get_usage_summary(query=payload.content)
-        return TokenUsage(step_name="stats_query_handler"), summary, None
+        return TokenUsage(step_name="stats_query_handler"), summary, None, "completed", None
 
     def _handle_sleep_coding(
         self,
@@ -342,12 +413,20 @@ class GatewayControlPlaneService:
         request_id: str,
         source_endpoint_id: str,
         delivery_endpoint_id: str,
-    ) -> tuple[TokenUsage, str, str | None]:
+    ) -> tuple[TokenUsage, str, str | None, str, str | None]:
+        lane_snapshot = self.sessions.get_execution_lane(self._DEFAULT_EXECUTION_LANE)
+        if lane_snapshot.active_task_id:
+            message = (
+                "Sleep coding queue is busy. Wait for the current active task to finish before starting another direct Ralph task."
+            )
+            return TokenUsage(step_name="sleep_coding_handler"), message, None, "running", lane_snapshot.active_task_id
         issue_number = self._extract_issue_number(payload.content)
         if issue_number is None:
             return (
                 TokenUsage(step_name="sleep_coding_handler"),
                 "Sleep coding intent recognized. Provide an issue number to continue.",
+                None,
+                "completed",
                 None,
             )
 
@@ -360,11 +439,24 @@ class GatewayControlPlaneService:
                 delivery_endpoint_id=delivery_endpoint_id,
             )
         )
+        if task.control_task_id:
+            lane_decision = self.sessions.acquire_execution_lane(
+                task.control_task_id,
+                lane_key=self._DEFAULT_EXECUTION_LANE,
+            )
+            self.tasks.update_task(
+                task.control_task_id,
+                payload_patch={
+                    "queue_status": "running",
+                    "active_task_id": lane_decision.snapshot.active_task_id,
+                    "queued_task_ids": lane_decision.snapshot.queued_task_ids,
+                },
+            )
         message = (
             f"Sleep coding task {task.task_id} is ready for review. "
             f"Status={task.status}, branch={task.head_branch}."
         )
-        return TokenUsage(step_name="sleep_coding_handler"), message, task.task_id
+        return TokenUsage(step_name="sleep_coding_handler"), message, task.task_id, "accepted", task.control_task_id
 
     def _extract_issue_number(self, content: str) -> int | None:
         patterns = (

@@ -29,7 +29,12 @@ class RalphTaskWorkflow:
         self.progress = RalphTaskProgress(service)
 
     def start_task(self, payload: SleepCodingTaskRequest) -> SleepCodingTask:
-        repo = payload.repo or self.service.settings.resolved_github_repository
+        parent_task = (
+            self.service.tasks.get_task(payload.parent_task_id)
+            if payload.parent_task_id
+            else None
+        )
+        repo = payload.repo or (parent_task.repo if parent_task else None) or self.service.settings.resolved_github_repository
         task_id = str(uuid4())
         head_branch = payload.head_branch or f"codex/issue-{payload.issue_number}-sleep-coding"
         pending_usage: tuple[str, str, TokenUsage] | None = None
@@ -45,11 +50,8 @@ class RalphTaskWorkflow:
             command=self.service.settings.resolved_sleep_coding_validation_command,
         )
         git_execution = GitExecutionResult()
-        parent_task = (
-            self.service.tasks.get_task(payload.parent_task_id)
-            if payload.parent_task_id
-            else self.service.tasks.find_parent_for_issue(repo, payload.issue_number)
-        )
+        if parent_task is None:
+            parent_task = self.service.tasks.find_parent_for_issue(repo, payload.issue_number)
         inherited_request_id = None
         if parent_task is not None:
             candidate_request_id = parent_task.payload.get("request_id")
@@ -245,17 +247,25 @@ class RalphTaskWorkflow:
             artifact_markdown=execution.artifact_markdown,
             file_changes=execution.file_changes,
         )
+        evidence_result = self.service.git_workspace.capture_worktree_evidence(task["head_branch"])
         git_execution = artifact_result.model_copy(
             update={
                 "status": artifact_result.status,
                 "worktree_path": artifact_result.worktree_path or git_execution.worktree_path,
                 "artifact_path": artifact_result.artifact_path,
                 "output": "\n".join(
-                    part for part in (git_execution.output, artifact_result.output) if part
+                    part
+                    for part in (git_execution.output, artifact_result.output, evidence_result.output)
+                    if part
                 ),
                 "is_dry_run": git_execution.is_dry_run and artifact_result.is_dry_run,
+                "changed_files": list(evidence_result.changed_files),
+                "file_changes": list(evidence_result.file_changes),
+                "diff_summary": evidence_result.diff_summary,
+                "diff_excerpt": evidence_result.diff_excerpt,
             }
         )
+        self.service.ensure_execution_evidence_ready(git_execution)
         self.service.store.update_task_payloads(
             connection,
             task["task_id"],
@@ -279,20 +289,16 @@ class RalphTaskWorkflow:
             {
                 "commit_message": execution.commit_message,
                 "artifact_path": git_execution.artifact_path,
-                "generated_files": [change.path for change in execution.file_changes],
-                "file_changes": [
-                    {"path": change.path, "description": change.description}
-                    for change in execution.file_changes
-                ],
+                "generated_files": list(git_execution.changed_files),
+                "file_changes": list(git_execution.file_changes),
                 "artifact": RalphCodingArtifact(
                     artifact_path=git_execution.artifact_path,
                     worktree_path=git_execution.worktree_path,
                     commit_message=execution.commit_message,
-                    generated_files=[change.path for change in execution.file_changes],
-                    file_changes=[
-                        {"path": change.path, "description": change.description}
-                        for change in execution.file_changes
-                    ],
+                    generated_files=list(git_execution.changed_files),
+                    file_changes=list(git_execution.file_changes),
+                    diff_summary=git_execution.diff_summary,
+                    diff_excerpt=git_execution.diff_excerpt,
                 ).model_dump(mode="json"),
             },
         )
@@ -303,11 +309,10 @@ class RalphTaskWorkflow:
                     artifact_path=git_execution.artifact_path,
                     worktree_path=git_execution.worktree_path,
                     commit_message=execution.commit_message,
-                    generated_files=[change.path for change in execution.file_changes],
-                    file_changes=[
-                        {"path": change.path, "description": change.description}
-                        for change in execution.file_changes
-                    ],
+                    generated_files=list(git_execution.changed_files),
+                    file_changes=list(git_execution.file_changes),
+                    diff_summary=git_execution.diff_summary,
+                    diff_excerpt=git_execution.diff_excerpt,
                 ).model_dump(mode="json"),
             },
             connection=connection,
@@ -324,12 +329,11 @@ class RalphTaskWorkflow:
         self.service.store.update_status(connection, task["task_id"], "validating")
         self.service._sync_control_task(task, status="validating", connection=connection)
 
-        validation_repo_path = (
-            Path(git_execution.worktree_path)
-            if git_execution.worktree_path and not git_execution.is_dry_run
-            else self.service.repo_path
+        validation_repo_path = self.service.resolve_validation_repo_path(git_execution)
+        validation = self.service.record_validation_evidence(
+            self.service.validator.run(validation_repo_path),
+            validation_repo_path,
         )
-        validation = self.service.validator.run(validation_repo_path)
         if validation.status == "failed":
             title, lines = self.service.channel_builder.build_validation_failed(
                 issue_number=task["issue_number"],
@@ -376,6 +380,19 @@ class RalphTaskWorkflow:
             raise ValueError(
                 f"Resume after validation requires passed validation state, got {validation.status}"
             )
+        if not git_execution.changed_files or not (git_execution.diff_excerpt or git_execution.diff_summary):
+            evidence_result = self.service.git_workspace.capture_worktree_evidence(task["head_branch"])
+            git_execution = git_execution.model_copy(
+                update={
+                    "changed_files": list(evidence_result.changed_files),
+                    "file_changes": list(evidence_result.file_changes),
+                    "diff_summary": evidence_result.diff_summary,
+                    "diff_excerpt": evidence_result.diff_excerpt,
+                    "output": "\n".join(
+                        part for part in (git_execution.output, evidence_result.output) if part
+                    ),
+                }
+            )
         self._finalize_review_candidate(
             connection=connection,
             task=task,
@@ -396,6 +413,7 @@ class RalphTaskWorkflow:
         git_execution: GitExecutionResult,
         validation: ValidationResult,
     ) -> None:
+        self.service.ensure_execution_evidence_ready(git_execution)
         self.service.ensure_review_handoff_validation_evidence(
             task,
             validation,
@@ -445,6 +463,10 @@ class RalphTaskWorkflow:
                 "is_dry_run": git_execution.is_dry_run
                 and commit_result.is_dry_run
                 and push_result.is_dry_run,
+                "changed_files": list(git_execution.changed_files),
+                "file_changes": list(git_execution.file_changes),
+                "diff_summary": git_execution.diff_summary,
+                "diff_excerpt": git_execution.diff_excerpt,
             }
         )
         existing_pull_request = self.service._resolve_existing_pull_request(task, connection)

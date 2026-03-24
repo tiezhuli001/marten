@@ -31,6 +31,7 @@ class ContextMergePolicy:
     max_tokens: int
     dedupe: bool
     citation_mode: str
+    injection_mode: str = "inline"
 
 
 @dataclass(frozen=True)
@@ -262,12 +263,14 @@ class RAGFacade:
                     max_tokens=max(int(raw.get("max_tokens", 600)), 1),
                     dedupe=bool(raw.get("dedupe", True)),
                     citation_mode=str(raw.get("citation_mode", "inline")),
+                    injection_mode=str(raw.get("injection_mode", "inline")),
                 )
         return ContextMergePolicy(
             merge_mode="append",
             max_tokens=600,
             dedupe=True,
             citation_mode="inline",
+            injection_mode="inline",
         )
 
     def _rag_config(self) -> dict[str, object]:

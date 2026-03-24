@@ -1,6 +1,6 @@
 # Agent System Overview
 
-> 更新时间：2026-03-22
+> 更新时间：2026-03-23
 > 文档角色：`docs/architecture` 下的 canonical agent system 文档
 > 目标：定义 `Marten` 当前正式生效的三 agent 主链、职责边界、handoff contract 与闭环规则。
 
@@ -51,13 +51,14 @@
 
 - 读取 issue / handoff
 - 规划
-- 编码
-- 验证
+- 在本地 worktree 编码
+- 在本地 workspace 验证
 - 开 PR
 - 接收 review 结果
 - 修复并重新验证
 
 `ralph` 不只是“写代码的 agent”，而是整个 coding loop 的执行 owner。
+它不是“把编码工作分发给外部 execution command 的 orchestrator”，而是标准主链上真正完成编码任务的 builtin agent。
 
 ### 3. `code-review-agent`
 
@@ -68,7 +69,7 @@
 
 负责：
 
-- 审查具体变更
+ - 在本地 workspace / diff 上审查具体变更
 - 识别 blocking / non-blocking finding
 - 输出机器可消费的 review 结果
 - 输出人可读的 review 摘要
@@ -78,6 +79,7 @@
 - 直接改代码
 - 代替 `ralph` 修复问题
 - 主持用户入口对话
+- 用 permissive fallback 掩盖 review runtime 失败
 
 ## 三、当前正式闭环
 
@@ -94,6 +96,12 @@
 9. 最多 3 轮 review / repair
 10. 当 blocking finding 清零后，由控制面统一做 final delivery
 
+补充：
+
+- 本链路默认依赖 builtin agent 的原生执行能力
+- MCP 主要负责 GitHub / GitLab / channel bridge，不替代 builtin agent 的本地编码和 review ownership
+- 若 builtin coding/review capability 当前不可用，链路应显式失败，而不是伪装成完成
+
 ## 四、闭环约束
 
 ### 1. `main-agent` 约束
@@ -108,6 +116,7 @@
 - 行为变更必须带验证
 - review 之前必须有验证结果或明确验证缺口
 - 不能跳过 PR 和 review 直接宣布完成
+- 不能把标准编码路径默认降级成“外部 command 成功即可”
 
 ### 3. `code-review-agent` 约束
 
@@ -115,6 +124,7 @@
 - `P0/P1` 视为 blocking
 - finding 必须足够具体，能直接驱动 repair
 - 不以风格偏好制造 blocking loop
+- 如果 review runtime 或 review context 无法成立，必须显式失败，不得回退成默认 non-blocking 结论
 
 ## 五、最多 3 轮的 review / repair contract
 
@@ -140,6 +150,10 @@
 - issue 创建时可发“任务开始”通知
 - 中间 review / repair 可发过程通知，但不能冒充成功交付
 - 只有在 review loop 通过后，才能发送 final delivery
+
+并且：
+
+- review 结果必须是真实 review truth，不接受 dry-run success 或 permissive fallback 充当交付门禁
 
 这保证用户看到的“完成”与真实系统状态一致。
 
@@ -176,3 +190,5 @@ handoff 的详细格式以 `docs/handoffs/README.md` 与模板为准。
 - 仅对权限、门禁、状态投影、artifact contract 做确定性编排
 
 如果某项能力本质上属于理解、规划、review 推理或 handoff 组织，应优先交给 agent，而不是继续下沉成更细的流程代码。
+
+同理，若某项能力本质上属于 builtin agent 的本地编码或本地 review，也应优先让 builtin agent 自己完成，而不是把执行 ownership 外包给默认 command 路径。

@@ -1,6 +1,8 @@
 import hashlib
 import json
+import tempfile
 import unittest
+from pathlib import Path
 
 from app.control.workflow import GatewayWorkflowResult
 from app.core.config import Settings
@@ -136,6 +138,75 @@ class FeishuWebhookServiceTests(unittest.TestCase):
                     "X-Lark-Signature": "bad-signature",
                 },
             )
+
+    def test_handle_message_event_prefers_canonical_chat_endpoint_mapping(self) -> None:
+        workflow = FakeGatewayWorkflowService()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            platform_json = Path(temp_dir) / "platform.json"
+            platform_json.write_text(
+                json.dumps(
+                    {
+                        "channel": {
+                            "provider": "feishu",
+                            "default_endpoint": "fallback-entry",
+                            "endpoints": {
+                                "fallback-entry": {
+                                    "provider": "feishu",
+                                    "mode": "primary",
+                                    "entry_enabled": True,
+                                    "delivery_enabled": True,
+                                },
+                                "chat-entry": {
+                                    "provider": "feishu",
+                                    "mode": "primary",
+                                    "entry_enabled": True,
+                                    "delivery_enabled": True,
+                                    "external_refs": ["feishu:chat:oc_123"],
+                                    "delivery_policy": {
+                                        "mode": "fixed_endpoint",
+                                        "endpoint_id": "feishu-delivery",
+                                    },
+                                },
+                                "feishu-delivery": {
+                                    "provider": "feishu",
+                                    "mode": "delivery",
+                                    "entry_enabled": False,
+                                    "delivery_enabled": True,
+                                },
+                            },
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            settings = Settings(
+                app_env="test",
+                feishu_verification_token="token-1",
+                feishu_encrypt_key="encrypt-key",
+                platform_config_path=str(platform_json),
+            )
+            service = FeishuWebhookService(settings, workflow=workflow)
+            payload = {
+                "schema": "2.0",
+                "header": {"event_type": "im.message.receive_v1"},
+                "event": {
+                    "sender": {"sender_id": {"open_id": "ou_123"}},
+                    "message": {
+                        "message_id": "om_123",
+                        "chat_id": "oc_123",
+                        "message_type": "text",
+                        "content": json.dumps({"text": "请开始处理这个需求"}),
+                    },
+                },
+                "token": "token-1",
+            }
+            raw_body = json.dumps(payload).encode("utf-8")
+            headers = self._signed_headers(raw_body, settings.feishu_encrypt_key or "")
+
+            response = service.handle_event(raw_body, headers)
+
+        self.assertEqual(response["code"], 0)
+        self.assertEqual(workflow.requests[0].endpoint_id, "chat-entry")
 
     def _signed_headers(self, raw_body: bytes, encrypt_key: str) -> dict[str, str]:
         timestamp = "1700000000"

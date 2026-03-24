@@ -1,3 +1,5 @@
-# Private Docs
+# Private Documentation
 
-这里用于放私有 SOP、项目说明和 agent workspace 文档。
+This directory contains private documentation for the Private Agent Suite.
+
+The contents here are only accessible to agents defined in this project.

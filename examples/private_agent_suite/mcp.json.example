@@ -1,13 +1,9 @@
 {
-  "servers": {
-    "github": {
-      "transport": "stdio",
+  "servers": [
+    {
+      "name": "filesystem",
       "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-github"],
-      "env": {
-        "GITHUB_PERSONAL_ACCESS_TOKEN": "replace-me"
-      },
-      "adapter": "github"
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "./private_docs"]
     }
-  }
+  ]
 }

@@ -1,0 +1,20 @@
+{
+  "name": "private-agent-suite",
+  "version": "1.0.0",
+  "description": "Sample private agent project",
+  "private": true,
+  "endpoint_bindings": [
+    {
+      "name": "internal-api",
+      "url": "https://internal.example.com/api",
+      "auth": "bearer"
+    }
+  ],
+  "retrieval_domains": [
+    {
+      "name": "private-docs",
+      "type": "filesystem",
+      "path": "private_docs"
+    }
+  ]
+}

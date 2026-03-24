@@ -1,10 +1,16 @@
 # Private Agent Suite Example
 
-这个示例展示一个独立私有项目如何复用 `Marten`：
+This is a sample private project that demonstrates how to use Marten's public surface to define custom agents, endpoint bindings, and private retrieval domains.
 
-- 继续使用官方内置 `main-agent`、`ralph`、`code-review-agent`
-- 为私有编码入口绑定独立 endpoint
-- 在私有项目层声明私有知识域 `private-sop`
-- 不直接 import `app/control/*` 等 internal-only 细节
+## Structure
 
-最小验证关注的是配置装配和能力复用，不是把私有业务逻辑重新塞回框架仓库。
+- `agents.json` - Agent definitions for this project
+- `platform.json` - Platform configuration
+- `models.json.example` - Example model configuration
+- `mcp.json.example` - Example MCP server configuration
+- `skills/` - Custom skills for this project
+- `private_docs/` - Private documentation
+
+## Usage
+
+This project can be used as a template for creating private agent deployments using only Marten's public API surface.

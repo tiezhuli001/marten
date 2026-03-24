@@ -1,21 +1,11 @@
 {
-  "profiles": {
-    "default": {
-      "model": "openai/gpt-5-mini"
-    },
-    "coding": {
-      "model": "openai/gpt-5-mini"
-    },
-    "review": {
-      "model": "openai/gpt-5-mini"
+  "version": "1.0",
+  "models": [
+    {
+      "id": "default-model",
+      "provider": "openai",
+      "model": "gpt-4",
+      "enabled": true
     }
-  },
-  "providers": {
-    "openai": {
-      "protocol": "openai",
-      "api_key": "replace-me",
-      "api_base": "https://api.openai.com/v1",
-      "default_model": "gpt-5-mini"
-    }
-  }
+  ]
 }

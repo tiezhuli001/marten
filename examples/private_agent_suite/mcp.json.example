@@ -1,13 +1,4 @@
 {
-  "servers": {
-    "github": {
-      "transport": "stdio",
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-github"],
-      "env": {
-        "GITHUB_PERSONAL_ACCESS_TOKEN": "replace-me"
-      },
-      "adapter": "github"
-    }
-  }
+  "version": "1.0",
+  "servers": []
 }

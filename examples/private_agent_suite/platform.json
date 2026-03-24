@@ -1,0 +1,11 @@
+{
+  "version": "1.0",
+  "platform": {
+    "name": "private-agent-suite",
+    "type": "private-project"
+  },
+  "extensions": {
+    "enabled": true,
+    "configs": []
+  }
+}

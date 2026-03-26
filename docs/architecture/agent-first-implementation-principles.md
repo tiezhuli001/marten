@@ -117,6 +117,7 @@
 - 自动把 review 解释成 non-blocking
 - 自动把 dry-run 解释成真实完成
 - 自动把缺失 capability 解释成可接受降级
+- 自动把 execution provider 失败改写成 heuristic success
 
 ## 四、哪些地方必须保持工程化
 
@@ -176,6 +177,7 @@
 - final delivery 必须以 review approved 为前置条件
 - provider 切换不影响 retrieval contract
 - builtin coding/review capability 缺失时显式失败
+- transport retry 只能处理传输层问题，不能上浮成业务成功兜底
 - self-host 单任务阶段允许保留：
   - single-flight queue / active lane truth
   - repo continuity truth
@@ -193,6 +195,7 @@
 3. 如果这是 retrieval 注入、prompt 预算、context 裁剪，优先先补 runtime context policy，而不是平铺字符串
 4. 如果代码约束只是为了弥补 schema 不稳定，优先先补 schema 与测试
 5. 如果新逻辑需要引入多个额外状态，先反问能否收敛成更少 gate
+6. 如果某个“恢复逻辑”会把失败改写成成功，默认视为越界；先保留失败证据，再决定是否允许 operator 触发恢复
 
 ## 七、落地要求
 

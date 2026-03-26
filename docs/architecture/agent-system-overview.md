@@ -101,6 +101,8 @@
 - 本链路默认依赖 builtin agent 的原生执行能力
 - MCP 主要负责 GitHub / GitLab / channel bridge，不替代 builtin agent 的本地编码和 review ownership
 - 若 builtin coding/review capability 当前不可用，链路应显式失败，而不是伪装成完成
+- transport 层短时抖动允许有限重试，但 retry 耗尽后必须暴露真实失败，不默认切到另一条成功路径
+- structured output / runtime capability / context assembly 若无法成立，必须显式失败并保留 operator evidence
 
 ## 四、闭环约束
 
@@ -117,6 +119,7 @@
 - review 之前必须有验证结果或明确验证缺口
 - 不能跳过 PR 和 review 直接宣布完成
 - 不能把标准编码路径默认降级成“外部 command 成功即可”
+- 不能把 execution runtime 失败默认改写成 heuristic success；transport retry 用尽后应显式失败
 
 ### 3. `code-review-agent` 约束
 
@@ -125,6 +128,24 @@
 - finding 必须足够具体，能直接驱动 repair
 - 不以风格偏好制造 blocking loop
 - 如果 review runtime 或 review context 无法成立，必须显式失败，不得回退成默认 non-blocking 结论
+
+## 四点五、失败语义规则
+
+主链关键步骤的正式失败语义如下：
+
+- transport retry：
+  - 仅适用于底层 provider / network 短时异常
+  - 必须有明确次数和延迟
+  - retry 耗尽后必须抛出真实错误
+- agent runtime failure：
+  - 不默认切 heuristic success
+  - 必须把阶段、异常、上下文摘要写入 operator evidence
+- structured output failure：
+  - 不把 parse failure 解释成“模型大体成功”
+  - 必须保留原始输出片段或安全截断后的摘要，供后续排查
+- delivery failure：
+  - 不得把通知成功等同于交付成功
+  - 交付 truth 仍以 review gate、validation evidence 和 task state 为准
 
 ## 五、最多 3 轮的 review / repair contract
 

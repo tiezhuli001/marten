@@ -81,7 +81,28 @@ class ReviewService:
             else None
         )
         context = self.context_builder.build_context(target, parent_run_session_id)
-        run_result = self.skill.run(target, context)
+        try:
+            run_result = self.skill.run(target, context)
+        except Exception as exc:
+            if parent_control_task is not None:
+                payload_patch = {"last_error": str(exc)}
+                failure_evidence = getattr(exc, "failure_evidence", None)
+                if failure_evidence is not None:
+                    payload_patch["review_failure_evidence"] = failure_evidence
+                self.tasks.update_task(
+                    parent_control_task.task_id,
+                    payload_patch=payload_patch,
+                )
+                self.tasks.append_event(
+                    parent_control_task.task_id,
+                    "review_failed",
+                    {
+                        "domain_task_id": target.task_id,
+                        "error": str(exc),
+                        "failure_evidence": failure_evidence,
+                    },
+                )
+            raise
         structured = self._apply_blocking_override(target, run_result.output)
         review_usage = run_result.token_usage.model_copy(update={"step_name": "code_review"})
         severity_counts = count_findings_by_severity(structured.findings)

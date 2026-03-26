@@ -18,7 +18,7 @@ def main(argv: list[str] | None = None) -> int:
         "suite",
         nargs="?",
         default="quick",
-        choices=("quick", "fast", "default", "regression", "full", "live"),
+        choices=("quick", "fast", "default", "regression", "full", "manual", "extended", "live"),
         help="Suite to run. Defaults to quick.",
     )
     args = parser.parse_args(argv)

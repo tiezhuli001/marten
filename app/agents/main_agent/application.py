@@ -264,8 +264,9 @@ class MainAgentService:
                     return mode, response.usage, chat_response, handoff
                 except (json.JSONDecodeError, ValidationError):
                     pass
-            except Exception:
-                raise
+            except Exception as exc:
+                if not self._should_fallback_on_llm_failure(exc):
+                    raise
         mode, chat_response, handoff = self._build_heuristic_main_agent_output(payload, repo=repo)
         output_text = (
             chat_response
@@ -282,6 +283,17 @@ class MainAgentService:
         if llm_usage is not None:
             return mode, llm_usage, chat_response, handoff
         return mode, usage.model_copy(update={"message_count": 2}), chat_response, handoff
+
+    def _should_fallback_on_llm_failure(self, exc: Exception) -> bool:
+        message = str(exc).lower()
+        return any(
+            marker in message
+            for marker in (
+                "llm provider is unreachable",
+                "timed out",
+                "remote end closed connection without response",
+            )
+        )
 
     def _generate_issue_draft_with_retry(self, prompt: str):
         return self.agent_runtime.generate_structured_output(

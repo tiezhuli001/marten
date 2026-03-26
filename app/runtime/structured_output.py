@@ -7,6 +7,15 @@ from typing import Any
 
 
 def parse_structured_object(output_text: str) -> Any:
+    """Best-effort boundary extractor for model-generated objects.
+
+    This helper is intentionally tolerant: it first tries strict JSON, then
+    extracts the outermost object slice, normalizes common Ruby-style hash
+    rockets, and finally falls back to ``ast.literal_eval``.
+
+    It is not the source of truth for workflow correctness. Callers must still
+    enforce workflow-specific schema validation and fail-closed behavior.
+    """
     try:
         return json.loads(output_text)
     except json.JSONDecodeError:

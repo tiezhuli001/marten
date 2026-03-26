@@ -5,6 +5,7 @@ from pathlib import Path
 
 from app.core.config import Settings
 from app.runtime.agent_runtime import AgentDescriptor, AgentRuntime
+from app.runtime.mcp import InMemoryMCPServer, MCPClient
 from app.rag import InMemoryRetrievalProvider, RAGFacade
 
 
@@ -25,6 +26,93 @@ class FakeLLMRuntime:
 
 
 class AgentRuntimePolicyTests(unittest.TestCase):
+    def test_code_review_workflow_disables_tool_catalog_in_prompt(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            review_workspace = root / "agents" / "code-review-agent"
+            review_workspace.mkdir(parents=True)
+            (review_workspace / "AGENTS.md").write_text("Review agent rules.", encoding="utf-8")
+
+            client = MCPClient()
+            server = InMemoryMCPServer()
+            server.register_tool(
+                "get_issue",
+                lambda arguments: arguments,
+                server="github",
+                description="Fetch GitHub issue details.",
+            )
+            client.register_adapter("github", server)
+
+            fake_llm = FakeLLMRuntime()
+            runtime = AgentRuntime(
+                settings=Settings(),
+                llm_runtime=fake_llm,
+                mcp_client=client,
+            )
+
+            runtime.generate_structured_output(
+                AgentDescriptor(
+                    agent_id="code-review-agent",
+                    workspace=review_workspace,
+                    skill_names=[],
+                    mcp_servers=["github"],
+                    system_instruction="Review changes.",
+                    model_profile="review",
+                    execution_policy="review",
+                ),
+                user_prompt="Review the patch.",
+                output_contract="Return JSON.",
+                workflow="code_review",
+            )
+
+            system_prompt = fake_llm.requests[0].messages[0].content
+            self.assertIn("Available MCP Tools:", system_prompt)
+            self.assertIn("structured-output runtime cannot execute tool calls", system_prompt)
+            self.assertNotIn("github.get_issue", system_prompt)
+
+    def test_sleep_coding_workflow_disables_tool_catalog_in_prompt(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            ralph_workspace = root / "agents" / "ralph"
+            ralph_workspace.mkdir(parents=True)
+            (ralph_workspace / "AGENTS.md").write_text("Ralph agent rules.", encoding="utf-8")
+
+            client = MCPClient()
+            server = InMemoryMCPServer()
+            server.register_tool(
+                "get_issue",
+                lambda arguments: arguments,
+                server="github",
+                description="Fetch GitHub issue details.",
+            )
+            client.register_adapter("github", server)
+
+            fake_llm = FakeLLMRuntime()
+            runtime = AgentRuntime(
+                settings=Settings(),
+                llm_runtime=fake_llm,
+                mcp_client=client,
+            )
+
+            runtime.generate_structured_output(
+                AgentDescriptor(
+                    agent_id="ralph",
+                    workspace=ralph_workspace,
+                    skill_names=[],
+                    mcp_servers=["github"],
+                    system_instruction="Generate coding drafts.",
+                    model_profile="default",
+                ),
+                user_prompt="Generate the initial coding draft.",
+                output_contract="Return JSON.",
+                workflow="sleep_coding",
+            )
+
+            system_prompt = fake_llm.requests[0].messages[0].content
+            self.assertIn("Available MCP Tools:", system_prompt)
+            self.assertIn("structured-output runtime cannot execute tool calls", system_prompt)
+            self.assertNotIn("github.get_issue", system_prompt)
+
     def test_system_prompt_uses_explicit_bootstrap_section(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

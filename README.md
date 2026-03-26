@@ -20,7 +20,7 @@ Marten turns `Feishu / GitHub / GitLab / MCP / local worktrees` into one executa
 - `LLM + skill + MCP` as the primary capability surface
 - Local repository execution for coding, testing, and review
 - Stable runtime contracts instead of brittle workflow sprawl
-- Retrieval provider abstraction with interchangeable vector backends
+- Retrieval facade kept behind a stable contract for future backend integration
 
 ## Why Marten
 
@@ -65,7 +65,7 @@ flowchart LR
 - Ralph works in a local worktree and emits structured coding and review artifacts
 - Code Review Agent produces stable machine-readable and human-readable review payloads
 - Final delivery is gated on review approval, not just coding completion
-- Retrieval stays behind a unified contract while providers can switch between `Qdrant`, `Milvus`, and future backends
+- Retrieval stays behind a unified contract so future vector backends can be added without changing the main chain
 
 ## Architecture
 
@@ -194,7 +194,7 @@ Marten keeps retrieval behind a stable facade so upper layers do not care which 
 - Provider selection is configuration-driven
 - Search and fetch mapping stay normalized at the retrieval layer
 - Collection schema and incremental indexing can be handled per provider behind the same contract
-- Current validated providers include `Qdrant` and `Milvus`
+- 当前保留的是最小 retrieval contract、policy 与 indexing 基础面；具体向量库接入留到真正需要时再补
 
 Design reference:
 
@@ -232,6 +232,12 @@ Run the broader non-live regression suite:
 python scripts/run_test_suites.py regression
 ```
 
+Run the non-default evolution/example suite separately when needed:
+
+```bash
+python scripts/run_test_suites.py manual
+```
+
 Run live validation separately:
 
 ```bash
@@ -241,9 +247,12 @@ python scripts/run_test_suites.py live
 Important regression areas:
 
 - Main Agent intake and mode routing
+- Feishu webhook intake, endpoint routing, and session continuity
 - worker polling and claim flow
 - Ralph local-first execution artifacts
 - review materialization and repair loop control
+- session/task registry and token ledger boundaries
+- shared LLM runtime normalization and pricing
 - retrieval provider contract stability
 - MVP end-to-end chain behavior
 - live-chain remains intentionally isolated because it depends on real local integrations
@@ -252,14 +261,16 @@ Important regression areas:
 
 Recommended reading order:
 
-1. [docs/architecture/agent-first-implementation-principles.md](./docs/architecture/agent-first-implementation-principles.md)
-2. [docs/architecture/agent-system-overview.md](./docs/architecture/agent-system-overview.md)
-3. [docs/architecture/agent-runtime-contracts.md](./docs/architecture/agent-runtime-contracts.md)
-4. [docs/architecture/rag-provider-surface.md](./docs/architecture/rag-provider-surface.md)
-5. [docs/evolution/agent-system-rollout-plan.md](./docs/evolution/agent-system-rollout-plan.md)
-6. [docs/evolution/rag-provider-rollout-plan.md](./docs/evolution/rag-provider-rollout-plan.md)
-7. [docs/handoffs/README.md](./docs/handoffs/README.md)
-8. [docs/README.md](./docs/README.md)
+1. [STATUS.md](./STATUS.md)
+2. [docs/README.md](./docs/README.md)
+3. [docs/architecture/current-mvp-status-summary.md](./docs/architecture/current-mvp-status-summary.md)
+4. [docs/architecture/agent-first-implementation-principles.md](./docs/architecture/agent-first-implementation-principles.md)
+5. [docs/architecture/agent-system-overview.md](./docs/architecture/agent-system-overview.md)
+6. [docs/architecture/agent-runtime-contracts.md](./docs/architecture/agent-runtime-contracts.md)
+7. [docs/architecture/main-chain-operator-runbook.md](./docs/architecture/main-chain-operator-runbook.md)
+8. [docs/plans/2026-03-24-private-server-self-host-rollout.md](./docs/plans/2026-03-24-private-server-self-host-rollout.md)
+
+If `STATUS.md` says the current implementation target is already complete, treat the latest plan as historical execution baseline for that completed rollout. Do not assume there is still an in-repo chunk to continue unless a newer plan or status update says so.
 
 ## Development Rules
 

@@ -76,8 +76,8 @@ class RalphDraftingService:
                 except (RuntimeError, json.JSONDecodeError, ValidationError, ValueError, SyntaxError):
                     plan = self.build_heuristic_plan(issue)
                 return (plan, response.usage.model_copy(update={"step_name": "sleep_coding_plan"}))
-            except Exception:
-                if self.settings.app_env != "test":
+            except Exception as exc:
+                if not self._should_fallback_on_llm_failure(exc) and self.settings.app_env != "test":
                     raise
         plan = self.build_heuristic_plan(issue)
         usage = self.estimate_usage(
@@ -86,6 +86,17 @@ class RalphDraftingService:
             output_text=plan.model_dump_json(),
         )
         return plan, usage
+
+    def _should_fallback_on_llm_failure(self, exc: Exception) -> bool:
+        message = str(exc).lower()
+        return any(
+            marker in message
+            for marker in (
+                "llm provider is unreachable",
+                "timed out",
+                "remote end closed connection without response",
+            )
+        )
 
     def build_heuristic_plan(self, issue: SleepCodingIssue) -> SleepCodingPlan:
         issue_body = issue.body.strip() or "Issue body is empty."

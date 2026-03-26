@@ -593,6 +593,55 @@ class SleepCodingWorkerServiceTests(unittest.TestCase):
             self.assertEqual(result.tasks[0].repo, "acme/platform-repo")
             self.assertEqual(result.tasks[0].issue.html_url, "https://github.com/acme/platform-repo/issues/55")
 
+    def test_poll_once_marks_claim_queued_when_lane_is_owned_by_other_task(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = build_settings(Path(temp_dir) / "worker.db")
+            github = FakeGitHubService()
+            mcp_client = build_github_mcp(github)
+            sleep_coding = build_sleep_coding_service(settings, mcp_client)
+            sessions = SessionRegistryService(settings)
+            worker = SleepCodingWorkerService(
+                settings=settings,
+                mcp_client=mcp_client,
+                sleep_coding=sleep_coding,
+                sessions=sessions,
+            )
+            sessions.acquire_execution_lane("other-active-task")
+
+            result = worker.poll_once()
+
+            self.assertEqual(result.claimed_count, 0)
+            queued_claim = next(claim for claim in result.claims if claim.issue_number == 55)
+            self.assertEqual(queued_claim.status, "queued")
+            self.assertEqual(result.tasks, [])
+
+    def test_poll_once_claims_queued_issue_after_lane_is_released(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = build_settings(Path(temp_dir) / "worker.db")
+            github = FakeGitHubService()
+            mcp_client = build_github_mcp(github)
+            sleep_coding = build_sleep_coding_service(settings, mcp_client)
+            sessions = SessionRegistryService(settings)
+            worker = SleepCodingWorkerService(
+                settings=settings,
+                mcp_client=mcp_client,
+                sleep_coding=sleep_coding,
+                sessions=sessions,
+            )
+            sessions.acquire_execution_lane("other-active-task")
+
+            first = worker.poll_once()
+            sessions.release_execution_lane("other-active-task")
+            second = worker.poll_once()
+
+            queued_claim = next(claim for claim in first.claims if claim.issue_number == 55)
+            claimed_claim = next(claim for claim in second.claims if claim.issue_number == 55)
+            self.assertEqual(first.claimed_count, 0)
+            self.assertEqual(queued_claim.status, "queued")
+            self.assertEqual(second.claimed_count, 1)
+            self.assertEqual(second.tasks[0].issue_number, 55)
+            self.assertEqual(claimed_claim.status, "awaiting_confirmation")
+
     def test_expire_stale_claim_marks_timeout(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             settings = build_settings(Path(temp_dir) / "worker.db")

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from http.client import RemoteDisconnected
 from time import sleep
 from time import perf_counter
 from typing import Any, Callable, Protocol
@@ -256,9 +257,21 @@ class SharedLLMRuntime:
                 delay_seconds = base_delay * (2 ** (attempt - 1))
                 if delay_seconds > 0:
                     self.sleep_fn(delay_seconds)
+            except Exception as exc:
+                if not self._is_retryable_transport_error(exc):
+                    raise
+                last_error = RuntimeError(str(exc))
+                if attempt >= max_attempts:
+                    break
+                delay_seconds = base_delay * (2 ** (attempt - 1))
+                if delay_seconds > 0:
+                    self.sleep_fn(delay_seconds)
 
         assert last_error is not None
         raise last_error
+
+    def _is_retryable_transport_error(self, exc: Exception) -> bool:
+        return isinstance(exc, (OSError, RemoteDisconnected))
 
     def _default_model_for_provider(self, provider: str, protocol: str) -> str:
         configured = self.settings.resolve_provider_default_model(provider)

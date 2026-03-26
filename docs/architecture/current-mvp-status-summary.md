@@ -159,26 +159,18 @@ GitHub 的 open/closed 不再直接充当业务状态真相。
 本轮测试链路分层与重试/等待收紧后，已通过：
 
 - `python scripts/run_test_suites.py quick`
-  - 结果：`Ran 119 tests in 11.662s ... OK`
-  - 端到端耗时：`real 13.26s`
+  - 结果：`Ran 132 tests in 9.063s ... OK`
 - `python scripts/run_test_suites.py regression`
-  - 结果：`Ran 154 tests in 17.561s ... OK`
-  - 端到端耗时：`real 19.85s`
-- `python -m unittest tests.test_mvp_e2e -v`
-  - 结果：`Ran 8 tests in 4.448s ... OK`
-- `python scripts/run_sleep_coding_validation.py`
-  - 结果：`Ran 3 tests in 0.609s ... OK`
-
-对照基线：
-
-- 旧的非 live curated 回归命令
-  - `python -m unittest tests.test_agent_runtime_policy tests.test_rag_capability tests.test_main_agent tests.test_gateway tests.test_sleep_coding tests.test_sleep_coding_worker tests.test_review tests.test_automation tests.test_runtime_components tests.test_mvp_e2e tests.test_framework_public_surface -v`
-  - 结果：`Ran 150 tests in 118.537s ... OK`
-  - 端到端耗时：`real 123.38s`
+  - 结果：`Ran 224 tests in 11.539s ... OK`
+- `python scripts/run_test_suites.py manual`
+  - 结果：`Ran 4 tests in 0.010s ... OK`
+- `python scripts/run_test_suites.py live`
+  - 结果：`Ran 4 tests in 84.283s ... OK`
 
 说明：
 
 - 默认本地开发路径不再顺带跑 live-chain。
+- `framework` facade 与 `RAG indexing` 已收口到 `manual` suite，不再混入默认主链回归。
 - service 层不再额外包一层通用 runtime retry；保留底层 LLM transport retry 和必要的 structured-output repair retry。
 - live-chain 仍单独保留，因为它依赖真实本地 MCP / LLM / delivery 集成，不能混入日常回归耗时。
 

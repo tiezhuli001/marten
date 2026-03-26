@@ -8,7 +8,7 @@ from time import sleep
 from app.agents.code_review_agent import ReviewService
 from app.agents.ralph import SleepCodingService
 from app.channel.delivery import DeliveryMessageBuilder
-from app.channel.notifications import ChannelNotificationService
+from app.channel.notifications import ChannelNotificationResult, ChannelNotificationService
 from app.control.events import ControlEvent, ControlEventBus, ControlEventType
 from app.control.session_registry import SessionRegistryService
 from app.control.sleep_coding_worker import SleepCodingWorkerService
@@ -600,7 +600,7 @@ class AutomationService:
             review_round=review_round,
             max_repair_rounds=self.max_repair_rounds,
         )
-        notification = self.channel.notify(
+        notification = self._notify_best_effort(
             title=title,
             lines=lines,
             endpoint_id=self._resolve_delivery_endpoint_id(task),
@@ -619,7 +619,7 @@ class AutomationService:
             blocking_reviews=blocking_reviews,
             max_repair_rounds=self.max_repair_rounds,
         )
-        notification = self.channel.notify(
+        notification = self._notify_best_effort(
             title=title,
             lines=lines,
             endpoint_id=self._resolve_delivery_endpoint_id(task),
@@ -659,7 +659,7 @@ class AutomationService:
         assert review is not None
         evidence = self._build_final_evidence(task, review)
         title, lines = self.delivery.build_final_delivery(task, review)
-        notification = self.channel.notify(
+        notification = self._notify_best_effort(
             title=title,
             lines=lines,
             endpoint_id=self._resolve_delivery_endpoint_id(task),
@@ -839,16 +839,24 @@ class AutomationService:
                 {"child_control_task_id": control_task.task_id, **payload},
             )
         if status in {"approved", "completed", "failed", "cancelled", "needs_attention"}:
-            owner_task_id = control_task.parent_task_id or control_task.task_id
-            lane_decision = self.sessions.release_execution_lane(owner_task_id)
-            self.tasks.update_task(
-                owner_task_id,
-                payload_patch={
-                    "queue_status": "completed" if lane_decision.snapshot.active_task_id is None else "running",
-                    "active_task_id": lane_decision.snapshot.active_task_id,
-                    "queued_task_ids": lane_decision.snapshot.queued_task_ids,
-                },
-            )
+            lane_snapshot = self.sessions.get_execution_lane()
+            release_ids: list[str] = []
+            for candidate in (control_task.task_id, control_task.parent_task_id):
+                if candidate and candidate not in release_ids:
+                    release_ids.append(candidate)
+            for candidate in release_ids:
+                if (
+                    lane_snapshot.active_task_id == candidate
+                    or candidate in lane_snapshot.queued_task_ids
+                ):
+                    lane_snapshot = self.sessions.release_execution_lane(candidate).snapshot
+            payload_patch = {
+                "queue_status": "completed" if lane_snapshot.active_task_id is None else "running",
+                "active_task_id": lane_snapshot.active_task_id,
+                "queued_task_ids": lane_snapshot.queued_task_ids,
+            }
+            for candidate in release_ids:
+                self.tasks.update_task(candidate, payload_patch=payload_patch)
 
     def _record_notification(
         self,
@@ -912,6 +920,28 @@ class AutomationService:
                         "stage": stage,
                     },
                 )
+
+    def _notify_best_effort(
+        self,
+        *,
+        title: str,
+        lines: list[str],
+        endpoint_id: str | None,
+    ) -> ChannelNotificationResult:
+        try:
+            return self.channel.notify(
+                title=title,
+                lines=lines,
+                endpoint_id=endpoint_id,
+            )
+        except Exception:
+            provider = getattr(self.channel, "provider", self.settings.resolved_channel_provider)
+            return ChannelNotificationResult(
+                provider=str(provider),
+                delivered=False,
+                is_dry_run=False,
+                endpoint_id=endpoint_id,
+            )
 
     def _resolve_delivery_endpoint_id(self, task: SleepCodingTask) -> str | None:
         control_task = self._get_control_task(task)

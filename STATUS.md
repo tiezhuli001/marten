@@ -1,295 +1,102 @@
 ## Goal
 
-推进 `Marten` 的“私有服务器自用”第一阶段上线：
+推进 `Marten` 的“私有服务器自用”第一阶段上线与后续纠偏：
 
 - `Feishu` 作为主入口，`Web/API` 作为诊断、运维和备用入口
-- 按配置和请求选择任意单个有权限的 GitHub 仓库
-- 单用户单任务优先，明确队列化或忙碌语义
 - 保持唯一主链 `Feishu/API -> main-agent -> ralph -> code-review-agent -> delivery`
-- 保持 `LLM + MCP + skill first`，工程代码只保留队列、状态真相、超时、诊断和 delivery gate
+- 保持 `LLM + MCP + skill first`，工程代码只保留状态真相、队列、超时、诊断和 delivery gate
+- 真实链路失败时暴露根因，不用宽松 fallback 伪装成功
 
 ## Current Phase
 
-- `private-server self-host rollout` 已完成实现与回归验证
+- `private-server self-host rollout` 已完成
+- `live-chain root-cause correction` 及其两个 follow-up 已完成本轮实现、harness 补强、回归和 fresh live 验证
+- `agent-first codebase reduction` 已在 `2026-03-26` 完成最终收口、delta gate 与 fresh verification
 
 ## Done Criteria
 
-- `README.md`、runbook、handoff 与 `STATUS.md` 对第一阶段 self-host 目标口径一致
-- 用户请求可明确绑定单个 repo，并沿 intake -> control task -> issue truth 贯通
-- 同一时刻只允许一个 active 主任务；busy / queued truth 可诊断
-- `Feishu` 作为主入口的 session continuity、delivery endpoint、状态解释稳定可用
-- `API` 保持 operator surface，不长成第二套业务编排
-- 服务器自用最小运行模型、配置前置和 diagnostics baseline 明确可执行
-- `quick / regression / live` 继续通过，且实现未偏离 `LLM + MCP + skill first`
+- 第一阶段 self-host 目标与 `README.md` / `docs/README.md` / `STATUS.md` 口径一致
+- 主链保持 `main-agent -> ralph -> code-review-agent -> delivery`
+- transport retry、structured-output failure、operator evidence、delivery truth 的边界明确且实现一致
+- `docs + tests` 相对基线净减重达到 `2,000+` 行
+- `quick / regression / manual / live` 全部 fresh 通过
 
 ## Current Target
 
-- 第一阶段 self-host rollout 已落地完成：
-  - 单任务队列与单活执行槽
-  - `Feishu` 主入口 session continuity 和忙碌/排队语义
-  - 配置驱动的 repo continuity
-  - API operator surface 与最小人工动作
-  - 固定服务器的 split-process 启动契约与 diagnostics baseline
-- 保持已有主链和分层测试能力不回退：
-  - `quick / regression / live` 继续分层
-  - runtime / review 继续 fail-closed
-  - 不恢复 command/fallback 兼容面
+- 以 `2026-03-26` fresh live 结果为当前运行基线
+- 保持 fail-closed failure semantics，不恢复关键路径 permissive fallback
+- 当前没有已证明安全的并发层删减候选，不直接删 SQLite / lane / claim 层
+- 当前没有未完成的仓内执行 chunk；如进入下一阶段，应先写新计划
 
 ## Next Action
 
-- 当前实现目标已完成。
-- 如果继续推进，下一步应是：
-  - 在目标私有服务器上按 split-process 契约真实部署
-  - 启用 `live_test.enabled=true` 后跑 live suite 做上线前验收
-  - 根据真实使用反馈决定是否进入下一阶段多 agent / 子 agent 隔离工作
+- 若继续下一轮：
+  - 先新建新的执行计划，不再继续复用已完成的 `2026-03-25` reduction / live-correction 计划
+  - 只有在未来某个 workflow 真正引入强协议需求时，才新增 strict parser 或新的 tool-call runtime
 
 ## Completed Work
 
-- `2026-03-24` 文档与实现漂移复核已完成：
-  - `STATUS.md`
-    - 清理过期 `In Progress` 残留，不再保留已完成 chunk 的进行中口径
-  - `docs/internal/handoffs/2026-03-23-context-sync-handoff.md`
-    - 为 chunk 执行日志补充“历史归档”说明
-    - 把历史小节中的“当前下一步”改成“当时记录的下一步”
-  - `docs/architecture/current-mvp-status-summary.md`
-    - 更新时间切到 `2026-03-24`
-    - 明确 self-host 第一阶段 rollout 已完成，当前重点转为真实部署与验收
-  - 实现复核结论：
-    - `app/main.py` 仍是纯 API 进程，没有把 scheduler 挂回主进程
-    - `scripts/run_worker_scheduler.py` 仍是独立 worker 入口
-    - `app/infra/diagnostics.py` 仍以 `self_host_boot.process_model = split_process` 暴露固定服务器契约
-- Chunk 8 已完成并验证：
-  - `python scripts/run_test_suites.py regression`
-    - PASS (`Ran 170 tests in 9.809s`)
-  - `python -m unittest tests.test_live_chain -v`
-    - PASS (`Ran 4 tests in 210.589s`)
-  - 回归覆盖：
-    - main-agent / gateway / single-flight
-    - Ralph coding / worker / review / automation
-    - API operator surface / diagnostics / e2e
-  - 结论：
-    - 当前 self-host rollout 变更集已经通过完整 regression sweep
-- Chunk 7 已完成并验证：
-  - `docs/architecture/agent-first-implementation-principles.md`
-    - 明确 self-host 阶段允许保留的确定性控制：
-      - single-flight queue
-      - repo continuity
-      - operator snapshot / control task actions
-      - self-host boot diagnostics / split-process startup contract
-  - `python -m unittest tests.test_main_agent tests.test_review -v`
-    - PASS (`Ran 34 tests in 0.826s`)
-  - 结论：
-    - 本轮产品化没有把 main-agent / Ralph / review 的认知职责搬回工程编排层
-- Chunk 6 已完成并验证：
-  - `app/main.py`
-    - API 进程不再内挂 scheduler，正式回到 split-process 运行模型
-  - `app/infra/scheduler.py`
-    - 新增 `run_forever()`，供独立 worker 进程使用
-  - `scripts/run_worker_scheduler.py`
-    - 新增最小 scheduler/worker 启动入口
-  - `app/infra/diagnostics.py`
-    - 新增 `repo_contract`
-    - 新增 `self_host_boot`，暴露 split-process 契约、repo mode 和 boot `next_action`
-  - `tests/test_runtime_components.py`
-    - 覆盖 self-host boot readiness / split-process contract
-  - `README.md`
-    - 增加 API / worker 双进程启动契约
-  - `docs/architecture/main-chain-operator-runbook.md`
-    - 增加 `self_host_boot` 的 operator 判读规则
-  - 结论：
-    - 固定服务器自用阶段现在有明确的双进程启动契约
-    - 启动前 diagnostics 能直接指出 boot blockers，而不是只给零散组件状态
-- Chunk 4 已完成并验证：
-  - `app/models/schemas.py`
-    - 新增 operator snapshot / control-task operator action schema
-  - `app/api/routes.py`
-    - 新增 `GET /control/operator/state`
-    - 新增 `POST /control/tasks/{task_id}/actions`
-  - `app/control/automation.py`
-    - 新增 deterministic `handle_control_task_action()`
-    - 支持 `approve_plan` / `resume` / `mark_needs_attention`
-  - `app/control/task_store.py`
-    - `find_latest_task()` 支持跨 task type 查最近失败项
-  - `app/control/task_registry.py`
-    - operator snapshot 可消费最近失败 control task truth
-  - `tests/test_runtime_components.py`
-    - 覆盖 operator state 返回 active / queued / recent failure
-  - `tests/test_mvp_e2e.py`
-    - 覆盖 `/control/operator/state` 真实返回 active / queued
-  - `tests/test_automation.py`
-    - 覆盖 control task action 的 approve_plan / resume / mark_needs_attention
-  - `README.md`
-    - 增加 operator state / control task actions 入口
-  - `docs/architecture/main-chain-operator-runbook.md`
-    - operator 检查顺序改为先看 `/control/operator/state`
-  - 结论：
-    - API 现在能承担单租户自用阶段的 operator surface
-    - 没有把 API 做成第二套业务编排；只是暴露 deterministic control truth 和最小人工动作
-- Chunk 5 已完成并验证：
-  - `app/control/task_store.py`
-    - 新增 `find_latest_task()`，供单租户单任务阶段回收最新待处理 intake repo truth
-  - `app/control/task_registry.py`
-    - 暴露 `find_latest_task()` 给 control/worker 层使用
-  - `app/control/sleep_coding_worker.py`
-    - worker poll repo 解析优先级改为：
-      - `request.repo`
-      - execution lane active/queued parent repo
-      - 最新待处理 main-agent intake repo
-      - 最后才回退默认 repo
-    - start_task 时优先继承 parent repo，不再在 claim/resume 时掉回默认仓库
-  - `app/agents/ralph/workflow.py`
-    - Ralph start_task 优先继承 `parent_task.repo`
-  - `tests/test_main_agent.py`
-    - 补充 request repo 也进入开工通知内容
-  - `tests/test_sleep_coding_worker.py`
-    - 覆盖 active parent repo 优先于默认 repo
-  - `tests/test_mvp_e2e.py`
-    - 覆盖 custom repo 从 intake -> worker -> review -> delivery 全链路 continuity
-  - 结论：
-    - 单任务自用阶段现在能稳定处理“默认 repo 之外的单个目标 repo”
-    - worker / Ralph 不会在无显式 `repo` 时偷偷掉回默认仓库
-- Chunk 3 已完成并验证：
-  - `app/channel/endpoints.py`
-    - endpoint 解析支持 canonical session ref + raw external ref 候选，Feishu chat 绑定不再依赖开发态默认 endpoint
-  - `app/channel/feishu.py`
-    - Feishu inbound 统一使用 canonical `session_key`
-    - ack 显式返回 `source_endpoint_id` / `delivery_endpoint_id`
-  - `app/control/gateway.py`
-    - 每次请求后把 `last_task_id` / `last_workflow_state` / endpoint linkage 写回 run/user session
-    - gateway endpoint 解析也感知 canonical session ref
-  - `app/control/session_registry.py`
-    - 新增 `record_session_turn()`，持久化 session continuity 和 task linkage truth
-  - `app/control/context.py`
-    - `main-agent` 上下文增加 `Session State`，但不覆盖当前用户输入
-  - `app/infra/diagnostics.py`
-    - `feishu` 组件增加 `inbound_status` / `delivery_status`
-  - `README.md`
-    - 增加服务器自用启动后的 Feishu smoke path 检查项
-  - `docs/architecture/main-chain-operator-runbook.md`
-    - 增加 Feishu-first diagnostics 字段和 operator 场景说明
-  - `tests/test_feishu.py`
-    - 覆盖 canonical chat endpoint external ref 绑定
-  - `tests/test_gateway.py`
-    - 覆盖同一 Feishu session 下 stats -> coding 的 task linkage continuity
-  - `tests/test_mvp_e2e.py`
-    - 覆盖 Feishu stats -> coding 复用 session 且命中 chat endpoint / delivery endpoint
-  - `tests/test_runtime_components.py`
-    - 覆盖 Feishu inbound/delivery readiness diagnostics
-  - 结论：
-    - Feishu 现在具备稳定的 canonical chat session continuity
-    - status query 不会吞掉后续真实 coding 请求
-    - operator 能从 diagnostics 和 task payload 看清 source/delivery endpoint truth
-- Chunk 2 已完成并验证：
-  - `app/models/schemas.py`
-    - 新增 `workflow_state`、`active_task_id` 和 execution lane schema
-  - `app/control/session_registry.py`
-    - 新增持久化 execution lane：active task + queued task ids
-  - `app/control/gateway.py`
-    - general/sleep-coding 入口加入 single-flight gate
-    - 第二个请求返回显式 `queued` / `running` 语义
-    - queue truth 写回 control task payload
-  - `app/control/workflow.py`
-    - queued/running 请求不再继续触发自动 follow-up
-  - `app/control/sleep_coding_worker.py`
-    - active lane 存在时，不 claim 不属于当前 active parent 的 issue
-    - queued parent 在被正式 claim 时切回 `running`
-  - `app/control/automation.py`
-    - parent task 进入终态后释放 execution lane
-  - `app/channel/feishu.py`
-    - ack 显式返回 `workflow_state` / `active_task_id` 映射
-  - `tests/test_gateway.py`
-    - 覆盖第二个 general 请求进入 queued 而不是继续触发主链
-  - `tests/test_session_registry.py`
-    - 覆盖 execution lane 的 accepted -> queued -> released 迁移
-  - `tests/test_mvp_e2e.py`
-    - 覆盖公开 `/gateway/message` API 返回 `accepted -> queued` 语义
-  - 结论：
-    - 当前已具备单活执行槽和可诊断 queue truth
-    - 没有把单任务约束下沉成 agent prompt 规则或额外业务编排系统
-- Chunk 1 已完成并验证：
-  - `README.md`
-    - 增加“私有服务器自用”运行形态说明
-    - 固定 `API/webhook` 与 `scheduler/worker` 双进程运行模型
-    - 明确 `Feishu` 主入口、`Web/API` operator surface、单任务约束
-  - `docs/architecture/main-chain-operator-runbook.md`
-    - 增加私有服务器自用阶段的单任务/排队 operator 说明
-    - 补充 busy / queued 诊断场景
-  - `STATUS.md`
-    - 增加 self-host 第一阶段 done criteria
-  - `tests/test_main_agent.py`
-    - 新增 `test_intake_prefers_request_repo_and_persists_it_on_control_task`
-  - `tests/test_mvp_e2e.py`
-    - 新增 `test_main_agent_intake_request_repo_round_trips_through_public_surfaces`
-  - 结论：
-    - 文档入口已统一到 self-host 叙事
-    - repo 语义已满足“请求优先，否则配置默认”，无需为 Chunk 1 额外扩编排代码
-- 顶层交接叙事已切换到“私有服务器自用上线”：
-  - `STATUS.md`
-  - `docs/plans/2026-03-24-private-server-self-host-rollout.md`
-  - `docs/internal/handoffs/2026-03-23-context-sync-handoff.md`
-  - 下一个 agent 现在应以 self-host rollout 为当前目标，而不是旧的测试优化阶段
-- 新增“私有服务器自用上线计划”：
-  - `docs/plans/2026-03-24-private-server-self-host-rollout.md`
-  - 范围：
-    - 私有服务器自用
-    - `Feishu` 主入口，`Web/API` 为辅
-    - 配置驱动选择任意单个有权限的 GitHub 仓库
-    - 单用户单任务优先，队列化处理
-    - 保持 `LLM + MCP + skill first`
-- `2026-03-24` 已按 re-entry 顺序完成上下文同步：
-  - 重新确认当前分支不是 `main`
-  - 重新阅读 `README.md`、`STATUS.md`、`docs/README.md`
-  - 重新阅读当前任务相关文档：
-    - `docs/architecture/current-mvp-status-summary.md`
-    - `docs/architecture/agent-first-implementation-principles.md`
-    - `docs/architecture/agent-system-overview.md`
-    - `docs/architecture/agent-runtime-contracts.md`
-    - `docs/evolution/mvp-evolution.md`
-    - `docs/plans/2026-03-23-agent-native-runtime-followup-hardening.md`
-    - `docs/plans/2026-03-23-main-chain-engineering-hardening-detailed.md`
-    - `docs/internal/handoffs/2026-03-23-context-sync-handoff.md`
-  - 结论：未发现新的目标漂移，当前仍以 builtin-agent 主链稳定性和分层测试入口稳定性为主
-- 新增测试套件定义：
-  - `app/testing/suites.py`
-  - `app/testing/__init__.py`
-  - `scripts/run_test_suites.py`
-- 默认测试入口切为 `quick`，把 live-chain 从日常回归中拆出
-- 移除 Main Agent 和 Review service 层额外的通用 runtime retry：
-  - `app/agents/main_agent/application.py`
-  - `app/agents/code_review_agent/skill.py`
-- 收紧 live test 配置：
-  - `tests/test_live_chain.py`
-  - live profile 默认使用更短 timeout、单次请求尝试、`0.2s` 轮询间隔、更短 prompt
-- 修复验证脚本引用过时测试名：
-  - `scripts/run_sleep_coding_validation.py`
-- 补充分层测试覆盖：
-  - `tests/test_test_suites.py`
-- 修正回归夹具，显式注入 fake builtin runtimes，避免 `tests.test_mvp_e2e` 偷偷外呼真实 OpenAI：
-  - `tests/test_mvp_e2e.py`
-- 收紧 live 主链 prompt / evidence 体积：
-  - `app/runtime/context_policy.py`
+- `2026-03-24` 第一阶段 self-host rollout 已完成：
+  - 单任务队列与单活执行槽已落地
+  - `Feishu` 主入口 session continuity 与 busy/queued 语义已落地
+  - repo continuity、operator surface、split-process 启动契约已落地
+- `2026-03-25` 文档与仓库减法已完成一轮收口：
+  - 清理 `docs/archive/` 中大批历史 rollout / architecture 草稿
+  - 收紧 `README.md` / `docs/README.md` 推荐阅读路径
+  - 删除 `examples/private_agent_suite/` 与 `tests/test_private_project_example.py`
+  - 将 RAG 收紧为 facade / policy / in-memory 示例保留面
+- `2026-03-26` `agent-first codebase reduction` 已闭环：
+  - `docs/archive/` 从 `3,412` 行 / `15` 个 Markdown 文件收口到 `253` 行 / `3` 个文件
+  - `docs/` 总量从 `8,275` 行降到 `6,068` 行
+  - `tests/test_framework_public_surface.py` 从默认回归移到 `manual`，并收紧到 `43` 行 smoke
+  - `tests/test_rag_capability.py` 从 `528` 行收紧到 `164` 行，只保留 facade retrieval 与 runtime merge contract
+  - `tests/test_rag_indexing.py` 维持 `manual`，不再作为默认主链回归面
+  - `app/rag/providers/*` 已删除，`app/rag/` 当前仅保留 `465` 行最小 retained surface
+  - `docs + tests` 从基线 `20,110` 行降到 `18,023` 行，净减重 `2,087` 行
+- `2026-03-25` 真实链路纠偏已完成：
+  - `app/agents/ralph/drafting.py`
+    - 移除 execution provider failure 后的 heuristic success fallback
+  - `app/agents/ralph/runtime_executor.py`
+  - `app/agents/code_review_agent/runtime_reviewer.py`
+    - structured output failure 现在保留 `failure_evidence`
+  - `app/agents/ralph/application.py`
+  - `app/agents/code_review_agent/application.py`
+    - execution / review 失败现在显式写回 control task evidence，并进入 `needs_attention`
   - `app/runtime/agent_runtime.py`
-  - `platform.json`
-  - 新增 agent 级 `max_chars` 覆盖，只对 `main-agent` 收紧 prompt 装配
-  - `app/agents/code_review_agent/context.py`
-    - review context 对 diff evidence / workspace snapshot 增加截断上限
-- 补充防回归测试：
-  - `tests/test_agent_runtime_policy.py`
-    - 覆盖 agent-specific context truncation
-  - `tests/test_review.py`
-    - 覆盖 oversized review diff/workspace context truncation
-- 修复 live-chain worktree 基线漂移：
-  - `app/infra/git_workspace.py`
-    - `prepare_worktree()` 不再从当前工作分支 `HEAD` 起新 worktree
-    - 优先从仓库基线分支起新 worktree，避免把当前开发分支相对 `main` 的历史差异带进 live PR
-  - `tests/test_sleep_coding.py`
-    - 新增 `test_prepare_worktree_uses_main_baseline_instead_of_current_head`
-    - 覆盖“当前分支存在额外提交时，live/worktree 不能继承这些无关提交”
-- 同步 README 与架构状态文档，改为分层测试命令
+    - `sleep_coding` / `code_review` 明确为无真实 tool-call loop 的 structured / artifact boundary
+  - `app/runtime/structured_output.py`
+    - 明确当前职责是宽容边界提取，不是主链强协议解析器
+  - `docs/architecture/live-chain-failure-semantics.md`
+    - 新增 failure semantics、runtime capability matrix、并发 inventory 真相说明
+    - 新增 `parse_structured_object()` call-site matrix
+- `2026-03-25` 并发纠偏结论已落地：
+  - 未做“看起来重复就删除”的锁层减法
+  - 先完成 inventory 审计，再只修真实 bug
+  - 已修复 terminal delivery 错释放 execution lane 的问题：
+    - `app/control/automation.py`
+    - `tests/test_automation.py::test_final_delivery_releases_lane_for_sleep_coding_control_task`
+  - 已补同 session 并发幂等与 worker claim 行为 harness：
+    - `tests/test_gateway.py::test_same_session_duplicate_message_is_idempotent_under_concurrency`
+    - `tests/test_session_registry.py::test_release_non_active_task_removes_only_queued_entry`
+    - `tests/test_sleep_coding_worker.py::test_poll_once_marks_claim_queued_when_lane_is_owned_by_other_task`
+    - `tests/test_session_registry.py::test_acquire_same_queued_task_id_is_idempotent`
+    - `tests/test_sleep_coding_worker.py::test_poll_once_claims_queued_issue_after_lane_is_released`
+  - 已验证 `Gateway` session lock 仍有真实语义价值：
+    - no-op lock 实验下，同 session 重复消息会被并发处理两次，不能直接删除
+  - 已验证 `execution_lane` 与 worker claim lease 不是同一层状态副本：
+    - lane 负责 active / queued 单活 truth
+    - claim lease 负责 issue poll / lease / retry 生命周期
+- `2026-03-26` fresh live 再验证通过：
+  - 最新 issue: `#233`
+  - 最新 sleep-coding control task: `beb885c0-df10-4984-927f-fea4e899aa32`
+  - 最新 sleep-coding task: `3fabd549-0fc5-44ad-ae63-14af3904f5af`
+  - 最新 review run: `073256b1-d6c3-4d46-884d-5047cb1875ce`
+  - 最新 PR: `https://github.com/tiezhuli001/marten/pull/234`
+  - live 完成后 `execution_lane` 已自动回空，不再残留 active task
 
 ## In Progress
 
-- 无
+- 无当前执行中的实现项
 
 ## Blockers
 
@@ -297,111 +104,25 @@
 
 ## Verification
 
-- `git branch --show-current`
-  - `codex/context-sync-20260323`
-- `rg -n "Chunk 3 进行中|当前下一步是|当时记录的下一步是|更新时间：2026-03-24|私有服务器自用的第一阶段 rollout 已完成|## In Progress|^- 无$" STATUS.md docs/internal/handoffs/2026-03-23-context-sync-handoff.md docs/architecture/current-mvp-status-summary.md`
-  - PASS，`STATUS.md` 已无过期进行中口径，handoff 中的 chunk next-step 已明确为历史记录
-- `sed -n '1,140p' app/main.py`
-  - 已核对，API 进程未内挂 scheduler
-- `sed -n '1,120p' scripts/run_worker_scheduler.py`
-  - 已核对，独立 worker 入口存在
-- `sed -n '240,320p' app/infra/diagnostics.py`
-  - 已核对，`self_host_boot.process_model = split_process`
-- `sed -n '1,240p' README.md`
-  - 已核对
-- `sed -n '1,260p' STATUS.md`
-  - 已核对
-- `sed -n '1,240p' docs/README.md`
-  - 已核对
-- `sed -n '1,260p' docs/architecture/current-mvp-status-summary.md`
-  - 已核对
-- `sed -n '1,240p' docs/architecture/agent-first-implementation-principles.md`
-  - 已核对
-- `sed -n '1,240p' docs/architecture/agent-system-overview.md`
-  - 已核对
-- `sed -n '1,260p' docs/architecture/agent-runtime-contracts.md`
-  - 已核对
-- `sed -n '1,260p' docs/evolution/mvp-evolution.md`
-  - 已核对
-- `sed -n '1,260p' docs/plans/2026-03-23-agent-native-runtime-followup-hardening.md`
-  - 已核对
-- `sed -n '1,260p' docs/plans/2026-03-23-main-chain-engineering-hardening-detailed.md`
-  - 已核对
-- `sed -n '1,260p' docs/plans/2026-03-24-private-server-self-host-rollout.md`
-  - 已新增并核对
-- `sed -n '1,260p' docs/internal/handoffs/2026-03-23-context-sync-handoff.md`
-  - 已核对
-- `nl -ba docs/plans/2026-03-24-private-server-self-host-rollout.md | sed -n '1,520p'`
-  - 已复核并补足交接可执行性
-- `nl -ba STATUS.md | sed -n '1,240p'`
-  - 已复核并切换当前目标到 self-host rollout
-- `nl -ba docs/internal/handoffs/2026-03-23-context-sync-handoff.md | sed -n '1,260p'`
-  - 已复核并切换顶层叙事到 self-host rollout
-- `rg -n "self-host|single-flight|Feishu|single tenant|single task" README.md docs STATUS.md`
-  - PASS，self-host / 单任务 / Feishu 主入口文档入口已补齐
-- `python -m unittest tests.test_main_agent tests.test_mvp_e2e -v`
-  - PASS (`Ran 24 tests in 2.175s`)
-- `python -m unittest tests.test_gateway tests.test_session_registry tests.test_mvp_e2e -v`
-  - PASS (`Ran 28 tests in 1.495s`)
-- `python -m unittest tests.test_feishu tests.test_gateway tests.test_mvp_e2e tests.test_runtime_components -v`
-  - PASS (`Ran 54 tests in 8.206s`)
-- `python -m unittest tests.test_main_agent tests.test_sleep_coding_worker tests.test_mvp_e2e -v`
-  - PASS (`Ran 39 tests in 3.161s`)
-- `python -m unittest tests.test_runtime_components tests.test_mvp_e2e tests.test_automation -v`
-  - PASS (`Ran 56 tests in 7.000s`)
-- `python -m unittest tests.test_runtime_components tests.test_mvp_e2e tests.test_live_chain -v`
-  - PASS (`Ran 43 tests in 6.227s`, `skipped=1` for disabled live integration)
-- `python -m unittest tests.test_main_agent tests.test_review -v`
-  - PASS (`Ran 34 tests in 0.826s`)
+- `python -m unittest tests.test_main_agent tests.test_sleep_coding tests.test_review tests.test_session_registry tests.test_sleep_coding_worker -v`
+  - PASS (`Ran 99 tests in 3.536s`)
+- `python -m unittest tests.test_gateway tests.test_session_registry tests.test_sleep_coding_worker -v`
+  - PASS (`Ran 36 tests in 1.090s`)
+- `python scripts/run_test_suites.py quick`
+  - PASS (`Ran 132 tests in 9.063s`)
 - `python scripts/run_test_suites.py regression`
-  - PASS (`Ran 170 tests in 9.809s`)
-- `python -m unittest tests.test_live_chain -v`
-  - PASS (`Ran 4 tests in 210.589s`)
-- `python -m unittest tests.test_main_agent tests.test_review tests.test_runtime_components tests.test_test_suites -v`
-  - PASS (`Ran 62 tests in 9.355s`)
-- `python -m unittest tests.test_mvp_e2e -v`
-  - PASS (`Ran 8 tests in 4.448s`)
-- `python scripts/run_sleep_coding_validation.py`
-  - PASS (`Ran 3 tests in 0.609s`)
-- `python -m unittest tests.test_agent_runtime_policy -v`
-  - PASS (`Ran 4 tests in 0.037s`)
-- `python -m unittest tests.test_review -v`
-  - PASS (`Ran 19 tests in 0.697s`)
-- `command time -lp python scripts/run_test_suites.py quick`
-  - PASS (`Ran 119 tests in 11.662s`, `real 13.26s`)
-- `command time -lp python scripts/run_test_suites.py regression`
-  - PASS (`Ran 154 tests in 17.561s`, `real 19.85s`)
-- `command time -lp python scripts/run_test_suites.py live`
-  - 初次失败：`LLM provider request timed out after 30.0 seconds`（main-agent intake）
-  - 二次失败：review context 过大导致 background follow-up 超时，现场 evidence 显示 review context `219731` chars
-  - 修复后 PASS (`Ran 4 tests in 139.008s`, `real 141.39s`)
-- `command time -lp python scripts/run_test_suites.py live`
-  - 最新复验 FAIL：`tests.test_live_chain.LiveChainIntegrationTests.test_real_chain_uses_live_llm_mcp_review_and_feishu`
-  - 结果：`Ran 4 tests in 184.887s`, `real 186.81s`
-  - 失败现场：
-    - task `6b70bd78-b58b-45a3-98a3-ea72999af8df` 最终 `status=needs_attention`
-    - `follow_up.failed`
-    - `background_follow_up_error = LLM provider request timed out after 30.0 seconds`
-- `python -m unittest tests.test_sleep_coding.GitWorkspaceServiceTests.test_prepare_worktree_uses_main_baseline_instead_of_current_head -v`
-  - PASS (`Ran 1 test in 0.130s`)
-- `python -m unittest tests.test_sleep_coding.GitWorkspaceServiceTests -v`
-  - PASS (`Ran 4 tests in 0.213s`)
-- `command time -lp python scripts/run_test_suites.py live`
-  - 修复后 PASS (`Ran 4 tests in 92.458s`, `real 94.23s`)
-- 旧非 live 基线对照：
-  - `command time -lp python -m unittest tests.test_agent_runtime_policy tests.test_rag_capability tests.test_main_agent tests.test_gateway tests.test_sleep_coding tests.test_sleep_coding_worker tests.test_review tests.test_automation tests.test_runtime_components tests.test_mvp_e2e tests.test_framework_public_surface`
-  - PASS (`real 123.38s`)
-
-## Goal Drift Check
-
-- 无新的目标偏移
-- 本轮优化保持了既定主链约束：
-  - builtin agent 仍是唯一主路径
-  - runtime 失败仍然显式暴露
-  - 更快的默认回归来自分层和去重试，不来自放宽 gate 或恢复 fallback
-- 本轮新增 live hardening 也未偏移目标：
-  - 没有放宽 live timeout 去掩盖超时
-  - 而是直接缩小 `main-agent` prompt 和 `code-review-agent` evidence context
-- 本轮 live 修复也未偏移目标：
-  - 没有恢复 fallback 或放宽 gate
-  - 而是修正 worktree 基线，避免把当前开发分支的无关历史差异污染 live PR
+  - PASS (`Ran 224 tests in 11.539s`)
+- `python scripts/run_test_suites.py manual`
+  - PASS (`Ran 4 tests in 0.010s`)
+- `python scripts/run_test_suites.py live`
+  - PASS (`Ran 4 tests in 84.283s`)
+- `find app -type f -name '*.py' -print0 | xargs -0 wc -l | tail -n 1`
+  - PASS (`15,637 total`)
+- `find tests -type f -name '*.py' -print0 | xargs -0 wc -l | tail -n 1`
+  - PASS (`11,955 total`)
+- `find docs -type f -name '*.md' -print0 | xargs -0 wc -l | tail -n 1`
+  - PASS (`6,068 total`)
+- `python - <<'PY' ... sessions.get_execution_lane() ... PY`
+  - PASS:
+    - `active_task_id: None`
+    - `queued_task_ids: []`

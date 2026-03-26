@@ -149,6 +149,41 @@ class SessionRegistryServiceTests(unittest.TestCase):
             self.assertEqual(snapshot.active_task_id, "task-2")
             self.assertEqual(snapshot.queued_task_ids, [])
 
+    def test_release_non_active_task_removes_only_queued_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings(database_url=f"sqlite:///{Path(temp_dir) / 'sessions.db'}")
+            service = SessionRegistryService(settings)
+
+            service.acquire_execution_lane("task-1")
+            service.acquire_execution_lane("task-2")
+            service.acquire_execution_lane("task-3")
+
+            released = service.release_execution_lane("task-2")
+            snapshot = service.get_execution_lane()
+
+            self.assertEqual(released.disposition, "released")
+            self.assertEqual(released.snapshot.active_task_id, "task-1")
+            self.assertEqual(released.snapshot.queued_task_ids, ["task-3"])
+            self.assertEqual(snapshot.active_task_id, "task-1")
+            self.assertEqual(snapshot.queued_task_ids, ["task-3"])
+
+    def test_acquire_same_queued_task_id_is_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings(database_url=f"sqlite:///{Path(temp_dir) / 'sessions.db'}")
+            service = SessionRegistryService(settings)
+
+            service.acquire_execution_lane("task-1")
+            first_queue = service.acquire_execution_lane("task-2")
+            second_queue = service.acquire_execution_lane("task-2")
+            snapshot = service.get_execution_lane()
+
+            self.assertEqual(first_queue.disposition, "queued")
+            self.assertEqual(second_queue.disposition, "queued")
+            self.assertEqual(first_queue.snapshot.queued_task_ids, ["task-2"])
+            self.assertEqual(second_queue.snapshot.queued_task_ids, ["task-2"])
+            self.assertEqual(snapshot.active_task_id, "task-1")
+            self.assertEqual(snapshot.queued_task_ids, ["task-2"])
+
 
 if __name__ == "__main__":
     unittest.main()

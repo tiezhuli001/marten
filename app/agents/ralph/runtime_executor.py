@@ -68,10 +68,21 @@ class RalphRuntimeExecutor:
                 try:
                     draft = self._parse_execution_output(final_response.output_text)
                 except Exception as third_error:
-                    raise RuntimeError(
+                    error = RuntimeError(
                         "Builtin Ralph runtime returned invalid structured execution output: "
                         f"{third_error}"
-                    ) from third_error
+                    )
+                    setattr(
+                        error,
+                        "failure_evidence",
+                        self._build_failure_evidence(
+                            response_text=final_response.output_text,
+                            parse_error=third_error,
+                            usage=final_response.usage,
+                            attempt="final",
+                        ),
+                    )
+                    raise error from third_error
                 return draft, final_response.usage.model_copy(update={"step_name": "sleep_coding_execution"})
             return draft, repair_response.usage.model_copy(update={"step_name": "sleep_coding_execution"})
         return draft, response.usage.model_copy(update={"step_name": "sleep_coding_execution"})
@@ -88,3 +99,21 @@ class RalphRuntimeExecutor:
             "Do not return shell commands, CLI flags, prose, markdown fences, or tool invocation syntax. "
             "The draft must reflect the real coding work Ralph would perform in the local worktree for this issue and plan."
         )
+
+    def _build_failure_evidence(
+        self,
+        *,
+        response_text: str,
+        parse_error: Exception,
+        usage,
+        attempt: str,
+    ) -> dict[str, str | None]:
+        excerpt = response_text[:500].strip()
+        return {
+            "stage": "sleep_coding_execution",
+            "attempt": attempt,
+            "provider": getattr(usage, "provider", None),
+            "model": getattr(usage, "model_name", None),
+            "parse_error": str(parse_error),
+            "raw_output_excerpt": excerpt,
+        }

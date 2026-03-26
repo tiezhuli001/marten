@@ -22,9 +22,22 @@ class RuntimeReviewer:
                 self._normalize_review_payload(parse_structured_object(response.output_text))
             )
         except Exception as exc:
-            raise RuntimeError(
+            error = RuntimeError(
                 f"Builtin code-review-agent returned invalid structured review output: {exc}"
-            ) from exc
+            )
+            excerpt = response.output_text[:500].strip()
+            setattr(
+                error,
+                "failure_evidence",
+                {
+                    "stage": "code_review",
+                    "provider": getattr(response.usage, "provider", None),
+                    "model": getattr(response.usage, "model_name", None),
+                    "parse_error": str(exc),
+                    "raw_output_excerpt": excerpt,
+                },
+            )
+            raise error from exc
         return (
             output.model_copy(
                 update={

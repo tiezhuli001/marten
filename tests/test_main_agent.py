@@ -394,6 +394,30 @@ class MainAgentServiceTests(unittest.TestCase):
             self.assertEqual(response.token_usage.total_tokens, 120)
             self.assertEqual(response.token_usage.step_name, "main_agent_issue_intake")
 
+    def test_intake_accepts_hash_rocket_wrapped_issue_draft(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            mcp_client = build_github_mcp()
+            wrapped_output = (
+                '{title => "Support hash rocket issue intake", '
+                'body => "Implement the issue intake path.", '
+                'labels => ["agent:main", "agent:ralph", "workflow:intake", "workflow:sleep-coding"]}'
+            )
+            service = MainAgentService(
+                build_settings(Path(temp_dir) / "main-agent.db", openai_api_key="test-key"),
+                channel=FakeChannelService(),
+                agent_runtime=FakeAgentRuntime(wrapped_output, mcp_client=mcp_client),
+                mcp_client=mcp_client,
+            )
+
+            response = service.intake(
+                MainAgentIntakeRequest(
+                    user_id="user-1",
+                    content="把 hash rocket 包装的 issue 草稿正常解析出来",
+                )
+            )
+
+            self.assertEqual(response.issue.title, "Support hash rocket issue intake")
+
     def test_intake_falls_back_to_heuristic_draft_when_provider_output_is_not_json(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             mcp_client = build_github_mcp()
@@ -465,7 +489,7 @@ class MainAgentServiceTests(unittest.TestCase):
 
             self.assertEqual(response.issue.issue_number, 202)
 
-    def test_intake_raises_when_llm_call_fails_with_provider_configured(self) -> None:
+    def test_intake_falls_back_to_heuristic_issue_when_llm_provider_is_unreachable(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             mcp_client = build_github_mcp()
             service = MainAgentService(
@@ -481,13 +505,17 @@ class MainAgentServiceTests(unittest.TestCase):
             )
             service.agent_runtime.mcp = mcp_client
 
-            with self.assertRaisesRegex(RuntimeError, "LLM provider is unreachable"):
-                service.intake(
-                    MainAgentIntakeRequest(
-                        user_id="user-1",
-                        content="模型异常时必须显式失败",
-                    )
+            response = service.intake(
+                MainAgentIntakeRequest(
+                    user_id="user-1",
+                    content="模型异常时回退到启发式 issue",
                 )
+            )
+
+            self.assertEqual(response.mode, "coding_handoff")
+            self.assertIsNotNone(response.issue)
+            assert response.issue is not None
+            self.assertIn("[Main Agent]", response.issue.title)
 
     def test_intake_surfaces_github_mcp_error_payload(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -619,6 +619,65 @@ class GatewayRoutingTests(unittest.TestCase):
         self.assertEqual(len(results), 2)
         self.assertEqual(len(main_agent.started), 2)
 
+    def test_same_session_duplicate_message_is_idempotent_under_concurrency(self) -> None:
+        class BlockingMainAgentService(FakeMainAgentService):
+            def __init__(self) -> None:
+                super().__init__()
+                self.release_first = threading.Event()
+                self.first_started = threading.Event()
+
+            def intake(self, payload):  # noqa: ANN001
+                if self.calls == 0:
+                    self.first_started.set()
+                    self.release_first.wait(timeout=2)
+                return super().intake(payload)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings(app_env="test", database_url=f"sqlite:///{Path(temp_dir) / 'gateway.db'}")
+            sessions = SessionRegistryService(settings)
+            tasks = TaskRegistryService(settings)
+            main_agent = BlockingMainAgentService()
+            main_agent.tasks = tasks
+            service = GatewayControlPlaneService(
+                settings=settings,
+                main_agent=main_agent,
+                sessions=sessions,
+                ledger=FakeLedgerService(),
+                tasks=tasks,
+            )
+            results = []
+
+            def _run_request() -> None:
+                results.append(
+                    service.run(
+                        GatewayMessageRequest(
+                            user_id="feishu:test-user",
+                            source="feishu",
+                            session_key="feishu:chat:oc_123",
+                            message_id="om_same",
+                            content="请创建一个 issue：重复消息",
+                        )
+                    )
+                )
+
+            first = threading.Thread(target=_run_request)
+            second = threading.Thread(target=_run_request)
+
+            first.start()
+            self.assertTrue(main_agent.first_started.wait(timeout=1))
+            second.start()
+            time.sleep(0.2)
+            self.assertEqual(main_agent.calls, 0)
+            main_agent.release_first.set()
+            first.join(timeout=2)
+            second.join(timeout=2)
+
+            self.assertEqual(len(results), 2)
+            self.assertEqual(main_agent.calls, 1)
+            self.assertEqual(results[0].request_id, results[1].request_id)
+            self.assertEqual(results[0].chain_request_id, results[1].chain_request_id)
+            self.assertEqual(results[0].task_id, results[1].task_id)
+
 
 if __name__ == "__main__":
     unittest.main()

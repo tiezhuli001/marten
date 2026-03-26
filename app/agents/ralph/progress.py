@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import closing
 from typing import TYPE_CHECKING
 
+from app.channel.notifications import ChannelNotificationResult
 from app.control.events import ControlEventType
 from app.models.schemas import GitExecutionResult, RalphReviewHandoff, SleepCodingPullRequest, TerminalTaskEvidence, TokenUsage, ValidationResult
 
@@ -124,6 +126,36 @@ class RalphTaskProgress:
                 "stage": stage,
             },
         )
+
+    def notify_after_commit(
+        self,
+        *,
+        task_id: str,
+        stage: str,
+        title: str,
+        lines: list[str],
+    ) -> None:
+        try:
+            notification = self.service.channel.notify(title=title, lines=lines)
+        except Exception:
+            notification = ChannelNotificationResult(
+                provider=getattr(self.service.channel, "provider", self.service.settings.resolved_channel_provider),
+                delivered=False,
+                is_dry_run=False,
+            )
+        with closing(self.service._connect()) as connection:
+            self.service.store.append_event(
+                connection,
+                task_id,
+                "channel_notified",
+                {
+                    "provider": notification.provider,
+                    "delivered": notification.delivered,
+                    "is_dry_run": notification.is_dry_run,
+                    "stage": stage,
+                },
+            )
+            connection.commit()
 
     def publish_pull_request(
         self,

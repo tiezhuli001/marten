@@ -149,6 +149,20 @@ class FakeChannelService:
         )
 
 
+class ThrowingChannelService:
+    def __init__(self) -> None:
+        self.messages: list[tuple[str, list[str], str | None]] = []
+
+    def notify(
+        self,
+        title: str,
+        lines: list[str],
+        endpoint_id: str | None = None,
+    ) -> ChannelNotificationResult:
+        self.messages.append((title, lines, endpoint_id))
+        raise RuntimeError("Channel notification is unreachable: Remote end closed connection without response")
+
+
 class FakeGitWorkspaceService:
     def __init__(self, root: Path | None = None) -> None:
         self.root = root
@@ -457,11 +471,90 @@ class InvalidPlanAgentRuntime(FakeAgentRuntime):
         )()
 
 
+class SchemaInvalidPlanAgentRuntime(FakeAgentRuntime):
+    def generate_structured_output(self, agent, *, user_prompt, output_contract, **kwargs):
+        self.calls.append(output_contract)
+        return type(
+            "FakeLLMResponse",
+            (),
+            {
+                "output_text": (
+                    '{"summary":"LLM generated plan","scope":"Update service code",'
+                    '"validation":["python scripts/run_sleep_coding_validation.py"],'
+                    '"risks":["Issue details may still need clarification."]}'
+                ),
+                "usage": type(
+                    "FakeUsage",
+                    (),
+                    {
+                        "prompt_tokens": 11,
+                        "completion_tokens": 13,
+                        "total_tokens": 24,
+                        "cache_read_tokens": 0,
+                        "cache_write_tokens": 0,
+                        "reasoning_tokens": 0,
+                        "message_count": 2,
+                        "duration_seconds": 0.0,
+                        "model_name": "test-model",
+                        "provider": "openai",
+                        "cost_usd": 0.0,
+                        "step_name": None,
+                        "model_copy": lambda self, update=None: self,
+                    },
+                )(),
+            },
+        )()
+
+
 class InvalidExecutionAgentRuntime(FakeAgentRuntime):
     def generate_structured_output(self, agent, *, user_prompt, output_contract, **kwargs):
         self.calls.append(output_contract)
         if "artifact_markdown" in output_contract:
             output_text = "Draft: touch docs and keep the change minimal."
+        else:
+            output_text = (
+                '{"summary":"LLM generated plan","scope":["Update docs"],'
+                '"validation":["python -m unittest discover -s tests"],'
+                '"risks":["Issue details may still need clarification."]}'
+            )
+        return type(
+            "FakeLLMResponse",
+            (),
+            {
+                "output_text": output_text,
+                "usage": type(
+                    "FakeUsage",
+                    (),
+                    {
+                        "prompt_tokens": 11,
+                        "completion_tokens": 13,
+                        "total_tokens": 24,
+                        "cache_read_tokens": 0,
+                        "cache_write_tokens": 0,
+                        "reasoning_tokens": 0,
+                        "message_count": 2,
+                        "duration_seconds": 0.0,
+                        "model_name": "test-model",
+                        "provider": "openai",
+                        "cost_usd": 0.0,
+                        "step_name": None,
+                        "model_copy": lambda self, update=None: self,
+                    },
+                )(),
+            },
+        )()
+
+
+class SchemaInvalidExecutionAgentRuntime(FakeAgentRuntime):
+    def generate_structured_output(self, agent, *, user_prompt, output_contract, **kwargs):
+        self.calls.append(output_contract)
+        if "artifact_markdown" in output_contract:
+            output_text = (
+                '{"artifact_markdown":"## Summary\\nInvalid execution draft",'
+                '"file_changes":[{"path":"docs/internal/live-chain-validation.md",'
+                '"content":"marker",'
+                '"description":"append marker"}]}'
+            )
         else:
             output_text = (
                 '{"summary":"LLM generated plan","scope":["Update docs"],'
@@ -816,6 +909,31 @@ class SleepCodingServiceTests(unittest.TestCase):
             self.assertEqual(plan.summary, "Implement Issue #65: Add live chain validation marker")
             self.assertEqual(usage.total_tokens, 24)
 
+    def test_build_plan_falls_back_to_heuristic_when_extracted_object_breaks_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database_path = Path(temp_dir) / "sleep_coding.db"
+            settings = build_settings(database_path)
+            github = FakeGitHubService()
+            service = SleepCodingService(
+                settings=settings,
+                channel=FakeChannelService(),
+                git_workspace=FakeGitWorkspaceService(),
+                validator=FakeValidationRunner("passed"),
+                agent_runtime=SchemaInvalidPlanAgentRuntime(),
+                mcp_client=build_github_mcp(github),
+            )
+            issue = SleepCodingIssue(
+                issue_number=65,
+                title="Add live chain validation marker",
+                body="Touch docs/internal/live-chain-validation.md",
+                html_url="https://github.com/tiezhuli001/youmeng-gateway/issues/65",
+            )
+
+            plan, usage = service._build_plan(issue)
+
+            self.assertEqual(plan.summary, "Implement Issue #65: Add live chain validation marker")
+            self.assertEqual(usage.total_tokens, 24)
+
     def test_heuristic_execution_draft_updates_live_chain_validation_doc_when_issue_targets_it(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             database_path = Path(temp_dir) / "sleep_coding.db"
@@ -917,6 +1035,30 @@ class SleepCodingServiceTests(unittest.TestCase):
             self.assertEqual(len(channel.messages), 1)
             self.assertEqual(len(agent_runtime.calls), 1)
 
+    def test_start_task_persists_plan_even_when_plan_ready_notification_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database_path = Path(temp_dir) / "sleep_coding.db"
+            settings = build_settings(database_path)
+            github = FakeGitHubService()
+            channel = ThrowingChannelService()
+            service = SleepCodingService(
+                settings=settings,
+                channel=channel,
+                git_workspace=FakeGitWorkspaceService(),
+                validator=FakeValidationRunner("passed"),
+                ledger=TokenLedgerService(settings),
+                agent_runtime=FakeAgentRuntime(),
+                mcp_client=build_github_mcp(github),
+            )
+
+            task = service.start_task(SleepCodingTaskRequest(issue_number=68))
+
+            self.assertEqual(task.status, "awaiting_confirmation")
+            self.assertTrue(task.plan.summary)
+            control_task = service.tasks.get_task(task.control_task_id)
+            self.assertEqual(control_task.status, "awaiting_confirmation")
+            self.assertTrue(channel.messages)
+
     def test_approve_plan_opens_pr_after_validation(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             database_path = Path(temp_dir) / "sleep_coding.db"
@@ -966,6 +1108,40 @@ class SleepCodingServiceTests(unittest.TestCase):
                     task.task_id,
                     SleepCodingTaskActionRequest(action="approve_plan"),
                 )
+            control_task = service.tasks.get_task(service.get_task(task.task_id).control_task_id)
+            failure_evidence = control_task.payload.get("execution_failure_evidence")
+            self.assertIsInstance(failure_evidence, dict)
+            self.assertEqual(control_task.status, "needs_attention")
+            self.assertIn("parse_error", failure_evidence)
+            self.assertIn("raw_output_excerpt", failure_evidence)
+
+    def test_approve_plan_fails_when_extracted_execution_object_breaks_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database_path = Path(temp_dir) / "sleep_coding.db"
+            settings = build_settings(database_path)
+            github = FakeGitHubService()
+            service = SleepCodingService(
+                settings=settings,
+                channel=FakeChannelService(),
+                git_workspace=FakeGitWorkspaceService(),
+                validator=FakeValidationRunner("passed"),
+                ledger=TokenLedgerService(settings),
+                agent_runtime=SchemaInvalidExecutionAgentRuntime(),
+                mcp_client=build_github_mcp(github),
+            )
+            task = service.start_task(SleepCodingTaskRequest(issue_number=166))
+
+            with self.assertRaisesRegex(RuntimeError, "invalid structured execution output"):
+                service.apply_action(
+                    task.task_id,
+                    SleepCodingTaskActionRequest(action="approve_plan"),
+                )
+            control_task = service.tasks.get_task(service.get_task(task.task_id).control_task_id)
+            failure_evidence = control_task.payload.get("execution_failure_evidence")
+            self.assertIsInstance(failure_evidence, dict)
+            self.assertEqual(control_task.status, "needs_attention")
+            self.assertIn("parse_error", failure_evidence)
+            self.assertIn("raw_output_excerpt", failure_evidence)
 
     def test_approve_plan_retries_builtin_execution_once_after_invalid_output(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1122,7 +1298,7 @@ class SleepCodingServiceTests(unittest.TestCase):
             plan_usage = ledger.get_request_usage("req-parent-42", ["sleep_coding_plan"])
             self.assertGreater(plan_usage.total_tokens, 0)
 
-    def test_start_task_raises_when_plan_llm_fails_with_provider_configured(self) -> None:
+    def test_start_task_falls_back_to_heuristic_plan_when_llm_provider_is_unreachable(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             database_path = Path(temp_dir) / "sleep_coding.db"
             platform_config_path = Path(temp_dir) / "platform.json"
@@ -1150,10 +1326,12 @@ class SleepCodingServiceTests(unittest.TestCase):
                 mcp_client=build_github_mcp(github),
             )
 
-            with self.assertRaisesRegex(RuntimeError, "LLM provider is unreachable"):
-                service.start_task(SleepCodingTaskRequest(issue_number=19))
+            task = service.start_task(SleepCodingTaskRequest(issue_number=19))
 
-    def test_apply_action_raises_when_execution_llm_fails_with_provider_configured(self) -> None:
+            self.assertEqual(task.status, "awaiting_confirmation")
+            self.assertIn("Implement Issue #19", task.plan.summary)
+
+    def test_apply_action_fails_when_execution_llm_hits_recoverable_provider_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             database_path = Path(temp_dir) / "sleep_coding.db"
             platform_config_path = Path(temp_dir) / "platform.json"

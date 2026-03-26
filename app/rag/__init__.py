@@ -9,14 +9,11 @@ from app.rag.retrieval import (
     RetrievalResponse,
     RetrievalResult,
 )
-from app.rag.providers import MilvusRetrievalProvider, QdrantRetrievalProvider
 
 __all__ = [
     "ContextMergePolicy",
     "InMemoryRetrievalProvider",
     "KnowledgeDomain",
-    "MilvusRetrievalProvider",
-    "QdrantRetrievalProvider",
     "RAGFacade",
     "RetrievedDocument",
     "RetrievalPolicy",

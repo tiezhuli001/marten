@@ -53,10 +53,10 @@
 
 ### 5. 当前执行依据
 
+- [../STATUS.md](../STATUS.md)
+- [plans/2026-03-24-private-server-self-host-rollout.md](plans/2026-03-24-private-server-self-host-rollout.md)
 - [handoffs/README.md](handoffs/README.md)
 - [handoffs/templates/agent-handoff-template.md](handoffs/templates/agent-handoff-template.md)
-- [plans/2026-03-22-agent-system-documentation-and-rollout.md](plans/2026-03-22-agent-system-documentation-and-rollout.md)
-- [plans/2026-03-22-rag-provider-surface-rollout.md](plans/2026-03-22-rag-provider-surface-rollout.md)
 
 本地继续执行时，还应额外查看：
 
@@ -66,25 +66,24 @@
 
 如果目标是继续实现，而不是重新讨论方向，至少先读完下面 7 份文档：
 
-1. [architecture/agent-first-implementation-principles.md](architecture/agent-first-implementation-principles.md)
-2. [architecture/agent-system-overview.md](architecture/agent-system-overview.md)
-3. [architecture/agent-runtime-contracts.md](architecture/agent-runtime-contracts.md)
-4. [architecture/rag-provider-surface.md](architecture/rag-provider-surface.md)
-5. [handoffs/README.md](handoffs/README.md)
-6. [plans/2026-03-22-agent-system-documentation-and-rollout.md](plans/2026-03-22-agent-system-documentation-and-rollout.md)
-7. [plans/2026-03-22-rag-provider-surface-rollout.md](plans/2026-03-22-rag-provider-surface-rollout.md)
+1. [../STATUS.md](../STATUS.md)
+2. [architecture/current-mvp-status-summary.md](architecture/current-mvp-status-summary.md)
+3. [architecture/agent-first-implementation-principles.md](architecture/agent-first-implementation-principles.md)
+4. [architecture/agent-system-overview.md](architecture/agent-system-overview.md)
+5. [architecture/agent-runtime-contracts.md](architecture/agent-runtime-contracts.md)
+6. [architecture/rag-provider-surface.md](architecture/rag-provider-surface.md)
+7. [plans/2026-03-24-private-server-self-host-rollout.md](plans/2026-03-24-private-server-self-host-rollout.md)
+
+如果 `STATUS.md` 已明确“当前实现目标已完成”，说明当前没有新的仓内实现 chunk 在进行中。此时 `plans/` 下保留的文件应视为最近一次已完成 rollout 的执行基线；开始下一阶段前，应先写新的计划，而不是默认继续复用历史计划。
 
 ## Historical References
 
-上一轮仍有长期解释价值的架构推演文档，现已下沉到 `archive/`：
+当前 archive 只保留极少数仍能解释系统收口方向的历史材料：
 
-- [archive/architecture/2026-03-22-framework-positioning-and-private-agent-layering.md](archive/architecture/2026-03-22-framework-positioning-and-private-agent-layering.md)
-- [archive/architecture/2026-03-22-framework-public-surface.md](archive/architecture/2026-03-22-framework-public-surface.md)
-- [archive/architecture/2026-03-22-multi-endpoint-channel-routing.md](archive/architecture/2026-03-22-multi-endpoint-channel-routing.md)
-- [archive/architecture/2026-03-22-rag-capability-mvp.md](archive/architecture/2026-03-22-rag-capability-mvp.md)
 - [archive/architecture/mvp-agent-first-architecture.md](archive/architecture/mvp-agent-first-architecture.md)
+- [archive/codebase-audits/2026-03-25-module-inventory.md](archive/codebase-audits/2026-03-25-module-inventory.md)
 
-这些文档仍可用于回溯“为什么会这样演进”，但不应继续充当当前实现入口。纯阶段性旧计划、过期 handoff 和只剩临时执行痕迹的历史文件，已经直接删除，不再保留。
+更早的 `2026-03-22/23` 设计快照、阶段性 rollout 计划、过期 handoff 和只剩临时执行痕迹的历史文件，已经直接删除，不再保留。
 
 ## Cleaning Rules
 

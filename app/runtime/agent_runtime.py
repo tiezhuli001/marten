@@ -115,14 +115,9 @@ class AgentRuntime:
         )
         skill_catalog = self.skills.render_skill_catalog(agent.skill_names, agent.workspace)
         skill_instructions = self._render_skill_instructions(agent)
-        mcp_tools = self.list_available_mcp_tools(agent.mcp_servers)
+        mcp_section = self._render_mcp_section(agent, workflow=workflow)
         workspace_instructions = self._load_workspace_instructions(agent.workspace)
         rag_context = self._render_retrieved_context(agent, user_prompt, workflow=workflow)
-        mcp_section = (
-            "\n".join(f"- {tool}" for tool in mcp_tools)
-            if mcp_tools
-            else "No MCP tools are currently available."
-        )
         return assemble_prompt_sections(
             [
                 PromptSection(
@@ -133,7 +128,7 @@ class AgentRuntime:
                         "Priorities:\n"
                         "1. Follow workspace and skill instructions.\n"
                         "2. Prefer the listed skills for cognition-heavy work.\n"
-                        "3. Use MCP tools for external system operations; if required MCP tools are unavailable, stop and surface the missing configuration."
+                        f"3. {self._build_tool_priority_line(workflow)}"
                     ),
                     priority=100,
                     required=True,
@@ -181,6 +176,30 @@ class AgentRuntime:
             ],
             policy=prompt_policy,
         )
+
+    def _build_tool_priority_line(self, workflow: str | None) -> str:
+        if self._should_disable_tool_catalog(workflow):
+            return (
+                "This workflow runs without a runtime tool-call loop. "
+                "Treat MCP tools as unavailable in this step and return only the requested artifact or structured output."
+            )
+        return (
+            "Use MCP tools for external system operations; if required MCP tools are unavailable, "
+            "stop and surface the missing configuration."
+        )
+
+    def _render_mcp_section(self, agent: AgentDescriptor, *, workflow: str | None) -> str:
+        if self._should_disable_tool_catalog(workflow):
+            return "This workflow does not expose MCP tools because the current structured-output runtime cannot execute tool calls in this step."
+        mcp_tools = self.list_available_mcp_tools(agent.mcp_servers)
+        return (
+            "\n".join(f"- {tool}" for tool in mcp_tools)
+            if mcp_tools
+            else "No MCP tools are currently available."
+        )
+
+    def _should_disable_tool_catalog(self, workflow: str | None) -> bool:
+        return isinstance(workflow, str) and workflow.strip() in {"code_review", "sleep_coding"}
 
     def _load_workspace_instructions(self, workspace: Path) -> str:
         sections: list[str] = []

@@ -173,6 +173,20 @@ class FakeChannelService:
         )
 
 
+class ThrowingChannelService:
+    def __init__(self) -> None:
+        self.notifications: list[tuple[str, list[str], str | None]] = []
+
+    def notify(
+        self,
+        title: str,
+        lines: list[str],
+        endpoint_id: str | None = None,
+    ) -> ChannelNotificationResult:
+        self.notifications.append((title, lines, endpoint_id))
+        raise RuntimeError("Channel notification is unreachable: Remote end closed connection without response")
+
+
 class FakeWorkerPollService:
     def __init__(self) -> None:
         self.requests: list[SleepCodingWorkerPollRequest] = []
@@ -811,6 +825,80 @@ class AutomationServiceTests(unittest.TestCase):
             self.assertEqual(control_task.payload["delivery_status"], "degraded")
             self.assertFalse(control_task.payload["delivery_delivered"])
             self.assertEqual(control_task.payload["delivery_stage"], "final_delivery")
+
+    def test_notification_failure_does_not_break_approved_review_loop(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = build_settings(Path(temp_dir) / "automation.db")
+            github = FakeGitHubService()
+            sleep_channel = FakeChannelService()
+            failing_channel = ThrowingChannelService()
+            ledger = TokenLedgerService(settings)
+            sleep_coding = build_sleep_coding_service(
+                settings=settings,
+                channel=sleep_channel,
+                github=github,
+                validator=FakeValidationRunner(),
+                ledger=ledger,
+            )
+            automation = AutomationService(
+                settings=settings,
+                sleep_coding=sleep_coding,
+                review=FakeReviewService(sleep_coding, blocking_sequence=[False]),
+                channel=failing_channel,
+                ledger=ledger,
+            )
+            task = sleep_coding.start_task(SleepCodingTaskRequest(issue_number=79))
+
+            updated = automation.handle_sleep_coding_action(task.task_id, "approve_plan")
+
+            self.assertEqual(updated.status, "approved")
+            control_task = automation.tasks.get_task(updated.control_task_id)
+            self.assertEqual(control_task.status, "completed")
+            self.assertEqual(control_task.payload["delivery_status"], "degraded")
+            self.assertFalse(control_task.payload["delivery_delivered"])
+            self.assertTrue(failing_channel.notifications)
+
+    def test_final_delivery_releases_lane_for_sleep_coding_control_task(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = build_settings(Path(temp_dir) / "automation.db")
+            github = FakeGitHubService()
+            channel = FakeChannelService()
+            ledger = TokenLedgerService(settings)
+            sleep_coding = build_sleep_coding_service(
+                settings=settings,
+                channel=channel,
+                github=github,
+                validator=FakeValidationRunner(),
+                ledger=ledger,
+            )
+            automation = AutomationService(
+                settings=settings,
+                sleep_coding=sleep_coding,
+                review=FakeReviewService(sleep_coding, blocking_sequence=[False]),
+                channel=channel,
+                ledger=ledger,
+            )
+            parent = automation.tasks.create_task(
+                task_type="main_agent_intake",
+                agent_id="main-agent",
+                status="completed",
+                repo="tiezhuli001/youmeng-gateway",
+                issue_number=80,
+                title="Nested control parent",
+                payload={"request_id": "req-parent-80"},
+            )
+            task = sleep_coding.start_task(
+                SleepCodingTaskRequest(issue_number=80, parent_task_id=parent.task_id)
+            )
+            self.assertIsNotNone(task.control_task_id)
+            automation.sessions.acquire_execution_lane(task.control_task_id)
+
+            updated = automation.handle_sleep_coding_action(task.task_id, "approve_plan")
+
+            self.assertEqual(updated.status, "approved")
+            lane = automation.sessions.get_execution_lane()
+            self.assertIsNone(lane.active_task_id)
+            self.assertEqual(lane.queued_task_ids, [])
 
     def test_approved_task_without_review_does_not_skip_review_gate(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

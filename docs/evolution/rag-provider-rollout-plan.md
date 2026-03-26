@@ -1,78 +1,47 @@
 # RAG Provider Rollout Plan
 
-> 更新时间：2026-03-23
-> 文档角色：`docs/evolution` 下的当前 rollout 文档
-> 目标：把 `Marten` 的 RAG capability 从最小原型推进到统一 provider surface，并为多向量库接入留出稳定扩展点。
+> 更新时间：2026-03-26
+> 文档角色：`docs/evolution` 下的演进约束文档
+> 当前状态：本轮“RAG 最小保留面收口”已完成，后续只保留扩展规则，不再有仓内待执行 chunk。
 
-## 一、目标状态
+## 本轮结果
 
-完成后，`Marten` 应具备下面这些特征：
+截至当前仓库状态，RAG rollout 已收口到下面的完成态：
 
-- 调用方只依赖统一 retrieval contract
-- `RAGFacade` 统一请求处理、后处理和 merge
-- 新增向量库时只需要增加 provider adapter
-- 当前先用 `Qdrant` 跑通，后续可扩展到 `Milvus`
+- 调用方统一依赖 `RAGFacade`
+- retrieval request / response / merge policy 已固定为当前 contract
+- 仓库内具体 provider 实现已删除
+- 仅保留 `InMemoryRetrievalProvider` 作为示例与测试基线
+- `indexing.py` 保留为 manual-only 的辅助能力，不进入默认主链回归
 
-## 二、范围
+## 当前保留面
 
-本轮关注：
+当前允许继续演进的只有三块：
 
-- request / response / result shape 收口
-- provider registry
-- post-processing pipeline
-- `Qdrant` first 的落地顺序
-- `Milvus` 真实接入与后续远端部署切换边界
+1. facade contract
+   - `RAGFacade`
+   - `RetrievalRequest` / `RetrievalResponse`
+   - policy / merge 边界
+2. runtime integration point
+   - retrieval context 如何进入 agent runtime
+3. manual indexing helper
+   - markdown chunking
+   - manifest sync
 
-本轮不做：
+## 当前不做
 
-- 重型知识平台
-- 完整索引管理后台
-- 所有 provider 的一次性接入
+下面这些内容不再是当前仓库默认职责：
 
-## 三、分阶段推进
+- 多 provider 同时铺开
+- vector store collection lifecycle
+- 重型知识平台或索引后台
+- 让 agent prompt 直接绑定具体向量库实现
 
-### Stage 1: Surface 收口
+## 后续新增 provider 的约束
 
-目标：
+如果未来真的要接入具体向量库，必须同时满足：
 
-- 定义统一 request / response / result contract
-- 保持 `InMemoryRetrievalProvider` 作为测试基线
-
-### Stage 2: Provider Adapter 化
-
-目标：
-
-- provider 只负责 search / fetch
-- 把去重、merge、citation、budgeting 从 provider 中抽出来
-
-### Stage 3: Qdrant First
-
-目标：
-
-- 接入 `Qdrant` adapter
-- 跑通 `Operational RAG`
-
-### Stage 4: Milvus Runtime
-
-目标：
-
-- 明确 `Milvus` adapter 的输入输出要求
-- 本地 `Milvus Lite` 已接通并跑通真实 `search / fetch`
-- 后续切远端 `Milvus` 时仍不改 facade contract
-
-## 四、验收标准
-
-当下面条件成立时，说明 RAG provider 文档工作完成：
-
-1. `architecture/rag-provider-surface.md` 已成为当前正式规格
-2. 调用面不再围绕具体向量库写文档
-3. 后续实现 agent 可以按 plan 独立接入 `Qdrant`
-4. 后续实现 agent 可以在不改调用 contract 的前提下接 `Milvus`
-5. 当前已经有可运行的本地 `Milvus Lite` 路径，后续只需补远端部署切换说明
-
-## 五、后续实现的强约束
-
-- `RAGFacade` 是调用面真相，不是具体 provider
-- provider adapter 只负责 backend-specific 行为
-- 后处理必须统一
-- embedding 与 provider 必须解耦
+1. 新增需求来自真实业务，而不是“也许以后会用”
+2. 一次只引入单个最小 provider
+3. 调用 contract 不改，仍由 `RAGFacade` 抽象底层差异
+4. 新增测试优先落在 `manual` 或 targeted contract，不恢复大体量 provider matrix

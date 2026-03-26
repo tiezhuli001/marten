@@ -991,6 +991,36 @@ class ReviewServiceTests(unittest.TestCase):
                     "diff context",
                 )
 
+    def test_start_review_persists_failure_evidence_when_structured_review_output_is_invalid(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = build_settings(root / "review.db", root / "review-runs")
+            sleep_coding, mcp_client = build_sleep_coding_service(settings)
+            task = sleep_coding.start_task(SleepCodingTaskRequest(issue_number=81))
+            task = sleep_coding.apply_action(
+                task.task_id,
+                SleepCodingTaskActionRequest(action="approve_plan"),
+            )
+            review_service = ReviewService(
+                settings=settings,
+                sleep_coding=sleep_coding,
+                skill=ReviewSkillService(
+                    settings,
+                    agent_runtime=MalformedAgentRuntime(),
+                    mcp_client=MCPClient(),
+                ),
+                mcp_client=mcp_client,
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "invalid structured review output"):
+                review_service.start_review(ReviewStartRequest(task_id=task.task_id), write_comment=False)
+
+            control_task = review_service.tasks.get_task(task.control_task_id)
+            failure_evidence = control_task.payload.get("review_failure_evidence")
+            self.assertIsInstance(failure_evidence, dict)
+            self.assertIn("parse_error", failure_evidence)
+            self.assertIn("raw_output_excerpt", failure_evidence)
+
     def test_review_skill_retries_once_after_invalid_structured_review_output(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

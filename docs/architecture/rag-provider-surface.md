@@ -1,183 +1,86 @@
 # RAG Provider Surface
 
-> 更新时间：2026-03-22
-> 文档角色：`docs/architecture` 下的实现规格文档
-> 目标：把 `Marten` 当前的 RAG capability 收口为统一 provider surface，使后续接入 Qdrant、Milvus 等向量库时不需要改调用方 contract。
+> 更新时间：2026-03-26
+> 文档角色：`docs/architecture` 下的当前实现规格
+> 目标：把 `Marten` 保留的 RAG 能力收口成最小 retrieval surface，不让未来扩展反向膨胀当前主链复杂度。
 
-## 一、设计结论
+## 当前结论
 
-`Marten` 的 RAG 不应围绕某一个向量库写死。
+`Marten` 当前不再把“多向量库 provider 适配层”当作主仓库默认代码面。
 
-当前正确边界应是：
+当前仓库只保留下面这组最小真相：
 
-- 检索请求统一进入 `RAGFacade`
-- facade 面向统一的 retrieval request / response contract
-- 各向量库只实现 provider adapter
-- 后处理、去重、引用、merge policy 由框架统一处理
+- 调用方统一走 `RAGFacade`
+- request / response / document shape 统一走 retrieval contract
+- runtime 只依赖 policy / merge boundary，不依赖具体 provider 细节
+- 仓库内仅保留 `InMemoryRetrievalProvider` 作为最小示例与测试基线
+- `app/rag/indexing.py` 只保留 markdown chunking / manifest sync 的基础辅助能力，归 `manual` suite 守面
 
 也就是说：
 
-> Qdrant、Milvus、pgvector 等都只是 provider implementation，不是框架调用面的真相。
+> 具体向量库接入属于后续真实需求的扩展，不是当前 self-host 主链的默认承诺。
 
-## 二、为什么要这样做
+## 当前代码面
 
-如果调用方直接依赖具体向量库，会马上出现三个问题：
+截至 `2026-03-26`，`app/rag/` 只剩 3 个文件、`465` 行 Python：
 
-1. agent 和 runtime 会被某个库的参数绑死
-2. 后续换库或并存多库时，调用面会碎裂
-3. 去重、rerank、citation、merge policy 会被复制到各 adapter 中
+1. `retrieval.py`
+   - `RAGFacade`
+   - `RetrievalRequest` / `RetrievalResponse`
+   - `RetrievalPolicy` / `ContextMergePolicy`
+   - `InMemoryRetrievalProvider`
+2. `indexing.py`
+   - markdown chunk collection
+   - stable item id / content hash
+   - manifest sync plan
+3. `__init__.py`
+   - 最小公开导出
 
-因此 `Marten` 应像 channel/provider adapter 一样，把 retrieval 也做成统一 surface。
+已删除：
 
-## 三、正式分层
+- `app/rag/providers/__init__.py`
+- `app/rag/providers/milvus.py`
+- `app/rag/providers/qdrant.py`
 
-### 1. `RAGFacade`
+## 主链依赖边界
 
-职责：
+当前主链只依赖下面两类入口：
 
-- 接收统一 retrieval request
-- 解析 policy / domain / merge policy
-- 分发给 provider adapter
-- 统一执行 post-processing
-- 返回统一 retrieval response
+1. retrieval contract
+   - agent runtime 可以根据 policy 取回文档上下文
+   - 调用方不需要感知底层 provider
+2. runtime merge integration
+   - 是否注入 retrieval context，由 policy 决定
+   - 去重与 top-k 裁剪在 facade 内完成
 
-### 2. `RetrievalProvider`
+主链当前不依赖：
 
-职责：
-
-- 对接具体向量库或检索后端
-- 执行 provider-native search / fetch
-- 把结果映射成框架统一对象
-
-### 3. `PostProcessor`
-
-职责：
-
-- dedupe
-- top-k trimming
-- optional rerank
-- citation shaping
-- context merge budgeting
-
-### 4. `ContextMerge`
-
-职责：
-
-- 把 retrieval response 变成 agent runtime 可消费的上下文块
-
-## 四、统一 request / response contract
-
-### 1. `RetrievalRequest`
-
-最小字段建议包括：
-
-- `query`
-- `agent_id`
-- `workflow`
-- `domains`
-- `top_k`
-- `filters`
-- `query_mode`
-- `include_citations`
-
-短期内不要求每个 provider 都完整支持全部字段，但 request shape 应统一。
-
-### 2. `RetrievedDocument`
-
-最小字段建议包括：
-
-- `item_ref`
-- `domain_id`
-- `title`
-- `content`
-- `source`
-- `score`
-- `metadata`
-
-### 3. `RetrievalResponse`
-
-最小字段建议包括：
-
-- `provider`
-- `results`
-- `latency_ms`
-- `truncated`
-- `debug`
-
-## 五、provider adapter contract
-
-每个 provider adapter 至少需要实现：
-
-- `search(request, domain) -> RetrievalResponse`
-- `fetch(item_ref) -> RetrievedDocument | None`
-
-可选能力可以通过 capability 声明，而不是塞进统一必选接口：
-
-- hybrid search
-- metadata filter
-- server-side rerank
-- upsert / delete
+- provider-specific search 参数
 - collection lifecycle
+- upsert/delete runtime
+- server-side rerank
+- 多 backend 并存策略
 
-## 六、统一后处理 contract
+## 测试与回归策略
 
-后处理不应散落在 provider adapter 中。
+当前保留的测试边界：
 
-框架统一负责：
+- `tests.test_rag_capability`
+  - 留在 `quick` / `regression`
+  - 只守两件事：
+    - facade 检索与去重 contract
+    - runtime 在 `trigger_mode=always` 下正确合并 retrieval context
+- `tests.test_rag_indexing`
+  - 留在 `manual`
+  - 只守 markdown chunking 与 manifest sync helper
 
-- dedupe by `item_ref`
-- cross-domain merge
-- token budgeting
-- citation formatting
-- merge policy
+这意味着 RAG 仍被保留，但不再以“大而全 provider surface + 大体量测试”形态存在。
 
-这样才能保证：
+## 后续扩展规则
 
-- 不同 provider 行为一致
-- agent runtime 不需要知道底层库差异
-- 新增 provider 只改 adapter，而不是全链路改一遍
+只有当真实产品需求出现时，才允许重新引入具体 provider adapter。届时必须满足：
 
-## 七、当前推荐落地顺序
-
-### Phase 1
-
-- 保留现有 `InMemoryRetrievalProvider` 作为测试基线
-- 把 request / response / result shape 补完整
-- 引入 post-processing pipeline
-
-### Phase 2
-
-- 先接 `Qdrant` adapter
-- 把 `Operational RAG` 跑通
-
-### Phase 3
-
-- 预留 `Milvus` adapter 接口
-- 截至 `2026-03-23`，已接上本地 `Milvus Lite` 实例并跑通真实 `search/fetch`
-- 远端 `Milvus Standalone / Distributed` 的部署与切换手册仍可后续补充
-
-### Phase 4
-
-- 按私有项目需要补 `pgvector` 或其他 provider
-
-## 八、与 embedding 的边界
-
-embedding model 选择与 vector store 选择应分开。
-
-框架需要保证：
-
-- provider surface 不绑定某个 embedding 模型
-- retrieval request 不泄漏底层 embedding 实现细节
-- 私有项目可按语料语言和成本自行切换 embedding
-
-当前默认建议仍是：
-
-- `Qdrant + nomic-embed-text`
-- 中文语料为主时，`Qdrant + bge-small-zh-v1.5`
-
-## 九、短期不做
-
-- 不把 index 管理后台做进框架
-- 不把向量库的 collection lifecycle 复杂化
-- 不在当前阶段支持所有 provider 的全部高级特性
-- 不让 agent prompt 直接面向具体向量库实现
+1. 调用方 contract 不变，仍只依赖 `RAGFacade`
+2. 新增实现必须是单个最小 provider，而不是一次性恢复多 backend 铺面
+3. provider-specific 能力不能泄漏到 agent prompt 或 runtime 主链
+4. 如需更重的 indexing / sync 工具，优先放在 manual 或独立运维路径，不进入默认回归

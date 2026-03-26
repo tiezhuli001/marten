@@ -1,6 +1,7 @@
 import unittest
 import json
 import tempfile
+from http.client import RemoteDisconnected
 from pathlib import Path
 
 from app.core.config import Settings
@@ -515,6 +516,39 @@ class SharedLLMRuntimeTests(unittest.TestCase):
         self.assertEqual(response.output_text, "Recovered after timeout")
         self.assertEqual(len(transport.calls), 3)
         self.assertEqual(delays, [1.0, 2.0])
+
+    def test_generate_retries_remote_disconnect_transport_errors(self) -> None:
+        transport = FlakyTransport(
+            failures=[
+                RemoteDisconnected("Remote end closed connection without response"),
+            ],
+            response_payload={
+                "id": "resp-openai-remote-disconnect",
+                "choices": [{"message": {"content": "Recovered after disconnect"}}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            },
+        )
+        delays = []
+        runtime = SharedLLMRuntime(
+            Settings(
+                openai_api_key="test-openai-key",
+                llm_request_max_attempts=2,
+                llm_request_retry_base_delay_seconds=1.0,
+            ),
+            transport=transport,
+            sleep_fn=delays.append,
+        )
+
+        response = runtime.generate(
+            LLMRequest(
+                messages=[LLMMessage(role="user", content="retry on disconnect please")],
+                provider="openai",
+            )
+        )
+
+        self.assertEqual(response.output_text, "Recovered after disconnect")
+        self.assertEqual(len(transport.calls), 2)
+        self.assertEqual(delays, [1.0])
 
     def test_generate_raises_after_max_attempts(self) -> None:
         transport = FlakyTransport(

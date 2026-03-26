@@ -296,51 +296,6 @@ class RAGFacade:
         kind = str(raw_provider.get("kind", "")).strip().lower()
         if not kind:
             return None
-        if kind == "qdrant":
-            from app.rag.providers import QdrantRetrievalProvider
-
-            return QdrantRetrievalProvider(
-                url=str(raw_provider.get("url", "http://127.0.0.1:6333")).strip(),
-                api_key=str(raw_provider.get("api_key", "")).strip() or None,
-                model_name=str(raw_provider.get("model_name", "BAAI/bge-small-zh-v1.5")).strip(),
-                model_path=str(raw_provider.get("model_path", "")).strip() or None,
-                device=str(raw_provider.get("device", "cpu")).strip(),
-                query_instruction=str(
-                    raw_provider.get(
-                        "query_instruction",
-                        "为这个句子生成表示以用于检索相关文章：",
-                    )
-                ),
-            )
-        if kind == "milvus":
-            from app.rag.providers import MilvusRetrievalProvider
-
-            raw_search_params = raw_provider.get("search_params", {"metric_type": "COSINE"})
-            search_params = raw_search_params if isinstance(raw_search_params, dict) else {"metric_type": "COSINE"}
-            raw_output_fields = raw_provider.get("output_fields", ["title", "content", "source"])
-            output_fields = (
-                [str(field) for field in raw_output_fields if isinstance(field, str)]
-                if isinstance(raw_output_fields, list)
-                else ["title", "content", "source"]
-            )
-            return MilvusRetrievalProvider(
-                uri=str(raw_provider.get("uri", "./milvus-data/marten-docs.db")).strip(),
-                token=str(raw_provider.get("token", "")).strip() or None,
-                db_name=str(raw_provider.get("db_name", "default")).strip(),
-                model_name=str(raw_provider.get("model_name", "BAAI/bge-small-zh-v1.5")).strip(),
-                model_path=str(raw_provider.get("model_path", "")).strip() or None,
-                device=str(raw_provider.get("device", "cpu")).strip(),
-                query_instruction=str(
-                    raw_provider.get(
-                        "query_instruction",
-                        "为这个句子生成表示以用于检索相关文章：",
-                    )
-                ),
-                search_params=search_params,
-                vector_field=str(raw_provider.get("vector_field", "vector")).strip(),
-                primary_field=str(raw_provider.get("primary_field", "id")).strip(),
-                output_fields=output_fields,
-            )
         return None
 
     def _post_process_results(

@@ -27,20 +27,35 @@ _TEST_SUITES: dict[str, TestSuite] = {
     ),
     "regression": TestSuite(
         name="regression",
-        description="Full non-live regression suite, including worker, automation, and MVP E2E.",
+        description="Full non-live regression suite for the current self-host main chain and its required boundary services.",
         modules=(
             "tests.test_agent_runtime_policy",
+            "tests.test_channel",
+            "tests.test_channel_routing",
+            "tests.test_control_context",
+            "tests.test_feishu",
+            "tests.test_llm_runtime",
             "tests.test_rag_capability",
             "tests.test_main_agent",
             "tests.test_gateway",
+            "tests.test_session_registry",
             "tests.test_sleep_coding",
             "tests.test_sleep_coding_worker",
             "tests.test_review",
+            "tests.test_task_registry",
             "tests.test_automation",
+            "tests.test_token_ledger",
             "tests.test_runtime_components",
             "tests.test_mvp_e2e",
-            "tests.test_framework_public_surface",
             "tests.test_test_suites",
+        ),
+    ),
+    "manual": TestSuite(
+        name="manual",
+        description="Non-default tests kept for future evolution surfaces or optional indexing workflows.",
+        modules=(
+            "tests.test_framework_public_surface",
+            "tests.test_rag_indexing",
         ),
     ),
     "live": TestSuite(
@@ -59,6 +74,7 @@ def get_test_suite(name: str) -> TestSuite:
         "fast": "quick",
         "default": "quick",
         "full": "regression",
+        "extended": "manual",
     }
     normalized = aliases.get(normalized, normalized)
     try:

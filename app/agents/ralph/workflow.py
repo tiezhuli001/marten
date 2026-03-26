@@ -39,6 +39,7 @@ class RalphTaskWorkflow:
         head_branch = payload.head_branch or f"codex/issue-{payload.issue_number}-sleep-coding"
         pending_usage: tuple[str, str, TokenUsage] | None = None
         pending_memories: list[tuple[str, str]] = []
+        pending_notification: tuple[str, str, str, list[str]] | None = None
         issue = self.service._get_issue(
             repo=repo,
             issue_number=payload.issue_number,
@@ -200,14 +201,16 @@ class RalphTaskWorkflow:
                     plan_summary=plan.summary,
                     plan_preview=self.service._render_plan_preview(plan),
                 )
-                self.progress.notify(
-                    connection,
-                    task_id=task_id,
-                    stage="plan_ready",
-                    title=title,
-                    lines=lines,
-                )
+                pending_notification = (task_id, "plan_ready", title, lines)
             connection.commit()
+        if pending_notification is not None:
+            notify_task_id, stage, title, lines = pending_notification
+            self.progress.notify_after_commit(
+                task_id=notify_task_id,
+                stage=stage,
+                title=title,
+                lines=lines,
+            )
         if pending_usage is not None:
             request_id, step_name, usage = pending_usage
             self.service._record_task_usage(

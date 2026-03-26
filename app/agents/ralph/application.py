@@ -101,20 +101,28 @@ class SleepCodingService:
     ) -> SleepCodingTask:
         pending_usage: tuple[str, str, TokenUsage] | None = None
         pending_memories: list[tuple[str, str]] = []
+        failure_exc: Exception | None = None
+        action = payload.action
         with closing(self._connect()) as connection:
             task = self._get_task_row(connection, task_id)
-            action = payload.action
+            try:
+                if action == "approve_plan":
+                    pending_usage = self.workflow.handle_approve_plan(connection, task, pending_memories)
+                elif action == "request_changes":
+                    self._handle_request_changes(connection, task)
+                elif action == "approve_pr":
+                    self._handle_terminal_action(connection, task, action, "approved")
+                elif action in {"reject_plan", "cancel_task"}:
+                    self._handle_terminal_action(connection, task, action, "cancelled")
+                else:
+                    raise ValueError(f"Unsupported action: {action}")
+                connection.commit()
+            except Exception as exc:
+                failure_exc = exc
+        if failure_exc is not None:
             if action == "approve_plan":
-                pending_usage = self.workflow.handle_approve_plan(connection, task, pending_memories)
-            elif action == "request_changes":
-                self._handle_request_changes(connection, task)
-            elif action == "approve_pr":
-                self._handle_terminal_action(connection, task, action, "approved")
-            elif action in {"reject_plan", "cancel_task"}:
-                self._handle_terminal_action(connection, task, action, "cancelled")
-            else:
-                raise ValueError(f"Unsupported action: {action}")
-            connection.commit()
+                self._record_execution_failure(task_id, failure_exc)
+            raise failure_exc
         if pending_usage is not None:
             request_id, step_name, usage = pending_usage
             self._record_task_usage(
@@ -126,6 +134,34 @@ class SleepCodingService:
         for session_id, summary in pending_memories:
             self.context.record_short_memory(session_id, summary)
         return self.get_task(task_id)
+
+    def _record_execution_failure(self, task_id: str, exc: Exception) -> None:
+        evidence = getattr(exc, "failure_evidence", None)
+        with closing(self._connect()) as connection:
+            task = self._get_task_row(connection, task_id)
+            self.store.update_status(connection, task_id, "needs_attention")
+            self.store.update_task_payloads(
+                connection,
+                task_id,
+                status="needs_attention",
+                last_error=str(exc),
+            )
+            self.store.append_event(
+                connection,
+                task_id,
+                "execution_failed",
+                {"error": str(exc), "failure_evidence": evidence},
+            )
+            payload_patch = {"last_error": str(exc)}
+            if evidence is not None:
+                payload_patch["execution_failure_evidence"] = evidence
+            self._sync_control_task(
+                task,
+                status="needs_attention",
+                payload_patch=payload_patch,
+                connection=connection,
+            )
+            connection.commit()
 
     def get_task(self, task_id: str) -> SleepCodingTask:
         return self.store.load_task(task_id)
